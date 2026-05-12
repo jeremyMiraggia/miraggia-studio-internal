@@ -24,11 +24,17 @@ export async function POST(request: Request) {
     const bgB64    = Buffer.from(bgBuffer).toString('base64')
     const bgMime   = background.type || 'image/jpeg'
 
-    const prompt = `Fusionne ce sujet/vêtement avec l'image de fond fournie. Direction artistique : ${brief}. Résultat professionnel, prêt à publier.`
+    const aspectRatio = ratio || '9:16'
+    const imageSize   = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
 
-    // Appel Gemini — même approche que Miraggia
+    const prompt = `Fusionne ce sujet/vêtement avec l'image de fond fournie.
+Direction artistique : ${brief}.
+Format : ${aspectRatio}. Résolution cible : ${imageSize}.
+Résultat photographique professionnel, lumière cohérente entre sujet et fond, prêt à publier.`
+
+    // Appel Gemini 3 Pro Image Preview
     const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -42,6 +48,10 @@ export async function POST(request: Request) {
           }],
           generationConfig: {
             responseModalities: ['TEXT', 'IMAGE'],
+            imageConfig: {
+              aspectRatio,
+              imageSize,
+            },
           },
         }),
       }
