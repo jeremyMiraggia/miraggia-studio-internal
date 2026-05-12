@@ -9,7 +9,8 @@ export default function LoginPage() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
-    if (password === process.env.NEXT_PUBLIC_APP_PASSWORD || password === 'miraggia2025') {
+    const expected = process.env.NEXT_PUBLIC_APP_PASSWORD
+    if (expected && password === expected) {
       localStorage.setItem('studio_auth', 'true')
       router.push('/studio')
     } else {
