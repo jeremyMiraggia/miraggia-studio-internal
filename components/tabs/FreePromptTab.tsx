@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import Dropzone from '@/components/ui/Dropzone'
 
 export default function FreePromptTab() {
   const [prompt, setPrompt]   = useState('')
@@ -51,10 +52,6 @@ export default function FreePromptTab() {
     setLoading(false)
   }
 
-  const removeRef = (idx: number) => {
-    setRefs(prev => prev.filter((_, i) => i !== idx))
-  }
-
   return (
     <div>
       <h2 style={styles.title}>🧠 Free Prompt</h2>
@@ -76,23 +73,13 @@ export default function FreePromptTab() {
           />
 
           <label style={styles.label}>Images de référence (optionnel)</label>
-          <input
-            type="file"
+          <Dropzone
             multiple
-            accept="image/*"
-            onChange={e => setRefs(prev => [...prev, ...Array.from(e.target.files ?? [])])}
-            style={styles.fileInput}
+            files={refs}
+            onChange={setRefs}
+            label="Glisse des références"
+            hint="Style, mannequin, packshot… · clique ou colle aussi"
           />
-          {refs.length > 0 && (
-            <div style={styles.refList}>
-              {refs.map((f, i) => (
-                <div key={i} style={styles.refChip}>
-                  <span style={styles.refName}>{f.name}</span>
-                  <button onClick={() => removeRef(i)} style={styles.refRemove} aria-label="Retirer">×</button>
-                </div>
-              ))}
-            </div>
-          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
             <div>
@@ -161,17 +148,12 @@ const styles: Record<string, React.CSSProperties> = {
   sub:          { fontSize: 13, color: '#6B7A8A', marginBottom: 24 },
   card:         { background: '#fff', borderRadius: 12, padding: 20, border: '1px solid rgba(13,74,92,0.1)', display: 'flex', flexDirection: 'column', gap: 12 },
   label:        { fontSize: 11, fontWeight: 700, color: '#6B7A8A', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 4 },
-  fileInput:    { width: '100%', fontSize: 12, color: '#0D4A5C' },
   textareaLarge:{ width: '100%', padding: '10px 12px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', resize: 'vertical', minHeight: 160, boxSizing: 'border-box' as const, lineHeight: 1.45 },
   select:       { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', background: '#fff' },
   btn:          { padding: '12px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
   emptyState:   { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff' },
   resultCard:   { background: '#fff', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
   downloadBtn:  { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600, borderTop: '1px solid rgba(13,74,92,0.08)' },
-  refList:      { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: -4 },
-  refChip:      { display: 'inline-flex', alignItems: 'center', gap: 6, background: '#E8F2F5', color: '#0D4A5C', padding: '4px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, maxWidth: 200 },
-  refName:      { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  refRemove:    { background: 'none', border: 'none', color: '#0D4A5C', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 },
   hintSubtle:   { fontSize: 11, color: '#6B7A8A', margin: 0, lineHeight: 1.5 },
   errorBox:     { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0 },
 }

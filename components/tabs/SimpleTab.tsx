@@ -1,9 +1,10 @@
 'use client'
-import { useState, useRef } from 'react'
+import { useState } from 'react'
+import Dropzone from '@/components/ui/Dropzone'
 
 export default function SimpleTab() {
   const [subjects, setSubjects]   = useState<File[]>([])
-  const [bg, setBg]               = useState<File | null>(null)
+  const [bg, setBg]               = useState<File[]>([])
   const [brief, setBrief]         = useState('')
   const [ratio, setRatio]         = useState('9:16')
   const [quality, setQuality]     = useState('2K')
@@ -12,7 +13,7 @@ export default function SimpleTab() {
   const [progress, setProgress]   = useState('')
 
   const handleGenerate = async () => {
-    if (!subjects.length || !bg) { alert('Images sujet et fond requis.'); return }
+    if (!subjects.length || !bg.length) { alert('Images sujet et fond requis.'); return }
     setLoading(true)
     setResults([])
 
@@ -21,7 +22,7 @@ export default function SimpleTab() {
       try {
         const formData = new FormData()
         formData.append('subject', subjects[i])
-        formData.append('background', bg)
+        formData.append('background', bg[0])
         formData.append('brief', brief || 'Photographie de mode professionnelle')
         formData.append('ratio', ratio)
         formData.append('quality', quality)
@@ -45,11 +46,22 @@ export default function SimpleTab() {
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24 }}>
         <div style={styles.card}>
           <label style={styles.label}>Sujets (plusieurs possibles)</label>
-          <input type="file" multiple accept="image/*" onChange={e => setSubjects(Array.from(e.target.files ?? []))} style={styles.fileInput} />
-          {subjects.length > 0 && <p style={styles.hint}>{subjects.length} fichier(s) sélectionné(s)</p>}
+          <Dropzone
+            multiple
+            files={subjects}
+            onChange={setSubjects}
+            label="Glisse tes sujets ici"
+            hint="Une image générée par sujet · clique ou colle aussi"
+          />
 
           <label style={styles.label}>Image de fond</label>
-          <input type="file" accept="image/*" onChange={e => setBg(e.target.files?.[0] ?? null)} style={styles.fileInput} />
+          <Dropzone
+            files={bg}
+            onChange={setBg}
+            label="Glisse l'image de fond"
+            hint="Une seule image · sera réutilisée pour chaque sujet"
+            minHeight={90}
+          />
 
           <label style={styles.label}>Direction artistique</label>
           <textarea value={brief} onChange={e => setBrief(e.target.value)} placeholder="Ex: Photographie lifestyle, lumière naturelle dorée..." style={styles.textarea} />
