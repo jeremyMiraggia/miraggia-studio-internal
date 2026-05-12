@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Dropzone from '@/components/ui/Dropzone'
+import { compressAll } from '@/lib/compressImage'
 
 export default function FreePromptTab() {
   const [prompt, setPrompt]   = useState('')
@@ -24,28 +25,36 @@ export default function FreePromptTab() {
     setLoading(true)
     setResults([])
 
-    for (let i = 0; i < count; i++) {
-      setProgress(`Génération ${i + 1}/${count}…`)
-      try {
+    try {
+      setProgress('Préparation des références…')
+      const compressedRefs = refs.length ? await compressAll(refs) : []
+
+      for (let i = 0; i < count; i++) {
+        setProgress(`Génération ${i + 1}/${count}…`)
         const formData = new FormData()
         formData.append('prompt',  prompt)
         formData.append('ratio',   ratio)
         formData.append('quality', quality)
-        refs.forEach(f => formData.append('refs', f))
+        compressedRefs.forEach(f => formData.append('refs', f))
 
-        const res  = await fetch('/api/studio/free', { method: 'POST', body: formData })
-        const data = await res.json()
+        const res = await fetch('/api/studio/free', { method: 'POST', body: formData })
+        let data: any = null
+        try { data = await res.json() } catch { /* corps non-JSON */ }
 
-        if (data.imageUrl) {
-          setResults(prev => [...prev, data.imageUrl])
-        } else {
-          setError(data.error ?? 'Erreur inconnue')
+        if (!res.ok) {
+          const msg = (data && (data.error || data.message)) || `HTTP ${res.status} ${res.statusText}`
+          setError(`Variation ${i + 1} : ${truncate(msg)}`)
           break
         }
-      } catch (e: any) {
-        setError(e?.message ?? 'Erreur réseau')
-        break
+        if (data?.imageUrl) {
+          setResults(prev => [...prev, data.imageUrl])
+        } else {
+          setError(`Variation ${i + 1} : aucune image renvoyée — ${truncate(data?.error ?? 'réponse vide')}`)
+          break
+        }
       }
+    } catch (e: any) {
+      setError(e?.message ?? 'Erreur réseau')
     }
 
     setProgress('')
@@ -102,7 +111,7 @@ export default function FreePromptTab() {
             </div>
           </div>
 
-          {error && <p style={styles.errorBox}>{error}</p>}
+          {error && <p style={styles.errorBox}>⚠ {error}</p>}
 
           <button onClick={handleGenerate} disabled={loading} style={{ ...styles.btn, opacity: loading ? 0.7 : 1 }}>
             {loading ? progress || 'Génération…' : `✦ Générer${count > 1 ? ` ${count} images` : ''}`}
@@ -115,7 +124,7 @@ export default function FreePromptTab() {
 
         {/* Résultats */}
         <div>
-          {results.length === 0 && !loading && (
+          {results.length === 0 && !loading && !error && (
             <div style={styles.emptyState}>
               Les images générées apparaîtront ici.
             </div>
@@ -143,6 +152,11 @@ export default function FreePromptTab() {
   )
 }
 
+function truncate(s: string, max = 240) {
+  if (!s) return ''
+  return s.length > max ? s.slice(0, max) + '…' : s
+}
+
 const styles: Record<string, React.CSSProperties> = {
   title:        { fontFamily: 'system-ui', fontSize: 22, fontWeight: 700, color: '#0D4A5C', marginBottom: 4 },
   sub:          { fontSize: 13, color: '#6B7A8A', marginBottom: 24 },
@@ -155,5 +169,5 @@ const styles: Record<string, React.CSSProperties> = {
   resultCard:   { background: '#fff', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
   downloadBtn:  { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600, borderTop: '1px solid rgba(13,74,92,0.08)' },
   hintSubtle:   { fontSize: 11, color: '#6B7A8A', margin: 0, lineHeight: 1.5 },
-  errorBox:     { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0 },
+  errorBox:     { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
 }

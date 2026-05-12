@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Dropzone from '@/components/ui/Dropzone'
+import { compressImage } from '@/lib/compressImage'
 
 export default function SimpleTab() {
   const [subjects, setSubjects]   = useState<File[]>([])
@@ -11,27 +12,50 @@ export default function SimpleTab() {
   const [results, setResults]     = useState<string[]>([])
   const [loading, setLoading]     = useState(false)
   const [progress, setProgress]   = useState('')
+  const [error, setError]         = useState<string | null>(null)
 
   const handleGenerate = async () => {
-    if (!subjects.length || !bg.length) { alert('Images sujet et fond requis.'); return }
+    setError(null)
+    if (!subjects.length || !bg.length) {
+      setError('Sélectionne au moins un sujet et une image de fond.')
+      return
+    }
     setLoading(true)
     setResults([])
 
-    for (let i = 0; i < subjects.length; i++) {
-      setProgress(`Génération ${i + 1}/${subjects.length}...`)
-      try {
+    try {
+      setProgress('Préparation des images…')
+      const bgCompressed = await compressImage(bg[0])
+
+      for (let i = 0; i < subjects.length; i++) {
+        setProgress(`Génération ${i + 1}/${subjects.length}…`)
+        const subjectCompressed = await compressImage(subjects[i])
+
         const formData = new FormData()
-        formData.append('subject', subjects[i])
-        formData.append('background', bg[0])
+        formData.append('subject',    subjectCompressed)
+        formData.append('background', bgCompressed)
         formData.append('brief', brief || 'Photographie de mode professionnelle')
         formData.append('ratio', ratio)
         formData.append('quality', quality)
 
-        const res  = await fetch('/api/studio/simple', { method: 'POST', body: formData })
-        const data = await res.json()
-        if (data.imageUrl) setResults(prev => [...prev, data.imageUrl])
-        else console.error('Erreur:', data.error)
-      } catch (e) { console.error(e) }
+        const res = await fetch('/api/studio/simple', { method: 'POST', body: formData })
+        let data: any = null
+        try { data = await res.json() } catch { /* corps non-JSON */ }
+
+        if (!res.ok) {
+          const msg = (data && (data.error || data.message)) || `HTTP ${res.status} ${res.statusText}`
+          setError(`Sujet ${i + 1} : ${truncate(msg)}`)
+          break
+        }
+        if (data?.imageUrl) {
+          setResults(prev => [...prev, data.imageUrl])
+        } else {
+          setError(`Sujet ${i + 1} : aucune image renvoyée — ${truncate(data?.error ?? 'réponse vide')}`)
+          break
+        }
+      }
+    } catch (e: any) {
+      setError(e?.message ?? 'Erreur réseau')
     }
 
     setProgress('')
@@ -81,14 +105,16 @@ export default function SimpleTab() {
             </div>
           </div>
 
-          <button onClick={handleGenerate} disabled={loading} style={styles.btn}>
-            {loading ? progress || 'Génération...' : `✦ Générer ${subjects.length > 1 ? subjects.length + ' images' : ''}`}
+          {error && <p style={styles.errorBox}>⚠ {error}</p>}
+
+          <button onClick={handleGenerate} disabled={loading} style={{ ...styles.btn, opacity: loading ? 0.7 : 1 }}>
+            {loading ? progress || 'Génération…' : `✦ Générer ${subjects.length > 1 ? subjects.length + ' images' : ''}`}
           </button>
         </div>
 
         {/* Résultats */}
         <div>
-          {results.length === 0 && !loading && (
+          {results.length === 0 && !loading && !error && (
             <div style={styles.emptyState}>Les images générées apparaîtront ici</div>
           )}
           {loading && results.length === 0 && (
@@ -108,6 +134,11 @@ export default function SimpleTab() {
   )
 }
 
+function truncate(s: string, max = 240) {
+  if (!s) return ''
+  return s.length > max ? s.slice(0, max) + '…' : s
+}
+
 const styles: Record<string, React.CSSProperties> = {
   title:       { fontFamily: 'system-ui', fontSize: 22, fontWeight: 700, color: '#0D4A5C', marginBottom: 4 },
   sub:         { fontSize: 13, color: '#6B7A8A', marginBottom: 24 },
@@ -121,4 +152,5 @@ const styles: Record<string, React.CSSProperties> = {
   emptyState:  { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14 },
   resultCard:  { background: '#fff', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
   downloadBtn: { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600 },
+  errorBox:    { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
 }
