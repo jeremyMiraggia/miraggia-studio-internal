@@ -13,9 +13,11 @@ export default function SimpleTab() {
   const [loading, setLoading]     = useState(false)
   const [progress, setProgress]   = useState('')
   const [error, setError]         = useState<string | null>(null)
+  const [failures, setFailures]   = useState<string[]>([])
 
   const handleGenerate = async () => {
     setError(null)
+    setFailures([])
     if (!subjects.length || !bg.length) {
       setError('Sélectionne au moins un sujet et une image de fond.')
       return
@@ -23,49 +25,60 @@ export default function SimpleTab() {
     setLoading(true)
     setResults([])
 
+    const N = subjects.length
+    const localFailures: string[] = []
+
     try {
-      setProgress('Préparation des images…')
+      setProgress('Préparation du fond…')
       const bgCompressed = await compressImage(bg[0])
 
-      for (let i = 0; i < subjects.length; i++) {
-        setProgress(`Génération ${i + 1}/${subjects.length}…`)
-        const subjectCompressed = await compressImage(subjects[i])
+      for (let i = 0; i < N; i++) {
+        const label = `Sujet ${i + 1}/${N}`
+        try {
+          setProgress(`${label} · compression`)
+          const subjectCompressed = await compressImage(subjects[i])
 
-        const formData = new FormData()
-        formData.append('subject',    subjectCompressed)
-        formData.append('background', bgCompressed)
-        formData.append('brief', brief || 'Photographie de mode professionnelle')
-        formData.append('ratio', ratio)
-        formData.append('quality', quality)
+          setProgress(`${label} · génération`)
+          const formData = new FormData()
+          formData.append('subject',    subjectCompressed)
+          formData.append('background', bgCompressed)
+          formData.append('brief', brief || 'Photographie de mode professionnelle')
+          formData.append('ratio', ratio)
+          formData.append('quality', quality)
 
-        const res = await fetch('/api/studio/simple', { method: 'POST', body: formData })
-        let data: any = null
-        try { data = await res.json() } catch { /* corps non-JSON */ }
+          const res = await fetch('/api/studio/simple', { method: 'POST', body: formData })
+          let data: any = null
+          try { data = await res.json() } catch { /* corps non-JSON */ }
 
-        if (!res.ok) {
-          const msg = (data && (data.error || data.message)) || `HTTP ${res.status} ${res.statusText}`
-          setError(`Sujet ${i + 1} : ${truncate(msg)}`)
-          break
-        }
-        if (data?.imageUrl) {
-          setResults(prev => [...prev, data.imageUrl])
-        } else {
-          setError(`Sujet ${i + 1} : aucune image renvoyée — ${truncate(data?.error ?? 'réponse vide')}`)
-          break
+          if (!res.ok) {
+            const msg = (data && (data.error || data.message)) || `HTTP ${res.status} ${res.statusText}`
+            localFailures.push(`${label} → ${truncate(msg)}`)
+            continue
+          }
+          if (data?.imageUrl) {
+            setResults(prev => [...prev, data.imageUrl])
+          } else {
+            localFailures.push(`${label} → aucune image renvoyée (${truncate(data?.error ?? 'réponse vide')})`)
+          }
+        } catch (e: any) {
+          localFailures.push(`${label} → ${e?.message ?? 'erreur réseau'}`)
         }
       }
     } catch (e: any) {
-      setError(e?.message ?? 'Erreur réseau')
+      setError(e?.message ?? 'Erreur inattendue')
     }
 
     setProgress('')
     setLoading(false)
+    if (localFailures.length) setFailures(localFailures)
   }
 
   return (
     <div>
       <h2 style={styles.title}>🖼️ Simple</h2>
-      <p style={styles.sub}>Fusionnez un sujet avec un fond. Une image par génération.</p>
+      <p style={styles.sub}>
+        Plusieurs sujets + 1 fond + 1 prompt → une image générée par sujet (même fond, même direction).
+      </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24 }}>
         <div style={styles.card}>
@@ -83,7 +96,7 @@ export default function SimpleTab() {
             files={bg}
             onChange={setBg}
             label="Glisse l'image de fond"
-            hint="Une seule image · sera réutilisée pour chaque sujet"
+            hint="Une seule image · réutilisée pour chaque sujet"
             minHeight={90}
           />
 
@@ -108,13 +121,23 @@ export default function SimpleTab() {
           {error && <p style={styles.errorBox}>⚠ {error}</p>}
 
           <button onClick={handleGenerate} disabled={loading} style={{ ...styles.btn, opacity: loading ? 0.7 : 1 }}>
-            {loading ? progress || 'Génération…' : `✦ Générer ${subjects.length > 1 ? subjects.length + ' images' : ''}`}
+            {loading
+              ? progress || 'Génération…'
+              : subjects.length > 1
+                ? `✦ Générer ${subjects.length} images`
+                : '✦ Générer'}
           </button>
+
+          {!loading && results.length > 0 && (
+            <p style={styles.hintSubtle}>
+              {results.length} / {subjects.length} image(s) générée(s).
+            </p>
+          )}
         </div>
 
         {/* Résultats */}
         <div>
-          {results.length === 0 && !loading && !error && (
+          {results.length === 0 && !loading && !error && failures.length === 0 && (
             <div style={styles.emptyState}>Les images générées apparaîtront ici</div>
           )}
           {loading && results.length === 0 && (
@@ -127,7 +150,21 @@ export default function SimpleTab() {
                 <a href={url} download={`simple_${i+1}.png`} style={styles.downloadBtn}>⬇ Télécharger</a>
               </div>
             ))}
+            {loading && (
+              <div style={{ ...styles.resultCard, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200, color: '#6B7A8A', fontSize: 13 }}>
+                ⏳ {progress}
+              </div>
+            )}
           </div>
+
+          {failures.length > 0 && (
+            <div style={styles.failuresBox}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠ {failures.length} sujet(s) en échec :</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {failures.map((f, i) => <li key={i} style={{ marginBottom: 2 }}>{f}</li>)}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -149,8 +186,10 @@ const styles: Record<string, React.CSSProperties> = {
   textarea:    { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', resize: 'vertical', minHeight: 72, boxSizing: 'border-box' as const },
   select:      { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', background: '#fff' },
   btn:         { padding: '11px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
-  emptyState:  { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14 },
+  emptyState:  { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff' },
   resultCard:  { background: '#fff', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
   downloadBtn: { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600 },
   errorBox:    { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  failuresBox: { marginTop: 16, background: '#FFF8E1', color: '#7A4F00', border: '1px solid #F1D78A', padding: '10px 12px', borderRadius: 8, fontSize: 12 },
+  hintSubtle:  { fontSize: 11, color: '#6B7A8A', margin: 0, lineHeight: 1.5 },
 }
