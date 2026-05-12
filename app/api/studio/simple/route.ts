@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 export async function POST(request: Request) {
   try {
@@ -32,9 +32,14 @@ Direction artistique : ${brief}.
 Format : ${aspectRatio}. Résolution cible : ${imageSize}.
 Résultat photographique professionnel, lumière cohérente entre sujet et fond, prêt à publier.`
 
+    const apiKey = process.env.GEMINI_API_KEY
+    if (!apiKey) {
+      return NextResponse.json({ error: 'GEMINI_API_KEY manquante côté serveur.' }, { status: 500 })
+    }
+
     // Appel Gemini 3 Pro Image Preview
     const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -44,7 +49,7 @@ Résultat photographique professionnel, lumière cohérente entre sujet et fond,
               { text: prompt },
               { inlineData: { mimeType: subjectMime, data: subjectB64 } },
               { inlineData: { mimeType: bgMime,      data: bgB64 } },
-            ]
+            ],
           }],
           generationConfig: {
             responseModalities: ['TEXT', 'IMAGE'],
@@ -54,12 +59,12 @@ Résultat photographique professionnel, lumière cohérente entre sujet et fond,
             },
           },
         }),
-      }
+      },
     )
 
     if (!geminiRes.ok) {
       const err = await geminiRes.text()
-      return NextResponse.json({ error: err }, { status: 500 })
+      return NextResponse.json({ error: err }, { status: geminiRes.status })
     }
 
     const data  = await geminiRes.json()
@@ -75,6 +80,6 @@ Résultat photographique professionnel, lumière cohérente entre sujet et fond,
     return NextResponse.json({ error: 'Aucune image générée' }, { status: 500 })
 
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: error?.message ?? 'Erreur inconnue' }, { status: 500 })
   }
 }
