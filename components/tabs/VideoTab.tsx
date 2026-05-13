@@ -9,6 +9,9 @@ const RESOLUTIONS = ['720p', '1080p', '4k'] as const
 const ASPECTS     = ['9:16', '16:9', '1:1'] as const
 const DURATIONS   = [3, 4, 5, 6, 7, 8, 9, 10] as const
 
+const POLL_INTERVAL_MS  = 8_000               // 8s entre 2 pings
+const POLL_TIMEOUT_MS   = 20 * 60 * 1000       // 20 min max
+
 export default function VideoTab() {
   const [mode, setMode]               = useState<Mode>('image2video')
   const [prompt, setPrompt]           = useState('')
@@ -24,11 +27,13 @@ export default function VideoTab() {
   const [polling, setPolling]         = useState(false)
   const [progress, setProgress]       = useState('')
   const [error, setError]             = useState<string | null>(null)
+  const [timedOut, setTimedOut]       = useState(false)
   const [videoUrl, setVideoUrl]       = useState<string | null>(null)
   const [taskId, setTaskId]           = useState<string | null>(null)
+  const [endpoint, setEndpoint]       = useState<string>('image2video')
   const pollRef = useRef<number | null>(null)
+  const startedAtRef = useRef<number>(0)
 
-  // Cleanup polling au démontage
   useEffect(() => () => {
     if (pollRef.current) {
       clearTimeout(pollRef.current)
@@ -40,6 +45,7 @@ export default function VideoTab() {
     setError(null)
     setVideoUrl(null)
     setTaskId(null)
+    setTimedOut(false)
     if (!prompt.trim()) {
       setError('Ajoute un prompt avant de générer.')
       return
@@ -83,10 +89,12 @@ export default function VideoTab() {
       }
 
       setTaskId(data.taskId)
+      setEndpoint(data.endpoint)
       setSubmitting(false)
       setPolling(true)
       setProgress('Tâche soumise · attente du rendu…')
-      poll(data.taskId, data.endpoint, 0)
+      startedAtRef.current = Date.now()
+      poll(data.taskId, data.endpoint)
     } catch (e: any) {
       setError(e?.message ?? 'Erreur réseau')
       setSubmitting(false)
@@ -94,10 +102,10 @@ export default function VideoTab() {
     }
   }
 
-  const poll = (id: string, endpoint: string, tick: number) => {
+  const poll = (id: string, ep: string) => {
     pollRef.current = window.setTimeout(async () => {
       try {
-        const r = await fetch(`/api/studio/video/status?id=${encodeURIComponent(id)}&endpoint=${endpoint}`)
+        const r = await fetch(`/api/studio/video/status?id=${encodeURIComponent(id)}&endpoint=${ep}`)
         const data = await r.json()
 
         if (!r.ok) {
@@ -121,22 +129,34 @@ export default function VideoTab() {
           return
         }
 
-        // Sinon on continue à poller
-        const elapsed = tick * 5
-        setProgress(`Rendu en cours · ${elapsed}s écoulé(s) · statut : ${status || 'processing'}`)
-        if (tick > 60) { // ~5 min max
-          setError('Timeout : Kling met trop de temps. Vérifie le statut côté Kling avec l\'ID copié.')
+        const elapsed = Date.now() - startedAtRef.current
+        if (elapsed > POLL_TIMEOUT_MS) {
+          setTimedOut(true)
           setPolling(false)
           setProgress('')
+          setError(`Pas de réponse après ${formatDuration(elapsed)}. La tâche peut encore aboutir côté Kling — utilise "Reprendre le suivi" plus tard.`)
           return
         }
-        poll(id, endpoint, tick + 1)
+
+        setProgress(`Rendu en cours · ${formatDuration(elapsed)} · statut : ${status || 'processing'}`)
+        poll(id, ep)
       } catch (e: any) {
         setError(e?.message ?? 'Erreur de polling')
         setPolling(false)
         setProgress('')
       }
-    }, 5000)
+    }, POLL_INTERVAL_MS)
+  }
+
+  const resumePolling = () => {
+    if (!taskId) return
+    setError(null)
+    setTimedOut(false)
+    setPolling(true)
+    setProgress('Vérification du statut…')
+    // On garde le startedAt d'origine pour avoir un compteur continu
+    if (!startedAtRef.current) startedAtRef.current = Date.now()
+    poll(taskId, endpoint)
   }
 
   const cancelPolling = () => {
@@ -144,6 +164,11 @@ export default function VideoTab() {
     pollRef.current = null
     setPolling(false)
     setProgress('')
+  }
+
+  const copyTaskId = async () => {
+    if (!taskId) return
+    try { await navigator.clipboard.writeText(taskId) } catch { /* */ }
   }
 
   const loading = submitting || polling
@@ -245,10 +270,18 @@ export default function VideoTab() {
             </button>
           )}
 
+          {timedOut && taskId && !polling && (
+            <button onClick={resumePolling} style={styles.btnAccent}>
+              ↺ Reprendre le suivi de cette tâche
+            </button>
+          )}
+
           {taskId && (
-            <p style={styles.hintSubtle}>
-              ID de tâche : <code style={{ background: '#E8F2F5', padding: '1px 5px', borderRadius: 3 }}>{taskId}</code>
-            </p>
+            <div style={styles.hintSubtle}>
+              ID de tâche :{' '}
+              <code style={{ background: '#E8F2F5', padding: '1px 5px', borderRadius: 3 }}>{taskId}</code>{' '}
+              <button onClick={copyTaskId} style={styles.copyChip}>📋</button>
+            </div>
           )}
         </div>
 
@@ -294,6 +327,14 @@ function ModeBtn({ label, active, onClick }: { label: string, active: boolean, o
   )
 }
 
+function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  if (m === 0) return `${s}s`
+  return `${m}m ${String(s).padStart(2, '0')}s`
+}
+
 const modeBtn: React.CSSProperties = {
   padding: '8px 10px', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 7,
   fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', textAlign: 'center',
@@ -311,10 +352,12 @@ const styles: Record<string, React.CSSProperties> = {
   rangeTicks:  { display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#9BA8B5', marginTop: 2 },
   btn:         { padding: '12px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
   btnSecondary:{ padding: '9px', background: '#fff', color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.25)', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  btnAccent:   { padding: '10px', background: '#C8F07D', color: '#0D4A5C', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
   emptyState:  { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff' },
   resultCard:  { background: '#fff', borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
   downloadBtn: { padding: '7px 12px', fontSize: 12, color: '#fff', background: '#0D4A5C', borderRadius: 6, textDecoration: 'none', fontWeight: 600 },
   linkBtn:     { padding: '7px 12px', fontSize: 12, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 6, textDecoration: 'none', fontWeight: 600 },
   errorBox:    { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   hintSubtle:  { fontSize: 11, color: '#6B7A8A', margin: 0, lineHeight: 1.5 },
+  copyChip:    { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 12 },
 }
