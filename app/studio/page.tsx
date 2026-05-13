@@ -7,12 +7,14 @@ import ExtractTab    from '@/components/tabs/ExtractTab'
 import LookbookTab   from '@/components/tabs/LookbookTab'
 import GhostTab      from '@/components/tabs/GhostTab'
 import LifestyleTab  from '@/components/tabs/LifestyleTab'
+import VideoTab      from '@/components/tabs/VideoTab'
 
 const TABS = [
   { id: 'simple',     label: '🖼️ Simple' },
   { id: 'lookbook',   label: '👗 Lookbook' },
   { id: 'ghost',      label: '👻 Ghost' },
   { id: 'lifestyle',  label: '🌴 Lifestyle' },
+  { id: 'video',      label: '🎬 Video' },
   { id: 'batch',      label: '📋 Batch' },
   { id: 'free',       label: '🧠 Free Prompt' },
   { id: 'extract',    label: '🔍 Extracteur' },
@@ -48,6 +50,7 @@ export default function StudioPage() {
         {tab === 'lookbook'  && <LookbookTab />}
         {tab === 'ghost'     && <GhostTab />}
         {tab === 'lifestyle' && <LifestyleTab />}
+        {tab === 'video'     && <VideoTab />}
         {tab === 'batch'     && <BatchTab />}
         {tab === 'free'      && <FreePromptTab />}
         {tab === 'extract'   && <ExtractTab />}
