@@ -10,10 +10,6 @@ export const maxDuration = 300
  *
  * Response :
  *   { results: Array<{ index: number, filename: string, environnement?: string, pose?: string, error?: string }> }
- *
- * Pour chaque image, Gemini renvoie un objet { environnement, pose } décrivant
- * UNIQUEMENT le décor et la pose, sous forme de PROMPT mode prêt à l'emploi —
- * pas la tenue, pas le mannequin.
  */
 export async function POST(request: Request) {
   try {
@@ -29,7 +25,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'GEMINI_API_KEY manquante côté serveur.' }, { status: 500 })
     }
 
-    // Toutes les analyses en parallèle (rapide + résilient par item)
     const tasks = images.map(async (file, idx) => {
       try {
         const buf  = Buffer.from(await file.arrayBuffer()).toString('base64')
@@ -52,7 +47,7 @@ export async function POST(request: Request) {
               },
               required: ['environnement', 'pose'],
             },
-            temperature: 0.4,
+            temperature: 0.35,
           },
         }
 
@@ -96,40 +91,52 @@ export async function POST(request: Request) {
   }
 }
 
-const EXTRACTOR_PROMPT = `Tu es directeur artistique pour une marque de mode haut de gamme. Tu rédiges des PROMPTS PRÊTS À L'EMPLOI pour un générateur d'images IA de mode.
+const EXTRACTOR_PROMPT = `Tu es directeur artistique pour une marque de mode haut de gamme. Tu rédiges des PROMPTS TRÈS DÉTAILLÉS, prêts à recoller dans un générateur d'images IA de mode.
 
 Pour cette photo, renvoie STRICTEMENT un JSON { "environnement": string, "pose": string }.
 
-⚙️ FORMAT DE SORTIE (très important)
+⚙️ FORMAT DE SORTIE
 Chaque champ doit être écrit comme un PROMPT, c'est-à-dire :
 - une suite dense de fragments descriptifs (mots-clés et courtes propositions séparés par des virgules)
-- pas de phrases complètes narratives ("le mannequin est…"), pas de "on voit", pas de "la photo montre"
-- vocabulaire technique mode / photo en français + anglicismes courants du milieu (golden hour, low-key, contre-jour, side-light, rim light, fill light, grain argentique, bokeh, depth of field, etc.)
-- ton éditorial mode haut de gamme
+- pas de phrases narratives ("on voit", "le mannequin est…", "la photo montre")
+- vocabulaire technique mode / photo en français + anglicismes courants (golden hour, blue hour, low-key, high-key, contre-jour, side-light, rim light, fill light, key light, soft box, hard light, bokeh, shallow DoF, etc.)
+- ton éditorial mode haut de gamme, précis, sensoriel
+- TOUJOURS très détaillé : viser la PRÉCISION SPÉCIFIQUE, pas le générique. Préférer "ruelle pavée en pierre calcaire ocre" à "rue ancienne".
 
-🌅 CHAMP "environnement" (60–120 mots, séparés par virgules)
-Décris uniquement le décor : lieu / type de lieu, époque visuelle, architecture ou paysage, props, palette chromatique, météo, heure de la journée, qualité de la lumière (source, direction, dureté, température), atmosphère, grain / texture / médium photographique simulé.
+🌅 CHAMP "environnement" (120–200 mots, séparés par virgules)
+Tu dois être ULTRA-PRÉCIS. Couvre TOUS ces axes quand ils sont visibles :
+1. LIEU PRÉCIS : type de lieu, géographie / culture suggérée, intérieur ou extérieur
+2. DÉCOR / ARCHITECTURE / PAYSAGE : éléments nommés (murs en pierre, colonnade, vitrine, escalier en colimaçon, dune, palmier, oliveraie…), textures, matériaux, état (usé, neuf, patiné)
+3. PROPS visibles (mobilier, plantes, véhicule, objet posé, drapé…)
+4. PALETTE CHROMATIQUE : 3-5 nuances précises ("ocre brûlé, blanc cassé, vert sauge poussiéreux")
+5. LUMIÈRE : source (soleil direct, fenêtre, néon, lampe tungstène, lune…), direction (frontale, contre-jour, side-light gauche/droite, top-light…), dureté (hard / soft / diffuse), température (warm 2700K, cool 5500K…), qualité (golden hour, blue hour, overcast, midi écrasé…)
+6. ATMOSPHÈRE / AMBIANCE : moodboard en mots (méditerranéen langoureux, brutaliste froid, romantique nostalgique…)
+7. MÉTÉO + HEURE
+8. PHOTO : focale ressentie (28/35/50/85mm), profondeur de champ (shallow DoF, deep focus, bokeh crémeux), grain / pellicule simulée (Portra 400, Tri-X, Ektachrome, numérique propre), halations, vignettage, aberration chromatique, tilt-shift…
 
-📐 CHAMP "pose" (60–110 mots, séparés par virgules)
-DOIT impérativement contenir, dans l'ordre suivant :
-1. ANGLE DE VUE de la caméra : low-angle / high-angle / eye-level / bird's eye / dutch angle / overhead, hauteur de l'objectif
-2. TYPE DE PLAN / cadrage : full body / american shot (plan américain) / cowboy shot / half-body / bust shot / close-up / extreme close-up / over-the-shoulder, éventuelle focale équivalente (35mm, 50mm, 85mm…)
-3. ORIENTATION du sujet face à la caméra : face caméra / profil gauche / profil droit / 3/4 face / 3/4 dos / dos
-4. POSTURE du corps : debout contrapposto, assis(e), accroupi(e), allongé(e), appuyé(e) à…, marche figée, en mouvement, sauté…
-5. BRAS / MAINS / JAMBES : où sont-ils, ce qu'ils font (main dans la poche, bras croisés, main à la nuque, jambe avant fléchie, etc.)
-6. REGARD : caméra direct / hors-cadre gauche / hors-cadre droite / baissé / vers le haut / yeux fermés
-7. EXPRESSION : neutre, intense, songeuse, sans sourire, légère esquisse de sourire…
+📐 CHAMP "pose" (100–160 mots, séparés par virgules)
+DOIT contenir, dans cet ordre :
+1. ANGLE DE VUE de la caméra : low-angle / high-angle / eye-level / bird's eye / dutch angle / overhead / worm's-eye, avec hauteur ressentie de l'objectif (genoux, taille, poitrine, yeux, au-dessus de la tête)
+2. TYPE DE PLAN / CADRAGE : full body / american shot (plan américain, coupe genoux) / cowboy shot (mi-cuisse) / half-body / bust shot / close-up / extreme close-up / over-the-shoulder / wide shot, et focale équivalente ressentie (28/35/50/85/135mm)
+3. ORIENTATION du sujet par rapport à la caméra : face caméra / profil gauche / profil droit / 3/4 face gauche / 3/4 face droite / 3/4 dos gauche / 3/4 dos droite / dos complet
+4. POSTURE GLOBALE : debout contrapposto, debout symétrique, assis(e), accroupi(e), agenouillé(e), allongé(e) sur le côté/dos/ventre, appuyé(e) à un mur/banc, marche figée, en mouvement (saut, twirl), pose dynamique…
+5. POIDS DU CORPS + TENSION : poids sur la jambe gauche/droite, hanche décalée, épaules abaissées/redressées, dos cambré ou relâché, tension dans les abdos…
+6. JAMBES : position exacte (jambe avant fléchie, croisée, en arrière, écartée, talon levé…)
+7. BRAS / MAINS : où ils sont, ce qu'ils font (main gauche dans la poche, bras droit relâché, main effleurant la nuque, doigts effilés, paume ouverte…)
+8. TÊTE : inclinaison (droite, légèrement penchée gauche/droite, baissée, relevée), tilt en degrés ressenti
+9. REGARD : caméra direct / hors-cadre gauche / hors-cadre droite / baissé / vers le haut / yeux fermés / au loin
+10. EXPRESSION / MICRO-ATTITUDE : mâchoire détendue, lèvres entrouvertes, sourire absent, intensité retenue, sérénité, mélancolie maîtrisée, etc.
 
 🚫 INTERDICTIONS STRICTES — ne mentionne JAMAIS :
-- les vêtements, matières, couleurs portées, accessoires, bijoux, chaussures, sacs
-- le mannequin physiquement : peau, cheveux (couleur, longueur, coupe), âge, genre, ethnicité, maquillage, morphologie, taille
-- les marques, logos, textes visibles
-- des prénoms ou noms propres
+- vêtements, matières, couleurs portées, accessoires, bijoux, chaussures, sacs
+- mannequin physiquement : peau (couleur, texture), cheveux (couleur, longueur, coupe, coiffure), âge, genre, ethnicité, maquillage, morphologie, taille
+- marques, logos, textes visibles
+- prénoms / noms propres
 
-Si l'image ne contient pas de personne, écris "—" dans "pose" et décris quand même le décor.
+Si l'image n'a pas de personne, mets "—" dans "pose" et décris quand même le décor.
 
-Exemple de style attendu pour "pose" :
-"low-angle shot, plan américain 50mm, 3/4 face caméra, debout en contrapposto, hanche droite décalée, main gauche dans la poche, bras droit relâché le long du corps, jambe avant fléchie, regard hors-cadre droite, expression neutre intense, mâchoire détendue".
+Exemple de niveau attendu pour "pose" :
+"low-angle shot à hauteur de hanche, plan américain 50mm, 3/4 face caméra côté droit, debout en contrapposto marqué, poids sur la jambe gauche, hanche droite décalée vers l'extérieur, épaule gauche légèrement abaissée, jambe avant droite fléchie genou souple, talon droit légèrement soulevé, main gauche enfoncée dans la poche, bras droit pendant le long du corps doigts détendus, tête inclinée 10° vers la gauche, regard hors-cadre droite à mi-hauteur, mâchoire détendue, lèvres closes, expression neutre intense, présence affirmée".
 
 Réponds uniquement avec le JSON valide, sans markdown, sans préambule.`
 

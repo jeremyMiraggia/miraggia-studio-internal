@@ -12,6 +12,11 @@ type Row = {
   error?: string
 }
 
+const BOILERPLATE = {
+  header: 'Create a 4K HD fashion shooting lifestyle image',
+  style:  'Vogue-style editorial photography. Shot on film, visible grain, subtle blur, slight motion softness. Imperfect focus, organic textures, realistic skin with no heavy retouching. Raw, intimate, spontaneous fashion moment. High-end but not overly polished.',
+}
+
 export default function ExtractTab() {
   const [images, setImages]   = useState<File[]>([])
   const [rows, setRows]       = useState<Row[]>([])
@@ -33,7 +38,6 @@ export default function ExtractTab() {
       setProgress('Compression des images…')
       const compressed = await compressAll(images, { maxSide: 1600, quality: 0.85 })
 
-      // Vignettes data-URL en parallèle pour l'affichage
       setProgress('Création des vignettes…')
       const thumbs = await Promise.all(compressed.map(fileToDataUrl))
 
@@ -96,7 +100,7 @@ export default function ExtractTab() {
     <div>
       <h2 style={styles.title}>🔍 Extracteur</h2>
       <p style={styles.sub}>
-        Charge une ou plusieurs photos. L'IA renvoie pour chacune <strong>l'environnement</strong> et <strong>la pose</strong>, en jargon mode — sans décrire la tenue ni le mannequin.
+        Charge une ou plusieurs photos. L'IA renvoie pour chacune <strong>l'environnement</strong> et <strong>la pose</strong>, en jargon mode très détaillé — sans décrire la tenue ni le mannequin.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24 }}>
@@ -124,12 +128,12 @@ export default function ExtractTab() {
           )}
 
           <p style={styles.hintSubtle}>
-            Décrit : décor, lumière, ambiance, posture, regard, cadrage.<br />
+            Décrit : décor, lumière, ambiance, posture, angle de vue, cadrage, regard.<br />
             Ignore : tenue, accessoires, physique, marque.
           </p>
         </div>
 
-        {/* Résultats */}
+        {/* Résultats + boilerplate */}
         <div>
           {rows.length === 0 && !loading && !error && (
             <div style={styles.emptyState}>Le tableau de prompts apparaîtra ici.</div>
@@ -200,6 +204,35 @@ export default function ExtractTab() {
               </table>
             </div>
           )}
+
+          {/* Boilerplate sentences — toujours visible */}
+          <div style={styles.boilerplate}>
+            <div style={styles.boilerplateTitle}>
+              📌 À copier-coller dans tes prompts
+              <button
+                onClick={() => copy(`${BOILERPLATE.header}\n\n${BOILERPLATE.style}`, 'boiler-all')}
+                style={styles.copyBtnDark}
+              >
+                {copiedKey === 'boiler-all' ? '✓ Tout copié' : '📋 Copier les deux'}
+              </button>
+            </div>
+
+            <div style={styles.boilerplateRow}>
+              <div style={styles.boilerplateLabel}>Header</div>
+              <div style={styles.boilerplateText}>{BOILERPLATE.header}</div>
+              <button onClick={() => copy(BOILERPLATE.header, 'boiler-h')} style={styles.copyBtn}>
+                {copiedKey === 'boiler-h' ? '✓ copié' : '📋 copier'}
+              </button>
+            </div>
+
+            <div style={styles.boilerplateRow}>
+              <div style={styles.boilerplateLabel}>Style</div>
+              <div style={styles.boilerplateText}>{BOILERPLATE.style}</div>
+              <button onClick={() => copy(BOILERPLATE.style, 'boiler-s')} style={styles.copyBtn}>
+                {copiedKey === 'boiler-s' ? '✓ copié' : '📋 copier'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -235,4 +268,10 @@ const styles: Record<string, React.CSSProperties> = {
   thumbPlaceholder: { width: 72, height: 72, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, background: '#F5F7F9', color: '#9BA8B5' },
   filename:    { fontSize: 10, color: '#6B7A8A', marginTop: 6, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   copyBtn:     { padding: '4px 8px', background: '#E8F2F5', color: '#0D4A5C', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  copyBtnDark: { padding: '6px 12px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
+  boilerplate: { marginTop: 20, background: '#FAFBFC', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 },
+  boilerplateTitle: { fontSize: 12, fontWeight: 700, color: '#0D4A5C', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 4 },
+  boilerplateRow:   { display: 'grid', gridTemplateColumns: '80px 1fr 90px', gap: 12, alignItems: 'start', background: '#fff', border: '1px solid rgba(13,74,92,0.1)', borderRadius: 8, padding: 10 },
+  boilerplateLabel: { fontSize: 10, fontWeight: 700, color: '#6B7A8A', textTransform: 'uppercase', letterSpacing: '0.08em', paddingTop: 3 },
+  boilerplateText:  { fontSize: 13, color: '#0D4A5C', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontStyle: 'italic' },
 }
