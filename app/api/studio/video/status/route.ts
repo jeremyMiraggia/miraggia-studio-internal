@@ -3,6 +3,10 @@ import { makeKlingJwt, klingBaseUrl } from '@/lib/klingAuth'
 
 export const maxDuration = 30
 
+const SUCCESS_STATES = new Set(['succeed', 'succeeded', 'success', 'completed', 'complete', 'done', 'finished'])
+const FAILED_STATES  = new Set(['fail', 'failed', 'error', 'errored'])
+const PENDING_STATES = new Set(['submitted', 'pending', 'queuing', 'queued', 'processing', 'running', 'in_progress'])
+
 /**
  * Statut d'une tâche vidéo Kling.
  *
@@ -11,7 +15,13 @@ export const maxDuration = 30
  *   - endpoint : 'text2video' | 'image2video'
  *
  * Réponse :
- *   { status: 'submitted'|'processing'|'succeeded'|'failed', videoUrl?, durationSec?, message? }
+ *   {
+ *     status:   'submitted'|'processing'|'succeeded'|'failed'|'unknown',
+ *     videoUrl?:string,
+ *     durationSec?:number,
+ *     message?:string,
+ *     raw?:any           // toujours renvoyé pour debug
+ *   }
  */
 export async function GET(request: Request) {
   try {
@@ -36,22 +46,61 @@ export async function GET(request: Request) {
     })
 
     const data = await safeJson(res)
-    if (!res.ok || data?.code !== 0) {
+    if (!res.ok || (data && data.code !== undefined && data.code !== 0)) {
       return NextResponse.json(
         { error: data?.message || `Kling HTTP ${res.status}`, raw: data },
         { status: res.status === 200 ? 502 : res.status },
       )
     }
 
-    const d        = data?.data ?? {}
-    const status   = String(d?.task_status ?? '').toLowerCase()        // 'submitted'|'processing'|'succeeded'|'failed'
-    const videos   = d?.task_result?.videos ?? []
-    const first    = videos[0] ?? {}
-    const videoUrl = first?.url || undefined
-    const duration = first?.duration ? Number(first.duration) : undefined
-    const message  = d?.task_status_msg || undefined
+    const d = data?.data ?? data ?? {}
 
-    return NextResponse.json({ status, videoUrl, durationSec: duration, message })
+    // Status : on tente plusieurs noms et on normalise
+    const rawStatus = String(
+      d?.task_status ?? d?.status ?? d?.state ?? ''
+    ).toLowerCase().trim()
+
+    let status: 'succeeded' | 'failed' | 'processing' | 'unknown'
+    if (SUCCESS_STATES.has(rawStatus)) status = 'succeeded'
+    else if (FAILED_STATES.has(rawStatus)) status = 'failed'
+    else if (PENDING_STATES.has(rawStatus)) status = 'processing'
+    else status = 'unknown'
+
+    // URL vidéo : on cherche dans plusieurs chemins possibles
+    const candidates: any[] = [
+      d?.task_result?.videos?.[0]?.url,
+      d?.task_result?.videos?.[0]?.video_url,
+      d?.task_result?.video_url,
+      d?.task_result?.url,
+      d?.task_result?.result?.videos?.[0]?.url,
+      d?.task_result?.result?.[0]?.url,
+      d?.result?.videos?.[0]?.url,
+      d?.result?.video_url,
+      d?.videos?.[0]?.url,
+      d?.video_url,
+      d?.url,
+    ]
+    const videoUrl = candidates.find((v) => typeof v === 'string' && /^https?:\/\//i.test(v))
+
+    const duration = pickNumber([
+      d?.task_result?.videos?.[0]?.duration,
+      d?.task_result?.duration,
+      d?.duration,
+    ])
+    const message = d?.task_status_msg || d?.message || d?.error_msg || undefined
+
+    // Si on dit "succeeded" mais qu'on n'a pas trouvé l'URL : on remonte unknown + raw
+    if (status === 'succeeded' && !videoUrl) {
+      return NextResponse.json({
+        status: 'unknown',
+        videoUrl: undefined,
+        durationSec: duration,
+        message: 'Tâche marquée succeeded mais URL vidéo introuvable dans la réponse. Vérifie le champ "raw" ci-dessous et envoie-le pour qu\'on cale le parseur.',
+        raw: data,
+      })
+    }
+
+    return NextResponse.json({ status, videoUrl, durationSec: duration, message, raw: data })
 
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'Erreur inconnue' }, { status: 500 })
@@ -60,4 +109,12 @@ export async function GET(request: Request) {
 
 async function safeJson(res: Response): Promise<any> {
   try { return await res.json() } catch { return null }
+}
+
+function pickNumber(values: any[]): number | undefined {
+  for (const v of values) {
+    const n = Number(v)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return undefined
 }

@@ -9,8 +9,8 @@ const RESOLUTIONS = ['720p', '1080p', '4k'] as const
 const ASPECTS     = ['9:16', '16:9', '1:1'] as const
 const DURATIONS   = [3, 4, 5, 6, 7, 8, 9, 10] as const
 
-const POLL_INTERVAL_MS  = 8_000               // 8s entre 2 pings
-const POLL_TIMEOUT_MS   = 20 * 60 * 1000       // 20 min max
+const POLL_INTERVAL_MS  = 8_000
+const POLL_TIMEOUT_MS   = 20 * 60 * 1000
 
 export default function VideoTab() {
   const [mode, setMode]               = useState<Mode>('image2video')
@@ -31,6 +31,9 @@ export default function VideoTab() {
   const [videoUrl, setVideoUrl]       = useState<string | null>(null)
   const [taskId, setTaskId]           = useState<string | null>(null)
   const [endpoint, setEndpoint]       = useState<string>('image2video')
+  const [rawResponse, setRawResponse] = useState<any>(null)
+  const [showRaw, setShowRaw]         = useState(false)
+
   const pollRef = useRef<number | null>(null)
   const startedAtRef = useRef<number>(0)
 
@@ -45,6 +48,7 @@ export default function VideoTab() {
     setError(null)
     setVideoUrl(null)
     setTaskId(null)
+    setRawResponse(null)
     setTimedOut(false)
     if (!prompt.trim()) {
       setError('Ajoute un prompt avant de générer.')
@@ -107,6 +111,7 @@ export default function VideoTab() {
       try {
         const r = await fetch(`/api/studio/video/status?id=${encodeURIComponent(id)}&endpoint=${ep}`)
         const data = await r.json()
+        setRawResponse(data?.raw ?? data ?? null)
 
         if (!r.ok) {
           setError(data?.error || `HTTP ${r.status}`)
@@ -124,6 +129,14 @@ export default function VideoTab() {
         }
         if (status === 'failed') {
           setError(data.message || 'Kling a renvoyé un échec.')
+          setPolling(false)
+          setProgress('')
+          return
+        }
+        if (status === 'unknown') {
+          // Tâche terminée mais URL pas reconnue dans la réponse.
+          setError(data.message || 'Tâche terminée mais URL vidéo non trouvée dans la réponse Kling. Ouvre "Voir la réponse brute" ci-dessous.')
+          setShowRaw(true)
           setPolling(false)
           setProgress('')
           return
@@ -154,7 +167,6 @@ export default function VideoTab() {
     setTimedOut(false)
     setPolling(true)
     setProgress('Vérification du statut…')
-    // On garde le startedAt d'origine pour avoir un compteur continu
     if (!startedAtRef.current) startedAtRef.current = Date.now()
     poll(taskId, endpoint)
   }
@@ -169,6 +181,11 @@ export default function VideoTab() {
   const copyTaskId = async () => {
     if (!taskId) return
     try { await navigator.clipboard.writeText(taskId) } catch { /* */ }
+  }
+
+  const copyRaw = async () => {
+    if (!rawResponse) return
+    try { await navigator.clipboard.writeText(JSON.stringify(rawResponse, null, 2)) } catch { /* */ }
   }
 
   const loading = submitting || polling
@@ -309,6 +326,24 @@ export default function VideoTab() {
               </div>
             </div>
           )}
+
+          {/* Bloc debug réponse brute */}
+          {rawResponse && (
+            <div style={styles.debugBox}>
+              <div style={styles.debugHeader}>
+                <span>🔧 Réponse Kling brute</span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => setShowRaw(s => !s)} style={styles.copyChipDark}>
+                    {showRaw ? 'Masquer' : 'Afficher'}
+                  </button>
+                  <button onClick={copyRaw} style={styles.copyChipDark}>📋 Copier</button>
+                </div>
+              </div>
+              {showRaw && (
+                <pre style={styles.rawPre}>{JSON.stringify(rawResponse, null, 2)}</pre>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -360,4 +395,8 @@ const styles: Record<string, React.CSSProperties> = {
   errorBox:    { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   hintSubtle:  { fontSize: 11, color: '#6B7A8A', margin: 0, lineHeight: 1.5 },
   copyChip:    { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 12 },
+  copyChipDark:{ padding: '4px 8px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  debugBox:    { marginTop: 16, background: '#1B2A33', color: '#C8F07D', borderRadius: 10, padding: 12, fontFamily: 'monospace', fontSize: 11 },
+  debugHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontFamily: 'system-ui', color: '#fff' },
+  rawPre:      { margin: 0, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
 }
