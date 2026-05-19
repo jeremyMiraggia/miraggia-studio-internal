@@ -10,7 +10,7 @@
  *            (Front, Side, Back, Close up Haut, Close up Bas)
  *
  *   • POSE → posture du corps, attitude, regard, expression
- *            (simple, nonchalante, mouvement, mode, …)
+ *            (simple, nonchalante, mouvement, mode, regard, epaule, reflective, attitude, silhouette)
  *
  *   Le prompt final = VUE_PROMPTS[vue] + ". " + POSE_PROMPTS[pose].
  *
@@ -84,10 +84,6 @@ function normalizeKey(s: string): string {
 
 /* ============================== VUES ============================== */
 
-/**
- * Mapping VUE → angle de caméra, type de plan, orientation du sujet.
- * Édite librement.
- */
 const VIEW_PROMPTS: Record<PoseView, string> = {
   'Front':
     'eye-level shot, plan américain 50mm, face caméra, sujet de pied jusqu\'aux genoux, composition centrée éditoriale, focus net sur le sujet',
@@ -107,22 +103,35 @@ const VIEW_PROMPTS: Record<PoseView, string> = {
 
 /* ============================== POSES ============================== */
 
-/**
- * Mapping POSE → posture du corps, attitude, regard, expression.
- * Édite librement. Les clés sont en lowercase.
- */
 const POSE_PROMPTS: Record<string, string> = {
   'simple':
-    'debout symétrique, poids équilibré sur les deux jambes, bras détendus le long du corps, mains relâchées, épaules ouvertes, dos droit, tête neutre, regard caméra direct, mâchoire détendue, expression neutre intense, sérénité maîtrisée, posture éditoriale épurée',
+    'high-end fashion editorial, Vogue-style standing pose. posture varies randomly between: relaxed contrapposto with one hand near waist, straight with hands behind back, or slight weight shift. narrow elegant leg placement, strictly avoid wide triangle legs. no smiling',
 
   'nonchalante':
-    'debout en contrapposto marqué, poids sur une jambe, hanche décalée, épaules relâchées, une main enfoncée dans la poche, l\'autre bras pendant doigts détendus, jambe avant fléchie genou souple, tête légèrement inclinée, regard hors-cadre à mi-hauteur, mâchoire détendue, lèvres closes, sourire absent, attitude désinvolte',
+    'high-end fashion editorial, Vogue-style relaxed pose. posture varies randomly between: subtle slouch with arm resting, grounded with hands in front pockets, or fluid asymmetrical stance. natural narrow feet placement, strictly avoid rigid wide triangle legs. no smiling',
 
   'mouvement':
-    'marche figée en transition mid-step, jambe arrière levée mi-hauteur, bras en balanciers naturels, hanches en rotation, torse engagé, cheveux animés par le mouvement, dynamique suspendue, regard caméra direct, expression vivante et concentrée, énergie figée',
+    'high-end fashion editorial, Vogue-style dynamic pose. posture varies randomly between: offset walking stride, twisting torso looking over shoulder, or expressive backward arch. fluid body language, strictly avoid stiff or wide triangle leg stances. no smiling',
 
   'mode':
-    'posture éditoriale assurée, hanches projetées légèrement vers l\'avant, épaules ouvertes et redressées, menton légèrement relevé, un bras placé sur la hanche, l\'autre en arc gracieux, jambe avant fléchie en angle, regard caméra intense et défiant, expression haute couture, attitude vogue, présence affirmée, statique sculptural',
+    'high-end fashion editorial, Vogue-style stylized pose. posture varies randomly between: hands clasped behind head with offset hips, hands adjusting hat symmetrically, or one hand touching glasses in contrapposto. elegant narrow stance, strictly avoid wide triangle legs. no smiling',
+
+  // ----- Poses ajoutées pour varier Side / Back -----
+
+  'regard':
+    'high-end fashion editorial, Vogue-style gaze-focused pose. posture varies randomly between: head turned 3/4 looking off-camera into the distance with one hand brushing collarbone, strict profile gaze with weight shifted to back leg and free hand by hip, or quarter turn with chin lifted and fingertips grazing jawline. narrow elegant leg placement, strictly avoid wide triangle legs. no smiling',
+
+  'epaule':
+    'high-end fashion editorial, Vogue-style over-the-shoulder pose. posture varies randomly between: full back to camera with head turned looking over the right shoulder and hand grazing the nape, 3/4 dos with weight on one leg and torso twisted to glance back at the lens, or back stance with both arms relaxed and gaze cast diagonally over the shoulder. narrow elegant leg placement, strictly avoid wide triangle legs. no smiling',
+
+  'reflective':
+    'high-end fashion editorial, Vogue-style introspective pose. posture varies randomly between: hand lightly resting against the chin with eyes cast slightly down, fingertips near the temple with head softly tilted, or palm grazing the collarbone with a quiet downward gaze. narrow elegant leg placement, strictly avoid wide triangle legs. no smiling',
+
+  'attitude':
+    'high-end fashion editorial, Vogue-style assertive pose. posture varies randomly between: one hand firmly on hip with shoulders squared and chin slightly up, both hands relaxed but planted at the sides with a grounded stance, or arms crossed elegantly with the weight shifted onto one leg. narrow elegant leg placement, strictly avoid wide triangle legs. no smiling',
+
+  'silhouette':
+    'high-end fashion editorial, Vogue-style sculptural pose. posture varies randomly between: one arm raised overhead drawing a clean line with the other resting on the hip, both arms forming a soft frame around the face, or arms extended sideways like a dancer\'s geste with the weight on the back leg. narrow elegant leg placement, strictly avoid wide triangle legs. no smiling',
 }
 
 /* ============================== COMBINAISON ============================== */
@@ -145,10 +154,6 @@ export function poseToPrompt(label: PoseLabel): string {
 
 /* ============================== BOILERPLATE ============================== */
 
-/**
- * Phrases boilerplate collées automatiquement à CHAQUE prompt généré depuis
- * l'onglet Notion (cf. demande Jeremy 19/05/2026).
- */
 export const NOTION_BOILERPLATE_HEADER =
   'Create a 4K HD fashion shooting lifestyle image'
 
