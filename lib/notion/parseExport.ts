@@ -46,6 +46,8 @@ export type GenerationTask = {
   // Detail tasks
   detailIndex?:  number
   detailName?:   string
+  detailFile?:   File          // fichier détail brut (utile au runtime)
+  promptWithBase?: string      // prompt alternatif quand on a une image de base du look
   // Commun
   mannequinName: string
   fondName:      string
@@ -166,9 +168,11 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
         taskType:  'detail',
         detailIndex,
         detailName:detailFile.name,
+        detailFile,
         mannequinName: look.mannequinName!,
         fondName:      look.fondName!,
-        prompt:    buildDetailPrompt(look, detailFile, model),
+        prompt:         buildDetailPrompt(look, detailFile, model),
+        promptWithBase: buildDetailPromptWithBase(look, detailFile),
         refs,
         warnings:  w,
       })
@@ -217,6 +221,23 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
   if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
   if (look.description)   parts.push(`Direction artistique : ${look.description}.`)
+  parts.push(NOTION_BOILERPLATE_STYLE)
+  return parts.join('\n\n')
+}
+
+function buildDetailPromptWithBase(look: LookRow, detailFile: File): string {
+  const parts: string[] = []
+  parts.push(NOTION_BOILERPLATE_HEADER + '.')
+  parts.push(
+    `Photographie de mode professionnelle en PLAN RAPPROCHÉ / GROS PLAN sur un détail du look déjà shooté (image complète montrée en référence #1 : le mannequin "${look.mannequinName}" porte la tenue complète devant le fond "${look.fondName}").`,
+  )
+  parts.push(
+    `Le détail à mettre en valeur est précisément celui montré en référence #2 (fichier "${detailFile.name}") — broderie, matière, fermeture, finition ou accessoire spécifique.`,
+  )
+  parts.push(
+    'Recadrer serré sur ce détail tel qu\'il apparaît dans le look déjà shooté : même mannequin, même tenue, même fond, même lumière. Mise au point très précise sur la matière et le tombé, profondeur de champ très courte (f/2.0 ressenti), texture révélée, composition éditoriale.',
+  )
+  if (look.description) parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
   return parts.join('\n\n')
 }

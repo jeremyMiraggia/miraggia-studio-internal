@@ -21,6 +21,7 @@ export default function NotionTab() {
   const [parsing, setParsing]         = useState(false)
   const [parsed, setParsed]           = useState<ParsedExport | null>(null)
   const [states, setStates]           = useState<TaskState[]>([])
+  const statesRef                     = useRef<TaskState[]>([])
   const [globalError, setGlobalError] = useState<string | null>(null)
 
   const [ratio, setRatio]             = useState('9:16')
@@ -52,6 +53,8 @@ export default function NotionTab() {
     }
     setParsing(false)
   }
+
+  useEffect(() => { statesRef.current = states }, [states])
 
   /* ----------- Grouping par look ----------- */
   const groupedLooks = useMemo(() => {
@@ -91,17 +94,38 @@ export default function NotionTab() {
 
     for (let i = 0; i < queue.length; i++) {
       const item = queue[i]
-      // Ouvre automatiquement le look concerné pour qu'on voie le rendu live
       setLookExpansion(item.task.lookId, true)
 
-      setProgress(`Visuel ${i + 1}/${queue.length} · Look ${item.task.numeroLook} · ${item.task.vueRaw}`)
+      const label = item.task.taskType === 'detail'
+        ? `Détail ${(item.task.detailIndex ?? 0) + 1}`
+        : (item.task.vueRaw ?? '')
+      setProgress(`Visuel ${i + 1}/${queue.length} · Look ${item.task.numeroLook} · ${label}`)
       updateState(item.task.id, { status: 'running', error: undefined })
 
       try {
-        const refs = await compressAll(item.task.refs, { maxSide: 2048, quality: 0.85 })
+        // Pour les tasks DETAIL : si une pose du même look est déjà générée,
+        // on l'utilise comme image de base au lieu du mannequin+fond.
+        let promptToUse = item.task.prompt
+        let refsToUse   = item.task.refs
+
+        if (item.task.taskType === 'detail') {
+          const baseState = statesRef.current.find(s =>
+            s.task.lookId === item.task.lookId &&
+            s.task.taskType === 'pose' &&
+            s.status === 'done' &&
+            !!s.imageUrl,
+          )
+          if (baseState?.imageUrl && item.task.detailFile && item.task.promptWithBase) {
+            const baseFile = await dataUrlToFile(baseState.imageUrl, `base_look_${item.task.lookId}.png`)
+            refsToUse   = [baseFile, item.task.detailFile]
+            promptToUse = item.task.promptWithBase
+          }
+        }
+
+        const refs = await compressAll(refsToUse, { maxSide: 2048, quality: 0.85 })
 
         const fd = new FormData()
-        fd.append('prompt',  item.task.prompt)
+        fd.append('prompt',  promptToUse)
         fd.append('ratio',   ratio)
         fd.append('quality', quality)
         refs.forEach(f => fd.append('refs', f))
@@ -452,6 +476,13 @@ function slug(s: string): string {
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const res = await fetch(dataUrl)
   return await res.blob()
+}
+
+async function dataUrlToFile(dataUrl: string, filename: string): Promise<File> {
+  const blob = await dataUrlToBlob(dataUrl)
+  const ext  = blob.type.includes('png') ? 'png' : 'jpg'
+  const safe = filename.endsWith(`.${ext}`) ? filename : `${filename}.${ext}`
+  return new File([blob], safe, { type: blob.type || 'image/png' })
 }
 
 /* ============================== styles ============================== */
