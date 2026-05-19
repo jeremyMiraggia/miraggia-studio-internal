@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll } from '@/lib/compressImage'
@@ -8,11 +8,11 @@ import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib
 type TaskStatus = 'pending' | 'running' | 'done' | 'skipped' | 'error'
 
 type TaskState = {
-  task:   GenerationTask
-  status: TaskStatus
-  enabled:boolean
+  task:    GenerationTask
+  status:  TaskStatus
+  enabled: boolean
   imageUrl?: string
-  error?:   string
+  error?:    string
 }
 
 export default function NotionTab() {
@@ -26,6 +26,7 @@ export default function NotionTab() {
   const [quality, setQuality]         = useState('2K')
   const [running, setRunning]         = useState(false)
   const [progress, setProgress]       = useState('')
+  const [expanded, setExpanded]       = useState<Record<string, boolean>>({})
 
   /* ----------- Parsing zip ----------- */
   const handleZipChange = async (files: File[]) => {
@@ -33,6 +34,7 @@ export default function NotionTab() {
     setGlobalError(null)
     setParsed(null)
     setStates([])
+    setExpanded({})
 
     if (files.length === 0) return
     setParsing(true)
@@ -50,14 +52,32 @@ export default function NotionTab() {
     setParsing(false)
   }
 
+  /* ----------- Grouping par look ----------- */
+  const groupedLooks = useMemo(() => {
+    const map = new Map<string, TaskState[]>()
+    const order: string[] = []
+    for (const s of states) {
+      const key = s.task.lookId
+      if (!map.has(key)) { map.set(key, []); order.push(key) }
+      map.get(key)!.push(s)
+    }
+    return order.map(lookId => ({ lookId, tasks: map.get(lookId)! }))
+  }, [states])
+
   const enabledCount = states.filter(s => s.enabled).length
 
   const toggleTask = (id: string) => {
     setStates(prev => prev.map(s => s.task.id === id ? { ...s, enabled: !s.enabled } : s))
   }
-  const toggleAll = (value: boolean) => {
+  const toggleLook = (lookId: string, value: boolean) => {
+    setStates(prev => prev.map(s => s.task.lookId === lookId ? { ...s, enabled: value } : s))
+  }
+  const toggleAllStates = (value: boolean) => {
     setStates(prev => prev.map(s => ({ ...s, enabled: value })))
   }
+
+  const setLookExpansion = (lookId: string, open: boolean) =>
+    setExpanded(prev => ({ ...prev, [lookId]: open }))
 
   /* ----------- Génération séquentielle ----------- */
   const handleRunAll = async () => {
@@ -70,7 +90,10 @@ export default function NotionTab() {
 
     for (let i = 0; i < queue.length; i++) {
       const item = queue[i]
-      setProgress(`Visuel ${i + 1}/${queue.length} · ${item.task.numeroLook} · ${item.task.vueRaw}`)
+      // Ouvre automatiquement le look concerné pour qu'on voie le rendu live
+      setLookExpansion(item.task.lookId, true)
+
+      setProgress(`Visuel ${i + 1}/${queue.length} · Look ${item.task.numeroLook} · ${item.task.vueRaw}`)
       updateState(item.task.id, { status: 'running', error: undefined })
 
       try {
@@ -145,7 +168,7 @@ export default function NotionTab() {
             onChange={handleZipChange}
             accept=".zip,application/zip,application/x-zip-compressed"
             label="Glisse ton export Notion"
-            hint="Le ZIP doit contenir LOOK*.csv + Models Definition*.csv + Fonds*.csv + images"
+            hint="ZIP avec LOOK*.csv + Models Definition*.csv + Fonds*.csv + images"
             minHeight={120}
           />
 
@@ -153,19 +176,16 @@ export default function NotionTab() {
 
           {parsed && (
             <div style={styles.statsBox}>
-              <div><strong>{parsed.looks.length}</strong> look(s), <strong>{parsed.models.size}</strong> mannequin(s), <strong>{parsed.fonds.size}</strong> fond(s)</div>
-              <div style={{ marginTop: 4 }}><strong>{parsed.tasks.length}</strong> visuel(s) à générer · <strong>{enabledCount}</strong> sélectionné(s)</div>
+              <div><strong>{parsed.looks.length}</strong> look(s) · <strong>{parsed.models.size}</strong> mannequin(s) · <strong>{parsed.fonds.size}</strong> fond(s)</div>
+              <div style={{ marginTop: 4 }}><strong>{parsed.tasks.length}</strong> visuel(s) · <strong>{enabledCount}</strong> sélectionné(s)</div>
               {parsed.warnings.length > 0 && (
-                <div style={{ ...styles.warningRow, marginTop: 6 }}>
-                  ⚠ {parsed.warnings.join(' · ')}
-                </div>
+                <div style={{ ...styles.warningRow, marginTop: 6 }}>⚠ {parsed.warnings.join(' · ')}</div>
               )}
             </div>
           )}
 
           {globalError && <p style={styles.errorBox}>⚠ {globalError}</p>}
 
-          {/* Réglages génération */}
           {parsed && (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -192,30 +212,43 @@ export default function NotionTab() {
               )}
 
               <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => toggleAll(true)}  style={styles.btnGhost}>Tout cocher</button>
-                <button onClick={() => toggleAll(false)} style={styles.btnGhost}>Tout décocher</button>
+                <button onClick={() => toggleAllStates(true)}  style={styles.btnGhost}>Tout cocher</button>
+                <button onClick={() => toggleAllStates(false)} style={styles.btnGhost}>Tout décocher</button>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setExpanded(Object.fromEntries(groupedLooks.map(g => [g.lookId, true])))}  style={styles.btnGhost}>Tout déplier</button>
+                <button onClick={() => setExpanded({})}                                                          style={styles.btnGhost}>Tout replier</button>
               </div>
             </>
           )}
         </div>
 
-        {/* Liste des tâches */}
+        {/* Liste des looks groupés */}
         <div>
           {!parsed && (
             <div style={styles.emptyState}>
-              Dépose ton export Notion à gauche. Tu verras ici la liste des visuels à générer, avec une preview du prompt et des références.
+              Dépose ton export Notion à gauche. Tu verras ici la liste des looks avec leurs vues, et tu pourras tout générer en un clic.
             </div>
           )}
 
-          {parsed && states.length === 0 && (
+          {parsed && groupedLooks.length === 0 && (
             <div style={styles.emptyState}>
               Aucun visuel valide trouvé. Vérifie que les lignes ont bien un Mannequin, un Fond et au moins une "Vue et Pose".
             </div>
           )}
 
-          {states.length > 0 && (
+          {groupedLooks.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {states.map(s => <TaskCard key={s.task.id} state={s} onToggle={() => toggleTask(s.task.id)} />)}
+              {groupedLooks.map(g => (
+                <LookGroup
+                  key={g.lookId}
+                  tasks={g.tasks}
+                  open={!!expanded[g.lookId]}
+                  onToggleOpen={() => setLookExpansion(g.lookId, !expanded[g.lookId])}
+                  onToggleLook={(value) => toggleLook(g.lookId, value)}
+                  onToggleTask={(id) => toggleTask(id)}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -224,74 +257,137 @@ export default function NotionTab() {
   )
 }
 
-/* ============================== TaskCard ============================== */
+/* ============================== LookGroup (accordion par look) ============================== */
 
-function TaskCard({ state, onToggle }: { state: TaskState, onToggle: () => void }) {
+function LookGroup({
+  tasks, open, onToggleOpen, onToggleLook, onToggleTask,
+}: {
+  tasks: TaskState[]
+  open: boolean
+  onToggleOpen: () => void
+  onToggleLook: (value: boolean) => void
+  onToggleTask: (id: string) => void
+}) {
+  const first = tasks[0].task
+  const enabledN = tasks.filter(t => t.enabled).length
+  const doneN    = tasks.filter(t => t.status === 'done').length
+  const errN     = tasks.filter(t => t.status === 'error').length
+  const runningN = tasks.filter(t => t.status === 'running').length
+
+  // Checkbox 3 états : tout coché / aucun coché / mixte
+  const allChecked  = enabledN === tasks.length
+  const noneChecked = enabledN === 0
+  const indeterminate = !allChecked && !noneChecked
+
+  return (
+    <div style={lookCardStyle}>
+      {/* Header look */}
+      <div style={lookHeader}>
+        <Indeterminate3StateCheckbox
+          checked={allChecked}
+          indeterminate={indeterminate}
+          onChange={() => onToggleLook(!allChecked)}
+        />
+        <div style={{ flex: 1, cursor: 'pointer' }} onClick={onToggleOpen}>
+          <div style={{ fontWeight: 700, color: '#0D4A5C', fontSize: 14 }}>
+            <span style={{ color: '#6B7A8A', fontWeight: 500 }}>Look #</span>{first.numeroLook} ·{' '}
+            <span>{first.mannequinName}</span> ·{' '}
+            <span>{first.fondName}</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
+            {tasks.length} vue(s) · {enabledN} sélectionnée(s) ·
+            {' '}<span style={{ color: '#1F7A35' }}>{doneN} générée(s)</span>
+            {runningN > 0 && <span style={{ color: '#0D4A5C' }}> · {runningN} en cours</span>}
+            {errN     > 0 && <span style={{ color: '#9B1C1C' }}> · {errN} erreur(s)</span>}
+          </div>
+        </div>
+        <button onClick={onToggleOpen} style={chevron}>{open ? '▾' : '▸'}</button>
+      </div>
+
+      {/* Liste des tâches (vues) si déplié */}
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+          {tasks.map(t => (
+            <TaskRow key={t.task.id} state={t} onToggle={() => onToggleTask(t.task.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ============================== TaskRow ============================== */
+
+function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }) {
   const { task, status, imageUrl, error, enabled } = state
-  const statusColor =
+  const color =
     status === 'done'    ? '#1F7A35'
     : status === 'error' ? '#9B1C1C'
     : status === 'running'? '#0D4A5C'
     : '#6B7A8A'
 
   return (
-    <div style={taskCardStyle}>
-      {/* Header ligne */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={onToggle}
-          disabled={status === 'running' || status === 'done'}
-          style={{ marginTop: 2 }}
-        />
-        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 90px', gap: 10 }}>
-          <div>
-            <div style={{ fontWeight: 700, color: '#0D4A5C', fontSize: 13 }}>
-              Look #{task.numeroLook} · {task.mannequinName} · {task.fondName}
-            </div>
-            <div style={{ fontSize: 12, color: '#6B7A8A', marginTop: 2 }}>
-              Pose : <span style={{ color: '#0D4A5C', fontWeight: 600 }}>{task.vueRaw}</span> · {task.refs.length} ref(s) image
-            </div>
-            <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
-              ID tâche : <code>{task.id}</code>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <span style={{ ...statusPill, color: statusColor, borderColor: statusColor }}>
-              {labelForStatus(status)}
-            </span>
-          </div>
+    <div style={taskRowStyle}>
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={onToggle}
+        disabled={status === 'running' || status === 'done'}
+      />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>{task.vueRaw}</div>
+        <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
+          ID <code>{task.id}</code> · {task.refs.length} ref(s) image
         </div>
+        {task.warnings.length > 0 && (
+          <div style={{ ...styles.warningRow, marginTop: 4 }}>⚠ {task.warnings.join(' · ')}</div>
+        )}
+        {error && <div style={{ ...styles.errorBox, marginTop: 4 }}>⚠ {error}</div>}
+
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 10, color: '#6B7A8A', fontWeight: 600 }}>
+            Voir le prompt envoyé
+          </summary>
+          <pre style={styles.promptPre}>{task.prompt}</pre>
+        </details>
       </div>
 
-      {/* Warnings parser */}
-      {task.warnings.length > 0 && (
-        <div style={styles.warningRow}>⚠ {task.warnings.join(' · ')}</div>
-      )}
+      <span style={{ ...statusPill, color, borderColor: color }}>{labelForStatus(status)}</span>
 
-      {/* Erreur génération */}
-      {error && <div style={styles.errorBox}>⚠ {error}</div>}
-
-      {/* Image résultat */}
       {imageUrl && (
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-          <img src={imageUrl} alt={task.id} style={{ width: 160, borderRadius: 8, border: '1px solid rgba(13,74,92,0.1)' }} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <a href={imageUrl} download={`look_${task.numeroLook}_vue${task.vueIndex + 1}.png`} style={styles.linkBtnDark}>⬇ Télécharger</a>
-            <a href={imageUrl} target="_blank" rel="noreferrer" style={styles.linkBtnLight}>↗ Ouvrir</a>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+          <img src={imageUrl} alt={task.id} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
+          <div style={{ display: 'flex', gap: 4 }}>
+            <a href={imageUrl} download={`look_${task.numeroLook}_vue${task.vueIndex + 1}.png`} style={styles.linkBtnDark}>⬇</a>
+            <a href={imageUrl} target="_blank" rel="noreferrer"                                  style={styles.linkBtnLight}>↗</a>
           </div>
         </div>
       )}
-
-      {/* Prompt collapsible */}
-      <details style={{ marginTop: 4 }}>
-        <summary style={{ cursor: 'pointer', fontSize: 11, color: '#6B7A8A', fontWeight: 600 }}>Voir le prompt envoyé</summary>
-        <pre style={styles.promptPre}>{task.prompt}</pre>
-      </details>
     </div>
   )
 }
+
+/* ============================== Checkbox 3 états ============================== */
+
+function Indeterminate3StateCheckbox({
+  checked, indeterminate, onChange,
+}: { checked: boolean, indeterminate: boolean, onChange: () => void }) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate
+  }, [indeterminate])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      style={{ width: 16, height: 16, cursor: 'pointer' }}
+    />
+  )
+}
+
+/* ============================== utils ============================== */
 
 function labelForStatus(s: TaskStatus): string {
   switch (s) {
@@ -302,8 +398,6 @@ function labelForStatus(s: TaskStatus): string {
     case 'skipped': return '— sauté'
   }
 }
-
-/* ============================== utils ============================== */
 
 function truncate(s: string, max = 240) {
   if (!s) return ''
@@ -321,14 +415,36 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 
 /* ============================== styles ============================== */
 
-const taskCardStyle: React.CSSProperties = {
+const lookCardStyle: React.CSSProperties = {
   background: '#fff',
   border: '1px solid rgba(13,74,92,0.1)',
   borderRadius: 12,
   padding: 14,
+}
+
+const lookHeader: React.CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
+  alignItems: 'flex-start',
+  gap: 12,
+}
+
+const chevron: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  fontSize: 18,
+  color: '#0D4A5C',
+  padding: '0 6px',
+}
+
+const taskRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
   gap: 10,
+  padding: 10,
+  background: '#F5F7F9',
+  border: '1px solid rgba(13,74,92,0.06)',
+  borderRadius: 8,
 }
 
 const statusPill: React.CSSProperties = {
@@ -340,6 +456,7 @@ const statusPill: React.CSSProperties = {
   fontWeight: 700,
   textTransform: 'uppercase',
   letterSpacing: '0.06em',
+  whiteSpace: 'nowrap',
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -356,7 +473,7 @@ const styles: Record<string, React.CSSProperties> = {
   warningRow:  { background: '#FFF8E1', color: '#7A4F00', border: '1px solid #F1D78A', padding: '6px 10px', borderRadius: 6, fontSize: 11 },
   hintSubtle:  { fontSize: 11, color: '#6B7A8A', margin: 0 },
   statsBox:    { background: '#E8F2F5', color: '#0D4A5C', borderRadius: 8, padding: '10px 12px', fontSize: 12, lineHeight: 1.5 },
-  promptPre:   { margin: '6px 0 0', background: '#F5F7F9', borderRadius: 6, padding: 10, fontSize: 11, color: '#0D4A5C', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 220, overflow: 'auto' },
-  linkBtnDark: { padding: '6px 10px', fontSize: 11, color: '#fff', background: '#0D4A5C', borderRadius: 6, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
-  linkBtnLight:{ padding: '6px 10px', fontSize: 11, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 6, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
+  promptPre:   { margin: '6px 0 0', background: '#fff', borderRadius: 6, padding: 10, fontSize: 11, color: '#0D4A5C', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 200, overflow: 'auto', border: '1px solid rgba(13,74,92,0.08)' },
+  linkBtnDark: { padding: '4px 8px', fontSize: 11, color: '#fff', background: '#0D4A5C', borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
+  linkBtnLight:{ padding: '4px 8px', fontSize: 11, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
 }
