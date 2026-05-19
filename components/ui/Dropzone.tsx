@@ -47,8 +47,9 @@ export default function Dropzone({
     })
     if (arr.length === 0) return
 
-    // Crée les data URLs pour la preview (asynchrone)
+    // Crée les data URLs pour la preview (asynchrone) — uniquement pour les images
     arr.forEach(f => {
+      if (!f.type.startsWith('image/')) return
       const key = `${f.name}:${f.size}:${f.lastModified}`
       if (previews[key]) return
       const reader = new FileReader()

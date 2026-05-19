@@ -8,9 +8,11 @@ import LookbookTab   from '@/components/tabs/LookbookTab'
 import GhostTab      from '@/components/tabs/GhostTab'
 import LifestyleTab  from '@/components/tabs/LifestyleTab'
 import VideoTab      from '@/components/tabs/VideoTab'
+import NotionTab     from '@/components/tabs/NotionTab'
 
 const TABS = [
   { id: 'simple',     label: '🖼️ Simple' },
+  { id: 'notion',     label: '📥 Notion' },
   { id: 'lookbook',   label: '👗 Lookbook' },
   { id: 'ghost',      label: '👻 Ghost' },
   { id: 'lifestyle',  label: '🌴 Lifestyle' },
@@ -47,6 +49,7 @@ export default function StudioPage() {
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         {tab === 'simple'    && <SimpleTab />}
+        {tab === 'notion'    && <NotionTab />}
         {tab === 'lookbook'  && <LookbookTab />}
         {tab === 'ghost'     && <GhostTab />}
         {tab === 'lifestyle' && <LifestyleTab />}
