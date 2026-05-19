@@ -152,6 +152,44 @@ export function poseToPrompt(label: PoseLabel): string {
   return `${vuePart}. ${posePart}.`
 }
 
+/* ============================== CATALOGUE (UI) ============================== */
+
+/**
+ * Catalogues exportés pour l'UI : permet à NotionTab de lister toutes les
+ * vues et poses disponibles dans son écran d'accueil.
+ */
+
+export type ViewCatalogItem = {
+  key:        PoseView
+  label:      string          // libellé exact à utiliser dans Notion
+  description:string          // description courte pour l'utilisateur
+}
+
+export type PoseCatalogItem = {
+  key:        string          // clé exacte à utiliser dans Notion (lowercase)
+  description:string
+}
+
+export const VIEW_CATALOG: ViewCatalogItem[] = [
+  { key: 'Front',       label: 'Front',         description: 'Sujet face caméra, plan américain (genoux à tête).' },
+  { key: 'Side',        label: 'Side',          description: 'Profil strict, plan américain latéral.' },
+  { key: 'Back',        label: 'Back',          description: 'Dos complet caméra, plan américain.' },
+  { key: 'CloseUpHaut', label: 'Close up Haut', description: 'Gros plan tête et épaules, fond légèrement flouté.' },
+  { key: 'CloseUpBas',  label: 'Close up Bas',  description: 'Gros plan bas du corps (jambes, chaussures), low-angle léger.' },
+]
+
+export const POSE_CATALOG: PoseCatalogItem[] = [
+  { key: 'simple',      description: 'Standing pose neutre, mains au repos, sérénité éditoriale.' },
+  { key: 'nonchalante', description: 'Slouch décontracté, mains dans les poches, asymétrie fluide.' },
+  { key: 'mouvement',   description: 'Marche figée, torsion du torse, énergie suspendue.' },
+  { key: 'mode',        description: 'Pose éditoriale stylisée — peut introduire chapeau/lunettes.' },
+  { key: 'regard',      description: 'Tête tournée, gaze hors-caméra ou profil affirmé.' },
+  { key: 'epaule',      description: 'Over-the-shoulder, dos ou 3/4 dos regardant la caméra.' },
+  { key: 'reflective',  description: 'Introspectif, main au menton, regard légèrement baissé.' },
+  { key: 'attitude',    description: 'Stance assertif, mains aux hanches, présence forte.' },
+  { key: 'silhouette',  description: 'Sculptural, bras dessinant une ligne, geste de danseur.' },
+]
+
 /* ============================== BOILERPLATE ============================== */
 
 export const NOTION_BOILERPLATE_HEADER =

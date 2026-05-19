@@ -4,6 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
+import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'skipped' | 'error'
 
@@ -226,8 +227,35 @@ export default function NotionTab() {
         {/* Liste des looks groupés */}
         <div>
           {!parsed && (
-            <div style={styles.emptyState}>
-              Dépose ton export Notion à gauche. Tu verras ici la liste des looks avec leurs vues, et tu pourras tout générer en un clic.
+            <div style={styles.catalogBox}>
+              <h3 style={styles.catalogTitle}>📥 Comment ça marche</h3>
+              <p style={styles.catalogIntro}>
+                Dépose ton export Notion à gauche. Dans tes cellules "Vue et Pose X", utilise le format <code style={styles.kbd}>Vue, pose</code> — par exemple <code style={styles.kbd}>Front, nonchalante</code> ou <code style={styles.kbd}>Side, regard</code>.
+              </p>
+
+              <h4 style={styles.catalogSection}>Vues disponibles ({VIEW_CATALOG.length})</h4>
+              <div style={styles.catalogGrid}>
+                {VIEW_CATALOG.map(v => (
+                  <div key={v.key} style={styles.catalogItem}>
+                    <code style={styles.catalogKey}>{v.label}</code>
+                    <div style={styles.catalogDesc}>{v.description}</div>
+                  </div>
+                ))}
+              </div>
+
+              <h4 style={styles.catalogSection}>Poses disponibles ({POSE_CATALOG.length})</h4>
+              <div style={styles.catalogGrid}>
+                {POSE_CATALOG.map(p => (
+                  <div key={p.key} style={styles.catalogItem}>
+                    <code style={styles.catalogKey}>{p.key}</code>
+                    <div style={styles.catalogDesc}>{p.description}</div>
+                  </div>
+                ))}
+              </div>
+
+              <p style={styles.catalogFooter}>
+                💡 <strong>{VIEW_CATALOG.length} × {POSE_CATALOG.length} = {VIEW_CATALOG.length * POSE_CATALOG.length} combinaisons possibles.</strong> Tu peux étendre ce catalogue en éditant <code style={styles.kbd}>lib/poses.ts</code>.
+              </p>
             </div>
           )}
 
@@ -476,4 +504,14 @@ const styles: Record<string, React.CSSProperties> = {
   promptPre:   { margin: '6px 0 0', background: '#fff', borderRadius: 6, padding: 10, fontSize: 11, color: '#0D4A5C', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 200, overflow: 'auto', border: '1px solid rgba(13,74,92,0.08)' },
   linkBtnDark: { padding: '4px 8px', fontSize: 11, color: '#fff', background: '#0D4A5C', borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
   linkBtnLight:{ padding: '4px 8px', fontSize: 11, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
+  catalogBox:     { background: '#fff', border: '1px solid rgba(13,74,92,0.1)', borderRadius: 12, padding: 24 },
+  catalogTitle:   { fontSize: 18, fontWeight: 700, color: '#0D4A5C', margin: '0 0 6px' },
+  catalogIntro:   { fontSize: 13, color: '#0D4A5C', margin: '0 0 18px', lineHeight: 1.55 },
+  catalogSection: { fontSize: 11, fontWeight: 700, color: '#6B7A8A', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '14px 0 8px' },
+  catalogGrid:    { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 },
+  catalogItem:    { background: '#F5F7F9', border: '1px solid rgba(13,74,92,0.06)', borderRadius: 8, padding: 10 },
+  catalogKey:     { display: 'inline-block', background: '#0D4A5C', color: '#C8F07D', padding: '2px 7px', borderRadius: 4, fontSize: 12, fontWeight: 700, marginBottom: 5, fontFamily: 'monospace' },
+  catalogDesc:    { fontSize: 12, color: '#0D4A5C', lineHeight: 1.45 },
+  catalogFooter:  { fontSize: 12, color: '#6B7A8A', marginTop: 16, marginBottom: 0, lineHeight: 1.5, padding: '10px 12px', background: '#E8F2F5', borderRadius: 6 },
+  kbd:            { background: '#E8F2F5', padding: '1px 6px', borderRadius: 4, fontFamily: 'monospace', fontSize: 12, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.1)' },
 }
