@@ -6,6 +6,7 @@ import {
   NOTION_BOILERPLATE_HEADER,
   NOTION_BOILERPLATE_STYLE,
   type PoseLabel,
+  type PoseView,
 } from '@/lib/poses'
 
 /* ============================== TYPES ============================== */
@@ -28,23 +29,29 @@ export type LookRow = {
   fondName?:    string
   filesFront:   File[]
   filesBack:    File[]
-  details?:     string
+  detailsFiles: File[]      // ← maintenant une liste de fichiers
   description?: string
-  vues:         PoseLabel[]   // 1..N labels valides (Front/X, Back/X)
+  vues:         PoseLabel[]
 }
 
 export type GenerationTask = {
-  id:        string            // unique : `${lookId}-${vueIndex}`
-  lookId:    string
-  numeroLook:string
-  vueIndex:  number
-  vueRaw:    string            // "Front, nonchalante"
-  pose:      PoseLabel
+  id:            string
+  lookId:        string
+  numeroLook:    string
+  taskType:      'pose' | 'detail'
+  // Pose tasks
+  vueIndex?:     number
+  vueRaw?:       string
+  pose?:         PoseLabel
+  // Detail tasks
+  detailIndex?:  number
+  detailName?:   string
+  // Commun
   mannequinName: string
-  fondName:  string
-  prompt:    string
-  refs:      File[]            // [mannequin, fond, ...vetements]
-  warnings:  string[]
+  fondName:      string
+  prompt:        string
+  refs:          File[]
+  warnings:      string[]
 }
 
 export type ParsedExport = {
@@ -52,7 +59,7 @@ export type ParsedExport = {
   fonds:  Map<string, FondDef>
   looks:  LookRow[]
   tasks:  GenerationTask[]
-  warnings: string[]            // problèmes globaux
+  warnings: string[]
 }
 
 /* ============================== ENTRY ============================== */
@@ -70,14 +77,12 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
     zip = await JSZip.loadAsync(await inner.arrayBuffer())
   }
 
-  // Construit un index de fichiers : nom de fichier (sans dossier) -> File
   const fileIndex = new Map<string, File>()
   await Promise.all(
     Object.keys(zip.files).map(async (path) => {
       const entry = zip.files[path]
       if (entry.dir) return
       const base = baseName(path)
-      // Image binaire ou texte ? On encapsule tout en File (utile pour image+csv).
       const mime = guessMime(base)
       const blob = await entry.async('blob')
       const file = new File([blob], base, { type: mime })
@@ -87,7 +92,6 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
 
   const warnings: string[] = []
 
-  // ---------- Repérer les 3 CSV ----------
   const csvLook   = findCsvByPrefix(fileIndex, ['LOOK', 'Looks', 'Look '])
   const csvModels = findCsvByPrefix(fileIndex, ['Models Definition', 'Models', 'Modeles'])
   const csvFonds  = findCsvByPrefix(fileIndex, ['Fonds', 'Backgrounds'])
@@ -100,16 +104,17 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
   const fonds  = csvFonds  ? await parseFonds(csvFonds,   fileIndex) : new Map<string, FondDef>()
   const looks  = csvLook   ? await parseLooks(csvLook,    fileIndex) : []
 
-  // ---------- Construire les tâches ----------
+  /* ============== Construction des tâches ============== */
   const tasks: GenerationTask[] = []
+
   for (const look of looks) {
-    if (look.vues.length === 0) continue
-    if (!look.mannequinName)    continue
-    if (!look.fondName)         continue
+    if (!look.mannequinName) continue
+    if (!look.fondName)      continue
 
-    const model = look.mannequinName ? models.get(normName(look.mannequinName)) : undefined
-    const fond  = look.fondName      ? fonds.get(normName(look.fondName))       : undefined
+    const model = models.get(normName(look.mannequinName))
+    const fond  = fonds.get(normName(look.fondName))
 
+    // ---------- 1. Tasks "pose" (1 par vue valide) ----------
     look.vues.forEach((pose, vueIndex) => {
       const w: string[] = []
       const refs: File[] = []
@@ -120,22 +125,50 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
       if (fond?.fondFile) refs.push(fond.fondFile)
       else w.push(`Image du fond "${look.fondName}" introuvable.`)
 
-      // Vêtements (front uniquement pour l'instant, back ignoré)
-      for (const f of look.filesFront) refs.push(f)
-      if (look.filesFront.length === 0) w.push('Aucun fichier vêtement trouvé dans FILES (FRONT).')
-
-      const prompt = buildPrompt(look, pose, model, fond)
+      // Choix des fichiers vêtement selon la VUE
+      const vueRefs = filesForView(pose.view, look)
+      for (const f of vueRefs.files) refs.push(f)
+      for (const wmsg of vueRefs.warnings) w.push(wmsg)
 
       tasks.push({
-        id:        `${look.id}-${vueIndex + 1}`,
+        id:        `${look.id}-pose-${vueIndex + 1}`,
         lookId:    look.id,
         numeroLook:look.numeroLook,
+        taskType:  'pose',
         vueIndex,
         vueRaw:    pose.raw,
         pose,
         mannequinName: look.mannequinName!,
         fondName:      look.fondName!,
-        prompt,
+        prompt:    buildPosePrompt(look, pose, model),
+        refs,
+        warnings:  w,
+      })
+    })
+
+    // ---------- 2. Tasks "detail" (1 par fichier dans DETAILS) ----------
+    look.detailsFiles.forEach((detailFile, detailIndex) => {
+      const w: string[] = []
+      const refs: File[] = []
+
+      if (model?.frontModelFile) refs.push(model.frontModelFile)
+      else w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
+
+      if (fond?.fondFile) refs.push(fond.fondFile)
+      else w.push(`Image du fond "${look.fondName}" introuvable.`)
+
+      refs.push(detailFile)
+
+      tasks.push({
+        id:        `${look.id}-detail-${detailIndex + 1}`,
+        lookId:    look.id,
+        numeroLook:look.numeroLook,
+        taskType:  'detail',
+        detailIndex,
+        detailName:detailFile.name,
+        mannequinName: look.mannequinName!,
+        fondName:      look.fondName!,
+        prompt:    buildDetailPrompt(look, detailFile, model),
         refs,
         warnings:  w,
       })
@@ -145,26 +178,70 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
   return { models, fonds, looks, tasks, warnings }
 }
 
-/* ============================== HELPERS ============================== */
+/* ============================== Builders ============================== */
 
-function buildPrompt(look: LookRow, pose: PoseLabel, model?: ModelDef, fond?: FondDef): string {
+function filesForView(view: PoseView, look: LookRow): { files: File[], warnings: string[] } {
+  const w: string[] = []
+  let files: File[] = []
+
+  switch (view) {
+    case 'Back':
+      files = look.filesBack
+      if (look.filesBack.length === 0) w.push('Aucun fichier dans FILES (BACK) — vue Back impossible à habiller.')
+      break
+
+    case 'Side':
+      files = [...look.filesFront, ...look.filesBack]
+      if (look.filesFront.length === 0) w.push('FILES (FRONT) vide — vue Side incomplète.')
+      if (look.filesBack.length  === 0) w.push('FILES (BACK) vide — vue Side incomplète.')
+      break
+
+    case 'Front':
+    case 'CloseUpHaut':
+    case 'CloseUpBas':
+    default:
+      files = look.filesFront
+      if (look.filesFront.length === 0) w.push('Aucun fichier dans FILES (FRONT).')
+      break
+  }
+
+  return { files, warnings: w }
+}
+
+function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): string {
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
     `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (référence en image fournie), portant les vêtements montrés en référence, devant le fond "${look.fondName}" (référence en image fournie).`,
   )
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
-  if (model?.promptModel)  parts.push(`Note mannequin : ${model.promptModel}.`)
-  if (look.description)    parts.push(`Direction artistique : ${look.description}.`)
-  if (look.details)        parts.push(`Détails : ${look.details}.`)
+  if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
+  if (look.description)   parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
   return parts.join('\n\n')
 }
 
+function buildDetailPrompt(look: LookRow, detailFile: File, model?: ModelDef): string {
+  const parts: string[] = []
+  parts.push(NOTION_BOILERPLATE_HEADER + '.')
+  parts.push(
+    `Photographie de mode professionnelle en PLAN RAPPROCHÉ / GROS PLAN sur un détail de vêtement (broderie, matière, fermeture, finition, accessoire) — détail montré en référence (fichier "${detailFile.name}"), porté par le mannequin "${look.mannequinName}" (référence en image fournie), devant le fond "${look.fondName}" (référence en image fournie).`,
+  )
+  parts.push(
+    'Cadrage serré sur le détail, mise au point très précise sur la matière et le tombé, lumière qui révèle la texture, profondeur de champ très courte (f/2.0 ressenti), composition éditoriale.',
+  )
+  if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
+  if (look.description)   parts.push(`Direction artistique : ${look.description}.`)
+  parts.push(NOTION_BOILERPLATE_STYLE)
+  return parts.join('\n\n')
+}
+
+/* ============================== CSV parsers ============================== */
+
 function findCsvByPrefix(index: Map<string, File>, prefixes: string[]): File | undefined {
   for (const [name, file] of index.entries()) {
     if (!name.toLowerCase().endsWith('.csv')) continue
-    if (name.toLowerCase().includes('_all.csv')) continue // doublon Notion
+    if (name.toLowerCase().includes('_all.csv')) continue
     for (const p of prefixes) {
       if (name.toLowerCase().startsWith(p.toLowerCase())) return file
     }
@@ -174,7 +251,6 @@ function findCsvByPrefix(index: Map<string, File>, prefixes: string[]): File | u
 
 async function readCsv(file: File): Promise<any[]> {
   const text = await file.text()
-  // BOM Notion ?
   const cleaned = text.replace(/^﻿/, '')
   const parsed = Papa.parse(cleaned, { header: true, skipEmptyLines: true })
   return parsed.data as any[]
@@ -219,14 +295,14 @@ async function parseLooks(csv: File, index: Map<string, File>): Promise<LookRow[
     const fondName      = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? '').trim()) || undefined
     const filesFrontRaw = String(r['FILES (FRONT)'] ?? '').trim()
     const filesBackRaw  = String(r['FILES (BACK)']  ?? '').trim()
-    const details       = String(r['DETAILS'] ?? '').trim() || undefined
-    const description   = String(r['DESCRIPTION'] ?? '').trim() || undefined
+    const detailsRaw    = String(r['DETAILS']       ?? '').trim()
+    const description   = String(r['DESCRIPTION']   ?? '').trim() || undefined
 
-    const filesFront = resolveFileList(filesFrontRaw, index)
-    const filesBack  = resolveFileList(filesBackRaw,  index)
+    const filesFront   = resolveFileList(filesFrontRaw, index)
+    const filesBack    = resolveFileList(filesBackRaw,  index)
+    const detailsFiles = resolveFileList(detailsRaw,    index)
 
-    // Détection dynamique : toutes les colonnes qui matchent "Vue et Pose <n>"
-    // (insensible à la casse, espaces souples). Triées par numéro croissant.
+    // Détection dynamique des colonnes Vue et Pose
     const poseColumns = Object.keys(r)
       .filter(k => /^\s*vue\s*et\s*pose\s*\d+\s*$/i.test(k))
       .sort((a, b) => {
@@ -242,14 +318,14 @@ async function parseLooks(csv: File, index: Map<string, File>): Promise<LookRow[
       if (p) vues.push(p)
     }
 
-    // On ne garde que les lignes "vraies" : au moins un mannequin OU au moins une vue valide.
-    // Les lignes Notion vides (ID + numéro seuls, sans mannequin/fond/vue) sont ignorées.
-    const isFilled = !!mannequinName || !!fondName || filesFront.length > 0 || vues.length > 0
+    const isFilled = !!mannequinName || !!fondName ||
+                     filesFront.length > 0 || filesBack.length > 0 ||
+                     detailsFiles.length > 0 || vues.length > 0
     if (!isFilled) continue
 
     out.push({
       id, numeroLook, mannequinName, fondName,
-      filesFront, filesBack, details, description, vues,
+      filesFront, filesBack, detailsFiles, description, vues,
     })
   }
   return out
@@ -277,25 +353,16 @@ function guessMime(name: string): string {
   }
 }
 
-/** Normalise un nom pour les lookups (case-insensitive, espaces) */
 function normName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-/**
- * Une cellule de référence Notion ressemble à :
- *   "ELYSE (ELYSE%203652394957cd81acb5fef6f633fdf8d4.md)"
- * On garde juste la partie avant " (".
- */
 function stripRef(cell: string): string {
   if (!cell) return ''
   const i = cell.indexOf(' (')
   return i >= 0 ? cell.slice(0, i).trim() : cell.trim()
 }
 
-/**
- * Décode un nom de fichier Notion (URL-encoded) : "EDGY_VINTAGE_1%201.jpg" -> "EDGY_VINTAGE_1 1.jpg"
- */
 function decodeRef(raw: string): string {
   if (!raw) return ''
   try {
@@ -305,9 +372,6 @@ function decodeRef(raw: string): string {
   }
 }
 
-/**
- * Parse une liste de fichiers séparés par ", " (FILES (FRONT)) et retourne les Files trouvés.
- */
 function resolveFileList(raw: string, index: Map<string, File>): File[] {
   if (!raw) return []
   return raw

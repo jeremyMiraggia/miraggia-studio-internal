@@ -142,7 +142,9 @@ export default function NotionTab() {
     for (const s of ok) {
       const blob = await dataUrlToBlob(s.imageUrl!)
       const ext  = blob.type.includes('png') ? 'png' : 'jpg'
-      const safeName = `look_${s.task.numeroLook}_vue${s.task.vueIndex + 1}_${slug(s.task.vueRaw)}.${ext}`
+      const safeName = s.task.taskType === 'detail'
+        ? `look_${s.task.numeroLook}_detail${(s.task.detailIndex ?? 0) + 1}_${slug(s.task.detailName ?? '')}.${ext}`
+        : `look_${s.task.numeroLook}_vue${(s.task.vueIndex ?? 0) + 1}_${slug(s.task.vueRaw ?? '')}.${ext}`
       zip.file(safeName, blob)
     }
     const blob = await zip.generateAsync({ type: 'blob' })
@@ -323,7 +325,9 @@ function LookGroup({
             <span>{first.fondName}</span>
           </div>
           <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
-            {tasks.length} vue(s) · {enabledN} sélectionnée(s) ·
+            {tasks.filter(t => t.task.taskType === 'pose').length} pose(s)
+            {tasks.some(t => t.task.taskType === 'detail') && ` · ${tasks.filter(t => t.task.taskType === 'detail').length} détail(s)`}
+            {' '}· {enabledN} sélectionnée(s) ·
             {' '}<span style={{ color: '#1F7A35' }}>{doneN} générée(s)</span>
             {runningN > 0 && <span style={{ color: '#0D4A5C' }}> · {runningN} en cours</span>}
             {errN     > 0 && <span style={{ color: '#9B1C1C' }}> · {errN} erreur(s)</span>}
@@ -354,6 +358,11 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
     : status === 'running'? '#0D4A5C'
     : '#6B7A8A'
 
+  const isDetail = task.taskType === 'detail'
+  const headline = isDetail
+    ? `🔬 Détail ${(task.detailIndex ?? 0) + 1} — ${task.detailName ?? ''}`
+    : task.vueRaw ?? ''
+
   return (
     <div style={taskRowStyle}>
       <input
@@ -363,9 +372,9 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
         disabled={status === 'running' || status === 'done'}
       />
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>{task.vueRaw}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>{headline}</div>
         <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
-          ID <code>{task.id}</code> · {task.refs.length} ref(s) image
+          ID <code>{task.id}</code> · {task.refs.length} ref(s) image · type <strong>{task.taskType}</strong>
         </div>
         {task.warnings.length > 0 && (
           <div style={{ ...styles.warningRow, marginTop: 4 }}>⚠ {task.warnings.join(' · ')}</div>
@@ -386,7 +395,11 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
           <img src={imageUrl} alt={task.id} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
           <div style={{ display: 'flex', gap: 4 }}>
-            <a href={imageUrl} download={`look_${task.numeroLook}_vue${task.vueIndex + 1}.png`} style={styles.linkBtnDark}>⬇</a>
+            <a href={imageUrl} download={
+              task.taskType === 'detail'
+                ? `look_${task.numeroLook}_detail${(task.detailIndex ?? 0) + 1}.png`
+                : `look_${task.numeroLook}_vue${(task.vueIndex ?? 0) + 1}.png`
+            } style={styles.linkBtnDark}>⬇</a>
             <a href={imageUrl} target="_blank" rel="noreferrer"                                  style={styles.linkBtnLight}>↗</a>
           </div>
         </div>
