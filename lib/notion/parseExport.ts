@@ -242,6 +242,11 @@ async function parseLooks(csv: File, index: Map<string, File>): Promise<LookRow[
       if (p) vues.push(p)
     }
 
+    // On ne garde que les lignes "vraies" : au moins un mannequin OU au moins une vue valide.
+    // Les lignes Notion vides (ID + numéro seuls, sans mannequin/fond/vue) sont ignorées.
+    const isFilled = !!mannequinName || !!fondName || filesFront.length > 0 || vues.length > 0
+    if (!isFilled) continue
+
     out.push({
       id, numeroLook, mannequinName, fondName,
       filesFront, filesBack, details, description, vues,
