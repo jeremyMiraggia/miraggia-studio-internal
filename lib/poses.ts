@@ -51,6 +51,18 @@ const VIEW_ALIASES: Record<string, PoseView> = {
   'close-up bas':    'CloseUpBas',
   'gros plan bas':   'CloseUpBas',
   'cu bas':          'CloseUpBas',
+  'bas':             'CloseUpBas',     // SOMBO platform label
+  'haut':            'CloseUpHaut',    // SOMBO platform label
+  // Aliases 3/4 (SOMBO) — on les rabat sur Side faute de mieux,
+  // tu peux créer un type ThreeQuarter plus tard si tu veux les distinguer.
+  '3/4 face droite': 'Side',
+  '3/4 face gauche': 'Side',
+  '3/4 dos droite':  'Back',
+  '3/4 dos gauche':  'Back',
+  '3 4 face droite': 'Side',
+  '3 4 face gauche': 'Side',
+  '3 4 dos droite':  'Back',
+  '3 4 dos gauche':  'Back',
 }
 
 /** Parse une cellule Notion "Vue, pose" en PoseLabel structuré. Null si illisible. */

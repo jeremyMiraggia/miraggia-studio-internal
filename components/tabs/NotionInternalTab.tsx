@@ -1,0 +1,562 @@
+'use client'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import JSZip from 'jszip'
+import Dropzone from '@/components/ui/Dropzone'
+import { compressAll } from '@/lib/compressImage'
+import { parseSomboExport } from '@/lib/notion/parseSomboExport'
+import type { GenerationTask, ParsedExport } from '@/lib/notion/parseExport'
+import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
+
+type TaskStatus = 'pending' | 'running' | 'done' | 'skipped' | 'error'
+
+type TaskState = {
+  task:    GenerationTask
+  status:  TaskStatus
+  enabled: boolean
+  imageUrl?: string
+  error?:    string
+}
+
+export default function NotionInternalTab() {
+  const [zips, setZips]               = useState<File[]>([])
+  const [parsing, setParsing]         = useState(false)
+  const [parsed, setParsed]           = useState<ParsedExport | null>(null)
+  const [states, setStates]           = useState<TaskState[]>([])
+  const statesRef                     = useRef<TaskState[]>([])
+  const [globalError, setGlobalError] = useState<string | null>(null)
+
+  const [ratio, setRatio]             = useState('9:16')
+  const [quality, setQuality]         = useState('2K')
+  const [running, setRunning]         = useState(false)
+  const [progress, setProgress]       = useState('')
+  const [expanded, setExpanded]       = useState<Record<string, boolean>>({})
+
+  /* ----------- Parsing zip ----------- */
+  const handleZipChange = async (files: File[]) => {
+    setZips(files)
+    setGlobalError(null)
+    setParsed(null)
+    setStates([])
+    setExpanded({})
+
+    if (files.length === 0) return
+    setParsing(true)
+    try {
+      const result = await parseSomboExport(files[0])
+      setParsed(result)
+      setStates(result.tasks.map(t => ({
+        task: t,
+        status: 'pending',
+        enabled: true,
+      })))
+    } catch (e: any) {
+      setGlobalError(e?.message ?? 'Impossible de parser le zip.')
+    }
+    setParsing(false)
+  }
+
+  useEffect(() => { statesRef.current = states }, [states])
+
+  /* ----------- Grouping par look ----------- */
+  const groupedLooks = useMemo(() => {
+    const map = new Map<string, TaskState[]>()
+    const order: string[] = []
+    for (const s of states) {
+      const key = s.task.lookId
+      if (!map.has(key)) { map.set(key, []); order.push(key) }
+      map.get(key)!.push(s)
+    }
+    return order.map(lookId => ({ lookId, tasks: map.get(lookId)! }))
+  }, [states])
+
+  const enabledCount = states.filter(s => s.enabled).length
+
+  const toggleTask = (id: string) => {
+    setStates(prev => prev.map(s => s.task.id === id ? { ...s, enabled: !s.enabled } : s))
+  }
+  const toggleLook = (lookId: string, value: boolean) => {
+    setStates(prev => prev.map(s => s.task.lookId === lookId ? { ...s, enabled: value } : s))
+  }
+  const toggleAllStates = (value: boolean) => {
+    setStates(prev => prev.map(s => ({ ...s, enabled: value })))
+  }
+
+  const setLookExpansion = (lookId: string, open: boolean) =>
+    setExpanded(prev => ({ ...prev, [lookId]: open }))
+
+  /* ----------- Génération séquentielle ----------- */
+  const handleRunAll = async () => {
+    if (!parsed) return
+    setGlobalError(null)
+    setRunning(true)
+
+    const queue = states.filter(s => s.enabled && s.status !== 'done')
+    let done = 0
+
+    for (let i = 0; i < queue.length; i++) {
+      const item = queue[i]
+      setLookExpansion(item.task.lookId, true)
+
+      const label = item.task.taskType === 'detail'
+        ? `Détail ${(item.task.detailIndex ?? 0) + 1}`
+        : (item.task.vueRaw ?? '')
+      setProgress(`Visuel ${i + 1}/${queue.length} · Look ${item.task.numeroLook} · ${label}`)
+      updateState(item.task.id, { status: 'running', error: undefined })
+
+      try {
+        // Pour les tasks DETAIL : si une pose du même look est déjà générée,
+        // on l'utilise comme image de base au lieu du mannequin+fond.
+        let promptToUse = item.task.prompt
+        let refsToUse   = item.task.refs
+
+        if (item.task.taskType === 'detail') {
+          const baseState = statesRef.current.find(s =>
+            s.task.lookId === item.task.lookId &&
+            s.task.taskType === 'pose' &&
+            s.status === 'done' &&
+            !!s.imageUrl,
+          )
+          if (baseState?.imageUrl && item.task.detailFile && item.task.promptWithBase) {
+            const baseFile = await dataUrlToFile(baseState.imageUrl, `base_look_${item.task.lookId}.png`)
+            refsToUse   = [baseFile, item.task.detailFile]
+            promptToUse = item.task.promptWithBase
+          }
+        }
+
+        const refs = await compressAll(refsToUse, { maxSide: 2048, quality: 0.85 })
+
+        const fd = new FormData()
+        fd.append('prompt',  promptToUse)
+        fd.append('ratio',   ratio)
+        fd.append('quality', quality)
+        refs.forEach(f => fd.append('refs', f))
+
+        const res = await fetch('/api/studio/free', { method: 'POST', body: fd })
+        let data: any = null
+        try { data = await res.json() } catch { /* */ }
+
+        if (!res.ok) {
+          const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`
+          updateState(item.task.id, { status: 'error', error: truncate(msg) })
+          continue
+        }
+        if (data?.imageUrl) {
+          updateState(item.task.id, { status: 'done', imageUrl: data.imageUrl })
+          done += 1
+        } else {
+          updateState(item.task.id, { status: 'error', error: data?.error ?? 'Aucune image renvoyée' })
+        }
+      } catch (e: any) {
+        updateState(item.task.id, { status: 'error', error: e?.message ?? 'Erreur réseau' })
+      }
+    }
+
+    setProgress(`Terminé · ${done}/${queue.length} visuel(s) générés`)
+    setRunning(false)
+  }
+
+  const updateState = (id: string, patch: Partial<TaskState>) => {
+    setStates(prev => prev.map(s => s.task.id === id ? { ...s, ...patch } : s))
+  }
+
+  /* ----------- Export ZIP des résultats ----------- */
+  const exportZip = async () => {
+    const ok = states.filter(s => s.status === 'done' && s.imageUrl)
+    if (!ok.length) return
+    const zip = new JSZip()
+    for (const s of ok) {
+      const blob = await dataUrlToBlob(s.imageUrl!)
+      const ext  = blob.type.includes('png') ? 'png' : 'jpg'
+      const safeName = s.task.taskType === 'detail'
+        ? `look_${s.task.numeroLook}_detail${(s.task.detailIndex ?? 0) + 1}_${slug(s.task.detailName ?? '')}.${ext}`
+        : `look_${s.task.numeroLook}_vue${(s.task.vueIndex ?? 0) + 1}_${slug(s.task.vueRaw ?? '')}.${ext}`
+      zip.file(safeName, blob)
+    }
+    const blob = await zip.generateAsync({ type: 'blob' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url
+    a.download = `miraggia_notion_${new Date().toISOString().slice(0, 10)}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  /* ----------- Render ----------- */
+  return (
+    <div>
+      <h2 style={styles.title}>📥 Notion Internal</h2>
+      <p style={styles.sub}>Dépose un export <strong>Notion Internal</strong> (généré depuis ta plateforme SOMBO). L'app lit visuals.csv + data.json et lance la génération de tous les visuels.</p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 24 }}>
+        {/* Panneau contrôle */}
+        <div style={styles.card}>
+          <label style={styles.label}>Export Notion (.zip)</label>
+          <Dropzone
+            files={zips}
+            onChange={handleZipChange}
+            accept=".zip,application/zip,application/x-zip-compressed"
+            label="Glisse ton export Notion"
+            hint="ZIP avec visuals.csv + data.json + references/ + images/"
+            minHeight={120}
+          />
+
+          {parsing && <p style={styles.hintSubtle}>Lecture et indexation du zip…</p>}
+
+          {parsed && (
+            <div style={styles.statsBox}>
+              <div><strong>{parsed.looks.length}</strong> look(s) · <strong>{parsed.models.size}</strong> mannequin(s) · <strong>{parsed.fonds.size}</strong> fond(s)</div>
+              <div style={{ marginTop: 4 }}><strong>{parsed.tasks.length}</strong> visuel(s) · <strong>{enabledCount}</strong> sélectionné(s)</div>
+              {parsed.warnings.length > 0 && (
+                <div style={{ ...styles.warningRow, marginTop: 6 }}>⚠ {parsed.warnings.join(' · ')}</div>
+              )}
+            </div>
+          )}
+
+          {globalError && <p style={styles.errorBox}>⚠ {globalError}</p>}
+
+          {parsed && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={styles.label}>Format</label>
+                  <select value={ratio} onChange={e => setRatio(e.target.value)} style={styles.select}>
+                    {['9:16','3:4','1:1','16:9','4:3'].map(r => <option key={r}>{r}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={styles.label}>Résolution</label>
+                  <select value={quality} onChange={e => setQuality(e.target.value)} style={styles.select}>
+                    {['1K','2K','4K'].map(q => <option key={q}>{q}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <button onClick={handleRunAll} disabled={running || enabledCount === 0} style={{ ...styles.btn, opacity: running || enabledCount === 0 ? 0.6 : 1 }}>
+                {running ? (progress || 'Génération…') : `▶ Tout générer (${enabledCount})`}
+              </button>
+
+              {states.some(s => s.status === 'done') && !running && (
+                <button onClick={exportZip} style={styles.btnSecondary}>⬇ Télécharger les résultats en ZIP</button>
+              )}
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => toggleAllStates(true)}  style={styles.btnGhost}>Tout cocher</button>
+                <button onClick={() => toggleAllStates(false)} style={styles.btnGhost}>Tout décocher</button>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setExpanded(Object.fromEntries(groupedLooks.map(g => [g.lookId, true])))}  style={styles.btnGhost}>Tout déplier</button>
+                <button onClick={() => setExpanded({})}                                                          style={styles.btnGhost}>Tout replier</button>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Liste des looks groupés */}
+        <div>
+          {!parsed && (
+            <div style={styles.catalogBox}>
+              <h3 style={styles.catalogTitle}>📥 Comment ça marche</h3>
+              <p style={styles.catalogIntro}>
+                Dépose ton export <strong>Notion Internal</strong> à gauche. Le format attendu : un ZIP contenant <code style={styles.kbd}>visuals.csv</code>, <code style={styles.kbd}>data.json</code>, et les dossiers <code style={styles.kbd}>references/</code> + <code style={styles.kbd}>images/</code>. Chaque ligne de visuals.csv est un visuel : vue + pose + références fichiers.
+              </p>
+
+              <h4 style={styles.catalogSection}>Vues disponibles ({VIEW_CATALOG.length})</h4>
+              <div style={styles.catalogGrid}>
+                {VIEW_CATALOG.map(v => (
+                  <div key={v.key} style={styles.catalogItem}>
+                    <code style={styles.catalogKey}>{v.label}</code>
+                    <div style={styles.catalogDesc}>{v.description}</div>
+                  </div>
+                ))}
+              </div>
+
+              <h4 style={styles.catalogSection}>Poses disponibles ({POSE_CATALOG.length})</h4>
+              <div style={styles.catalogGrid}>
+                {POSE_CATALOG.map(p => (
+                  <div key={p.key} style={styles.catalogItem}>
+                    <code style={styles.catalogKey}>{p.key}</code>
+                    <div style={styles.catalogDesc}>{p.description}</div>
+                  </div>
+                ))}
+              </div>
+
+              <p style={styles.catalogFooter}>
+                💡 <strong>{VIEW_CATALOG.length} × {POSE_CATALOG.length} = {VIEW_CATALOG.length * POSE_CATALOG.length} combinaisons possibles.</strong> Tu peux étendre ce catalogue en éditant <code style={styles.kbd}>lib/poses.ts</code>.
+              </p>
+            </div>
+          )}
+
+          {parsed && groupedLooks.length === 0 && (
+            <div style={styles.emptyState}>
+              Aucun visuel valide trouvé. Vérifie que les lignes ont bien un Mannequin, un Fond et au moins une "Vue et Pose".
+            </div>
+          )}
+
+          {groupedLooks.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {groupedLooks.map(g => (
+                <LookGroup
+                  key={g.lookId}
+                  tasks={g.tasks}
+                  open={!!expanded[g.lookId]}
+                  onToggleOpen={() => setLookExpansion(g.lookId, !expanded[g.lookId])}
+                  onToggleLook={(value) => toggleLook(g.lookId, value)}
+                  onToggleTask={(id) => toggleTask(id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ============================== LookGroup (accordion par look) ============================== */
+
+function LookGroup({
+  tasks, open, onToggleOpen, onToggleLook, onToggleTask,
+}: {
+  tasks: TaskState[]
+  open: boolean
+  onToggleOpen: () => void
+  onToggleLook: (value: boolean) => void
+  onToggleTask: (id: string) => void
+}) {
+  const first = tasks[0].task
+  const enabledN = tasks.filter(t => t.enabled).length
+  const doneN    = tasks.filter(t => t.status === 'done').length
+  const errN     = tasks.filter(t => t.status === 'error').length
+  const runningN = tasks.filter(t => t.status === 'running').length
+
+  // Checkbox 3 états : tout coché / aucun coché / mixte
+  const allChecked  = enabledN === tasks.length
+  const noneChecked = enabledN === 0
+  const indeterminate = !allChecked && !noneChecked
+
+  return (
+    <div style={lookCardStyle}>
+      {/* Header look */}
+      <div style={lookHeader}>
+        <Indeterminate3StateCheckbox
+          checked={allChecked}
+          indeterminate={indeterminate}
+          onChange={() => onToggleLook(!allChecked)}
+        />
+        <div style={{ flex: 1, cursor: 'pointer' }} onClick={onToggleOpen}>
+          <div style={{ fontWeight: 700, color: '#0D4A5C', fontSize: 14 }}>
+            <span style={{ color: '#6B7A8A', fontWeight: 500 }}>Look #</span>{first.numeroLook} ·{' '}
+            <span>{first.mannequinName}</span> ·{' '}
+            <span>{first.fondName}</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
+            {tasks.filter(t => t.task.taskType === 'pose').length} pose(s)
+            {tasks.some(t => t.task.taskType === 'detail') && ` · ${tasks.filter(t => t.task.taskType === 'detail').length} détail(s)`}
+            {' '}· {enabledN} sélectionnée(s) ·
+            {' '}<span style={{ color: '#1F7A35' }}>{doneN} générée(s)</span>
+            {runningN > 0 && <span style={{ color: '#0D4A5C' }}> · {runningN} en cours</span>}
+            {errN     > 0 && <span style={{ color: '#9B1C1C' }}> · {errN} erreur(s)</span>}
+          </div>
+        </div>
+        <button onClick={onToggleOpen} style={chevron}>{open ? '▾' : '▸'}</button>
+      </div>
+
+      {/* Liste des tâches (vues) si déplié */}
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+          {tasks.map(t => (
+            <TaskRow key={t.task.id} state={t} onToggle={() => onToggleTask(t.task.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ============================== TaskRow ============================== */
+
+function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }) {
+  const { task, status, imageUrl, error, enabled } = state
+  const color =
+    status === 'done'    ? '#1F7A35'
+    : status === 'error' ? '#9B1C1C'
+    : status === 'running'? '#0D4A5C'
+    : '#6B7A8A'
+
+  const isDetail = task.taskType === 'detail'
+  const headline = isDetail
+    ? `🔬 Détail ${(task.detailIndex ?? 0) + 1} — ${task.detailName ?? ''}`
+    : task.vueRaw ?? ''
+
+  return (
+    <div style={taskRowStyle}>
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={onToggle}
+        disabled={status === 'running' || status === 'done'}
+      />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>{headline}</div>
+        <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
+          ID <code>{task.id}</code> · {task.refs.length} ref(s) image · type <strong>{task.taskType}</strong>
+        </div>
+        {task.warnings.length > 0 && (
+          <div style={{ ...styles.warningRow, marginTop: 4 }}>⚠ {task.warnings.join(' · ')}</div>
+        )}
+        {error && <div style={{ ...styles.errorBox, marginTop: 4 }}>⚠ {error}</div>}
+
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 10, color: '#6B7A8A', fontWeight: 600 }}>
+            Voir le prompt envoyé
+          </summary>
+          <pre style={styles.promptPre}>{task.prompt}</pre>
+        </details>
+      </div>
+
+      <span style={{ ...statusPill, color, borderColor: color }}>{labelForStatus(status)}</span>
+
+      {imageUrl && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+          <img src={imageUrl} alt={task.id} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
+          <div style={{ display: 'flex', gap: 4 }}>
+            <a href={imageUrl} download={
+              task.taskType === 'detail'
+                ? `look_${task.numeroLook}_detail${(task.detailIndex ?? 0) + 1}.png`
+                : `look_${task.numeroLook}_vue${(task.vueIndex ?? 0) + 1}.png`
+            } style={styles.linkBtnDark}>⬇</a>
+            <a href={imageUrl} target="_blank" rel="noreferrer"                                  style={styles.linkBtnLight}>↗</a>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ============================== Checkbox 3 états ============================== */
+
+function Indeterminate3StateCheckbox({
+  checked, indeterminate, onChange,
+}: { checked: boolean, indeterminate: boolean, onChange: () => void }) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate
+  }, [indeterminate])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      style={{ width: 16, height: 16, cursor: 'pointer' }}
+    />
+  )
+}
+
+/* ============================== utils ============================== */
+
+function labelForStatus(s: TaskStatus): string {
+  switch (s) {
+    case 'pending': return '○ en attente'
+    case 'running': return '⏳ en cours'
+    case 'done':    return '✓ terminé'
+    case 'error':   return '⚠ erreur'
+    case 'skipped': return '— sauté'
+  }
+}
+
+function truncate(s: string, max = 240) {
+  if (!s) return ''
+  return s.length > max ? s.slice(0, max) + '…' : s
+}
+
+function slug(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+}
+
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl)
+  return await res.blob()
+}
+
+async function dataUrlToFile(dataUrl: string, filename: string): Promise<File> {
+  const blob = await dataUrlToBlob(dataUrl)
+  const ext  = blob.type.includes('png') ? 'png' : 'jpg'
+  const safe = filename.endsWith(`.${ext}`) ? filename : `${filename}.${ext}`
+  return new File([blob], safe, { type: blob.type || 'image/png' })
+}
+
+/* ============================== styles ============================== */
+
+const lookCardStyle: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid rgba(13,74,92,0.1)',
+  borderRadius: 12,
+  padding: 14,
+}
+
+const lookHeader: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 12,
+}
+
+const chevron: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  fontSize: 18,
+  color: '#0D4A5C',
+  padding: '0 6px',
+}
+
+const taskRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+  padding: 10,
+  background: '#F5F7F9',
+  border: '1px solid rgba(13,74,92,0.06)',
+  borderRadius: 8,
+}
+
+const statusPill: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '3px 8px',
+  border: '1px solid',
+  borderRadius: 999,
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+  whiteSpace: 'nowrap',
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  title:       { fontFamily: 'system-ui', fontSize: 22, fontWeight: 700, color: '#0D4A5C', marginBottom: 4 },
+  sub:         { fontSize: 13, color: '#6B7A8A', marginBottom: 24, lineHeight: 1.5 },
+  card:        { background: '#fff', borderRadius: 12, padding: 20, border: '1px solid rgba(13,74,92,0.1)', display: 'flex', flexDirection: 'column', gap: 12 },
+  label:       { fontSize: 11, fontWeight: 700, color: '#6B7A8A', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 4 },
+  select:      { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', background: '#fff' },
+  btn:         { padding: '12px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
+  btnSecondary:{ padding: '9px', background: '#fff', color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.25)', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  btnGhost:    { flex: 1, padding: '7px', background: 'transparent', color: '#0D4A5C', border: '1px dashed rgba(13,74,92,0.25)', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  emptyState:  { textAlign: 'center', padding: '60px 24px', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff', lineHeight: 1.5 },
+  errorBox:    { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  warningRow:  { background: '#FFF8E1', color: '#7A4F00', border: '1px solid #F1D78A', padding: '6px 10px', borderRadius: 6, fontSize: 11 },
+  hintSubtle:  { fontSize: 11, color: '#6B7A8A', margin: 0 },
+  statsBox:    { background: '#E8F2F5', color: '#0D4A5C', borderRadius: 8, padding: '10px 12px', fontSize: 12, lineHeight: 1.5 },
+  promptPre:   { margin: '6px 0 0', background: '#fff', borderRadius: 6, padding: 10, fontSize: 11, color: '#0D4A5C', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 200, overflow: 'auto', border: '1px solid rgba(13,74,92,0.08)' },
+  linkBtnDark: { padding: '4px 8px', fontSize: 11, color: '#fff', background: '#0D4A5C', borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
+  linkBtnLight:{ padding: '4px 8px', fontSize: 11, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center' },
+  catalogBox:     { background: '#fff', border: '1px solid rgba(13,74,92,0.1)', borderRadius: 12, padding: 24 },
+  catalogTitle:   { fontSize: 18, fontWeight: 700, color: '#0D4A5C', margin: '0 0 6px' },
+  catalogIntro:   { fontSize: 13, color: '#0D4A5C', margin: '0 0 18px', lineHeight: 1.55 },
+  catalogSection: { fontSize: 11, fontWeight: 700, color: '#6B7A8A', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '14px 0 8px' },
+  catalogGrid:    { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 },
+  catalogItem:    { background: '#F5F7F9', border: '1px solid rgba(13,74,92,0.06)', borderRadius: 8, padding: 10 },
+  catalogKey:     { display: 'inline-block', background: '#0D4A5C', color: '#C8F07D', padding: '2px 7px', borderRadius: 4, fontSize: 12, fontWeight: 700, marginBottom: 5, fontFamily: 'monospace' },
+  catalogDesc:    { fontSize: 12, color: '#0D4A5C', lineHeight: 1.45 },
+  catalogFooter:  { fontSize: 12, color: '#6B7A8A', marginTop: 16, marginBottom: 0, lineHeight: 1.5, padding: '10px 12px', background: '#E8F2F5', borderRadius: 6 },
+  kbd:            { background: '#E8F2F5', padding: '1px 6px', borderRadius: 4, fontFamily: 'monospace', fontSize: 12, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.1)' },
+}
