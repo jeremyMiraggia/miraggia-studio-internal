@@ -14,7 +14,8 @@ import {
 export type ModelDef = {
   name: string
   promptModel?: string
-  frontModelFile?: File
+  frontModelFile?: File   // colonne FRONT-model = silhouette / corps
+  facePhotoFile?: File    // colonne FACE PHOTO = portrait visage (optionnelle)
 }
 
 export type FondDef = {
@@ -38,7 +39,7 @@ export type GenerationTask = {
   id:            string
   lookId:        string
   numeroLook:    string
-  taskType:      'pose' | 'detail'
+  taskType:      'pose' | 'detail' | 'inspi'
   // Pose tasks
   vueIndex?:     number
   vueRaw?:       string
@@ -48,6 +49,10 @@ export type GenerationTask = {
   detailName?:   string
   detailFile?:   File          // fichier détail brut (utile au runtime)
   promptWithBase?: string      // prompt alternatif quand on a une image de base du look
+  // Inspi tasks
+  inspirationFile?: File       // image d'inspiration (envoyée à l'extracteur)
+  outfitFiles?:     File[]     // tenue brute (utile au runtime pour rebuild le prompt)
+  modelDescription?:string
   // Commun
   mannequinName: string
   fondName:      string
@@ -123,6 +128,7 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
 
       if (model?.frontModelFile) refs.push(model.frontModelFile)
       else w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
+      if (model?.facePhotoFile)  refs.push(model.facePhotoFile)
 
       if (fond?.fondFile) refs.push(fond.fondFile)
       else w.push(`Image du fond "${look.fondName}" introuvable.`)
@@ -155,6 +161,7 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
 
       if (model?.frontModelFile) refs.push(model.frontModelFile)
       else w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
+      if (model?.facePhotoFile)  refs.push(model.facePhotoFile)
 
       if (fond?.fondFile) refs.push(fond.fondFile)
       else w.push(`Image du fond "${look.fondName}" introuvable.`)
@@ -212,11 +219,18 @@ function filesForView(view: PoseView, look: LookRow): { files: File[], warnings:
   return { files, warnings: w }
 }
 
+function modelRefDescription(model?: ModelDef): string {
+  if (model?.facePhotoFile) {
+    return 'deux références en image fournies : silhouette/corps + portrait visage — à utiliser conjointement pour respecter la morphologie ET les traits du visage'
+  }
+  return 'référence en image fournie'
+}
+
 function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): string {
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
-    `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (référence en image fournie), portant les vêtements montrés en référence, devant le fond "${look.fondName}" (référence en image fournie).`,
+    `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence, devant le fond "${look.fondName}" (référence en image fournie).`,
   )
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
   if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
@@ -246,7 +260,7 @@ function buildDetailPrompt(look: LookRow, detailFile: File, model?: ModelDef): s
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
-    `Photographie de mode professionnelle en PLAN RAPPROCHÉ / GROS PLAN sur un détail de vêtement (broderie, matière, fermeture, finition, accessoire) — détail montré en référence (fichier "${detailFile.name}"), porté par le mannequin "${look.mannequinName}" (référence en image fournie), devant le fond "${look.fondName}" (référence en image fournie).`,
+    `Photographie de mode professionnelle en PLAN RAPPROCHÉ / GROS PLAN sur un détail de vêtement (broderie, matière, fermeture, finition, accessoire) — détail montré en référence (fichier "${detailFile.name}"), porté par le mannequin "${look.mannequinName}" (${modelRefDescription(model)}), devant le fond "${look.fondName}" (référence en image fournie).`,
   )
   parts.push(
     'Cadrage serré sur le détail, mise au point très précise sur la matière et le tombé, lumière qui révèle la texture, profondeur de champ très courte (f/2.0 ressenti), composition éditoriale.',
@@ -286,7 +300,9 @@ async function parseModels(csv: File, index: Map<string, File>): Promise<Map<str
     const promptModel  = String(r['Prompt Model'] ?? '').trim() || undefined
     const frontFileRef = decodeRef(String(r['FRONT-model'] ?? '').trim())
     const frontModelFile = frontFileRef ? index.get(frontFileRef) : undefined
-    m.set(normName(name), { name, promptModel, frontModelFile })
+    const facePhotoRef = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim())
+    const facePhotoFile = facePhotoRef ? index.get(facePhotoRef) : undefined
+    m.set(normName(name), { name, promptModel, frontModelFile, facePhotoFile })
   }
   return m
 }
