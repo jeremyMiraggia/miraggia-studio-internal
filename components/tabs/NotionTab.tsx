@@ -4,6 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
+import { parseInspiExport, buildInspiPrompt } from '@/lib/notion/parseInspiExport'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'skipped' | 'error'
@@ -14,9 +15,14 @@ type TaskState = {
   enabled: boolean
   imageUrl?: string
   error?:    string
+  extractedEnv?:  string
+  extractedPose?: string
 }
 
+type Mode = 'batch' | 'inspi'
+
 export default function NotionTab() {
+  const [mode, setMode]               = useState<Mode>('batch')
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
   const [parsed, setParsed]           = useState<ParsedExport | null>(null)
@@ -30,6 +36,17 @@ export default function NotionTab() {
   const [progress, setProgress]       = useState('')
   const [expanded, setExpanded]       = useState<Record<string, boolean>>({})
 
+  /* ----------- Changement de mode ----------- */
+  const switchMode = (m: Mode) => {
+    if (m === mode) return
+    setMode(m)
+    setParsed(null)
+    setStates([])
+    setZips([])
+    setExpanded({})
+    setGlobalError(null)
+  }
+
   /* ----------- Parsing zip ----------- */
   const handleZipChange = async (files: File[]) => {
     setZips(files)
@@ -41,7 +58,7 @@ export default function NotionTab() {
     if (files.length === 0) return
     setParsing(true)
     try {
-      const result = await parseNotionExport(files[0])
+      const result = await (mode === 'inspi' ? parseInspiExport(files[0]) : parseNotionExport(files[0]))
       setParsed(result)
       setStates(result.tasks.map(t => ({
         task: t,
@@ -103,10 +120,37 @@ export default function NotionTab() {
       updateState(item.task.id, { status: 'running', error: undefined })
 
       try {
-        // Pour les tasks DETAIL : si une pose du même look est déjà générée,
-        // on l'utilise comme image de base au lieu du mannequin+fond.
+        // Branchements spécifiques selon le type de task
         let promptToUse = item.task.prompt
         let refsToUse   = item.task.refs
+
+        // ===== INSPI : extract puis generate =====
+        if (item.task.taskType === 'inspi' && item.task.inspirationFile) {
+          // 1) Extraction depuis l'image d'inspiration
+          const extractFd = new FormData()
+          extractFd.append('images', item.task.inspirationFile)
+          const exRes = await fetch('/api/studio/extract', { method: 'POST', body: extractFd })
+          const exData = await exRes.json().catch(() => null)
+          const first  = exData?.results?.[0]
+          if (!exRes.ok || !first || first.error) {
+            const msg = first?.error || exData?.error || `Extracteur HTTP ${exRes.status}`
+            updateState(item.task.id, { status: 'error', error: truncate(msg) })
+            continue
+          }
+          const env  = String(first.environnement ?? '').trim()
+          const pose = String(first.pose          ?? '').trim()
+          updateState(item.task.id, { extractedEnv: env, extractedPose: pose })
+
+          // 2) Construction du prompt final
+          promptToUse = buildInspiPrompt({
+            mannequinName:    item.task.mannequinName,
+            modelDescription: item.task.modelDescription,
+            outfitCount:      item.task.outfitFiles?.length ?? 0,
+            extractedEnv:     env,
+            extractedPose:    pose,
+          })
+          // refs déjà OK : [mannequin, ...vêtements] — pas d'inspi dans les refs d'image gen
+        }
 
         if (item.task.taskType === 'detail') {
           const baseState = statesRef.current.find(s =>
@@ -189,13 +233,19 @@ export default function NotionTab() {
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 24 }}>
         {/* Panneau contrôle */}
         <div style={styles.card}>
-          <label style={styles.label}>Export Notion (.zip)</label>
+          <label style={styles.label}>Mode</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            <button onClick={() => switchMode('batch')} style={{ ...modeBtnStyle(mode === 'batch') }}>📋 Batch</button>
+            <button onClick={() => switchMode('inspi')} style={{ ...modeBtnStyle(mode === 'inspi') }}>✨ Inspiration</button>
+          </div>
+
+          <label style={styles.label}>{mode === 'inspi' ? 'Export Notion LIFESTYLE (.zip)' : 'Export Notion (.zip)'}</label>
           <Dropzone
             files={zips}
             onChange={handleZipChange}
             accept=".zip,application/zip,application/x-zip-compressed"
             label="Glisse ton export Notion"
-            hint="ZIP avec LOOK*.csv + Models Definition*.csv + Fonds*.csv + images"
+            hint={mode === 'inspi' ? "ZIP avec LOOK (LIFESTYLE).csv + Models Definition.csv + images + références" : "ZIP avec LOOK*.csv + Models Definition*.csv + Fonds*.csv + images"}
             minHeight={120}
           />
 
@@ -383,9 +433,12 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
     : '#6B7A8A'
 
   const isDetail = task.taskType === 'detail'
-  const headline = isDetail
-    ? `🔬 Détail ${(task.detailIndex ?? 0) + 1} — ${task.detailName ?? ''}`
-    : task.vueRaw ?? ''
+  const isInspi  = task.taskType === 'inspi'
+  const headline = isInspi
+    ? `✨ Inspiration — Look ${task.numeroLook}`
+    : isDetail
+      ? `🔬 Détail ${(task.detailIndex ?? 0) + 1} — ${task.detailName ?? ''}`
+      : task.vueRaw ?? ''
 
   return (
     <div style={taskRowStyle}>
@@ -404,6 +457,33 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
           <div style={{ ...styles.warningRow, marginTop: 4 }}>⚠ {task.warnings.join(' · ')}</div>
         )}
         {error && <div style={{ ...styles.errorBox, marginTop: 4 }}>⚠ {error}</div>}
+
+        {isInspi && (
+          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, marginTop: 6, alignItems: 'start' }}>
+            {task.inspirationFile && (
+              <InspirationThumb file={task.inspirationFile} />
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {state.extractedEnv && (
+                <div style={inspiBox}>
+                  <div style={inspiLabel}>Environnement extrait</div>
+                  <div style={inspiText}>{state.extractedEnv}</div>
+                </div>
+              )}
+              {state.extractedPose && (
+                <div style={inspiBox}>
+                  <div style={inspiLabel}>Pose extraite</div>
+                  <div style={inspiText}>{state.extractedPose}</div>
+                </div>
+              )}
+              {!state.extractedEnv && !state.extractedPose && status === 'pending' && (
+                <div style={{ fontSize: 11, color: '#6B7A8A', fontStyle: 'italic' }}>
+                  L'extraction de l'environnement et de la pose se fera au lancement.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <details style={{ marginTop: 6 }}>
           <summary style={{ cursor: 'pointer', fontSize: 10, color: '#6B7A8A', fontWeight: 600 }}>
@@ -454,6 +534,41 @@ function Indeterminate3StateCheckbox({
 
 /* ============================== utils ============================== */
 
+function InspirationThumb({ file }: { file: File }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    const u = URL.createObjectURL(file)
+    setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [file])
+  if (!url) return null
+  return (
+    <img src={url} alt={file.name} style={{ width: '100%', borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)', display: 'block' }} />
+  )
+}
+
+const inspiBox: React.CSSProperties = {
+  background: '#FAFBFC',
+  border: '1px solid rgba(13,74,92,0.1)',
+  borderRadius: 7,
+  padding: 8,
+}
+const inspiLabel: React.CSSProperties = {
+  fontSize: 9,
+  fontWeight: 700,
+  color: '#6B7A8A',
+  textTransform: 'uppercase',
+  letterSpacing: '0.08em',
+  marginBottom: 4,
+}
+const inspiText: React.CSSProperties = {
+  fontSize: 11,
+  color: '#0D4A5C',
+  lineHeight: 1.45,
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+}
+
 function labelForStatus(s: TaskStatus): string {
   switch (s) {
     case 'pending': return '○ en attente'
@@ -471,6 +586,21 @@ function truncate(s: string, max = 240) {
 
 function slug(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+}
+
+function modeBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: '10px',
+    background: active ? '#0D4A5C' : '#fff',
+    color: active ? '#C8F07D' : '#0D4A5C',
+    border: '1px solid',
+    borderColor: active ? '#0D4A5C' : 'rgba(13,74,92,0.2)',
+    borderRadius: 7,
+    fontSize: 13,
+    fontWeight: active ? 700 : 600,
+    cursor: 'pointer',
+    fontFamily: 'system-ui',
+  }
 }
 
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {

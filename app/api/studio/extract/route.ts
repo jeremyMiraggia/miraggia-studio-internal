@@ -133,6 +133,17 @@ DOIT contenir, dans cet ordre :
 - marques, logos, textes visibles
 - prénoms / noms propres
 
+🚫 INTERDICTIONS RENFORCÉES (révèlent indirectement la tenue) — ne mentionne JAMAIS :
+- pieds nus, "barefoot", talons, chaussettes, semelles, bottes, sandales, chaussures de tout type
+- jambes nues, bras nus, épaules dénudées, dos nu, torse nu, décolleté, peau apparente
+- mains gantées, ongles vernis, manucure
+- collier, bague, boucles d'oreilles, montre, ceinture, foulard, chapeau, casquette, lunettes
+- coiffure, mèche, frange, chignon, queue de cheval, cheveux mouillés
+- maquillage visible (rouge à lèvres, eye-liner, mascara, fard, bronzage)
+- toute formulation qui dépend de ce qui est porté ou non par le sujet
+
+Le résultat doit pouvoir s'appliquer à TOUTE tenue (bikini comme manteau d'hiver) sans modification.
+
 Si l'image n'a pas de personne, mets "—" dans "pose" et décris quand même le décor.
 
 Exemple de niveau attendu pour "pose" :
