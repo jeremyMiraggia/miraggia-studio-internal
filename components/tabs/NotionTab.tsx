@@ -106,7 +106,7 @@ export default function NotionTab() {
     setGlobalError(null)
     setRunning(true)
 
-    const queue = states.filter(s => s.enabled && s.status !== 'done')
+    const queue = states.filter(s => s.enabled)
     let done = 0
 
     for (let i = 0; i < queue.length; i++) {
@@ -115,9 +115,20 @@ export default function NotionTab() {
 
       const label = item.task.taskType === 'detail'
         ? `Détail ${(item.task.detailIndex ?? 0) + 1}`
-        : (item.task.vueRaw ?? '')
+        : item.task.taskType === 'inspi'
+          ? `Inspiration`
+          : (item.task.vueRaw ?? '')
       setProgress(`Visuel ${i + 1}/${queue.length} · Look ${item.task.numeroLook} · ${label}`)
-      updateState(item.task.id, { status: 'running', error: undefined })
+
+      // Reset complet de l'état avant un (re)run pour qu'un task déjà 'done'
+      // soit bien régénéré et que l'UI se mette à jour proprement.
+      updateState(item.task.id, {
+        status: 'running',
+        error: undefined,
+        imageUrl: undefined,
+        extractedEnv: undefined,
+        extractedPose: undefined,
+      })
 
       try {
         // Branchements spécifiques selon le type de task
@@ -446,7 +457,7 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
         type="checkbox"
         checked={enabled}
         onChange={onToggle}
-        disabled={status === 'running' || status === 'done'}
+        disabled={status === 'running'}
       />
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>{headline}</div>
