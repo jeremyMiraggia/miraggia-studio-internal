@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
-import { compressAll } from '@/lib/compressImage'
+import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
 import { parseInspiExport, buildInspiPrompt } from '@/lib/notion/parseInspiExport'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
@@ -138,8 +138,10 @@ export default function NotionTab() {
         // ===== INSPI : extract puis generate =====
         if (item.task.taskType === 'inspi' && item.task.inspirationFile) {
           // 1) Extraction depuis l'image d'inspiration
+          //    On compresse d'abord pour rester sous la limite 4.5 MB de Vercel.
+          const inspiCompressed = await compressImage(item.task.inspirationFile, { maxSide: 1600, quality: 0.85 })
           const extractFd = new FormData()
-          extractFd.append('images', item.task.inspirationFile)
+          extractFd.append('images', inspiCompressed)
           const exRes = await fetch('/api/studio/extract', { method: 'POST', body: extractFd })
           const exData = await exRes.json().catch(() => null)
           const first  = exData?.results?.[0]
