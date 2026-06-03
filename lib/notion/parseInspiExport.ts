@@ -81,6 +81,7 @@ export async function parseInspiExport(zipFile: File): Promise<ParsedExport> {
     // Les détails supplémentaires sont ajoutés aux refs envoyées à l'image gen
     for (const f of extraInspiDetails) refs.push(f)
 
+    const lookAny = look as any
     tasks.push({
       id:                `${look.id}-inspi`,
       lookId:            look.id,
@@ -89,11 +90,13 @@ export async function parseInspiExport(zipFile: File): Promise<ParsedExport> {
       mannequinName:     look.mannequinName!,
       fondName:          look.fondName ?? '',
       prompt:            '',                    // construit au runtime après extraction
-      refs,                                     // [mannequin, face?, ...vêtements, ...extras]
+      refs,
       inspirationFile,
       extraInspiDetails,
       outfitFiles:       look.filesFront,
       modelDescription:  model?.promptModel,
+      bgOverride:        lookAny.bgOverride,
+      viewOverride:      lookAny.viewOverride,
       warnings:          w,
     })
   }
@@ -115,16 +118,32 @@ export function buildInspiPrompt(args: {
   extractedEnv:     string
   extractedPose:    string
   extraDetailCount?:number    // nombre de photos détail supplémentaires
+  bgOverride?:      string    // override colonne "Background Description"
+  viewOverride?:    string    // override colonne "View Details"
   notes?:           string
 }): string {
-  const { mannequinName, modelDescription, outfitCount, extractedEnv, extractedPose, extraDetailCount = 0, notes } = args
+  const {
+    mannequinName, modelDescription, outfitCount,
+    extractedEnv, extractedPose, extraDetailCount = 0,
+    bgOverride, viewOverride, notes,
+  } = args
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
     `Photographie de mode professionnelle du mannequin "${mannequinName}" (deux références en image fournies : silhouette/corps + portrait visage, à utiliser pour respecter la morphologie ET les traits du visage), portant la tenue montrée en référence (${outfitCount} fichier${outfitCount > 1 ? 's' : ''}).`,
   )
-  parts.push(`ENVIRONNEMENT : ${extractedEnv}.`)
-  parts.push(`POSE : ${extractedPose}.`)
+  parts.push(`ENVIRONNEMENT (base extraite de l\'image d\'inspiration) : ${extractedEnv}.`)
+  if (bgOverride) {
+    parts.push(
+      `⚠ MODIFICATIONS IMPÉRATIVES À APPLIQUER SUR L\'ENVIRONNEMENT (priorité absolue sur la base extraite) : ${bgOverride}.`,
+    )
+  }
+  parts.push(`POSE (base extraite de l\'image d\'inspiration) : ${extractedPose}.`)
+  if (viewOverride) {
+    parts.push(
+      `⚠ MODIFICATIONS IMPÉRATIVES À APPLIQUER SUR LA VUE / POSE / CADRAGE (priorité absolue sur la base extraite) : ${viewOverride}.`,
+    )
+  }
   if (extraDetailCount > 0) {
     parts.push(
       `Intègre également ${extraDetailCount > 1 ? `les ${extraDetailCount} détails spécifiques montrés` : 'le détail spécifique montré'} en référence supplémentaire — élément de décor, accessoire, prop ou ambiance visuelle à ajouter au cadre.`,
@@ -177,14 +196,21 @@ async function parseLooks(csv: File, index: Map<string, File>): Promise<LookRow[
   const out: LookRow[] = []
   for (const r of rows) {
     const id          = String(r['ID'] ?? '').trim()
-    const sku         = String(r['SKU'] ?? '').trim()
+    // Identifiant lisible — accepte NumLook, SKU, ou Numero Look
+    const numLook     = String(r['NumLook'] ?? r['SKU'] ?? r['Numero Look'] ?? '').trim()
     if (!id) continue
 
     const mannequinName = stripRef(String(r['Model'] ?? r['Mannequin'] ?? '').trim()) || undefined
+
     const filesFrontRaw = String(r['FILES (FRONT)']   ?? '').trim()
-    const filesBackRaw  = String(r['FILES (BACK) (1)']?? r['FILES (BACK)'] ?? '').trim()
-    const referenceRaw  = String(r['REFERENCE']       ?? '').trim()
-    const bgDesc        = String(r['Background Description'] ?? '').trim() || undefined
+    // FILES (BACK) ou FILES (BACK) (1) selon l'export Notion
+    const filesBackRaw  = String(r['FILES (BACK)']    ?? r['FILES (BACK) (1)']?? '').trim()
+    // IMAGE DE REFERENCE ou REFERENCE selon l'export
+    const referenceRaw  = String(r['IMAGE DE REFERENCE'] ?? r['Image de référence'] ?? r['REFERENCE'] ?? '').trim()
+
+    // Overrides optionnels
+    const bgOverride   = String(r['Background Description'] ?? r['Background description'] ?? '').trim() || undefined
+    const viewOverride = String(r['View Details'] ?? r['View details'] ?? r['Vue Details'] ?? '').trim() || undefined
 
     const filesFront = resolveFileList(filesFrontRaw, index)
     const filesBack  = resolveFileList(filesBackRaw,  index)
@@ -195,16 +221,17 @@ async function parseLooks(csv: File, index: Map<string, File>): Promise<LookRow[
 
     out.push({
       id,
-      numeroLook:    sku || id,
+      numeroLook:    numLook || id,
       mannequinName,
       fondName:      undefined,
       filesFront,
       filesBack,
-      // ⚠ On réutilise detailsFiles pour stocker l'image REFERENCE — le runner
-      // lit ça via `inspirationFile = look.detailsFiles[0]`.
       detailsFiles:  refFiles,
-      description:   bgDesc,
+      description:   undefined,
       vues:          [],
+      // On glisse les overrides dans des champs custom non typés — on les
+      // récupère dans le builder de task ci-dessous via cast.
+      ...({ bgOverride, viewOverride } as any),
     })
   }
   return out

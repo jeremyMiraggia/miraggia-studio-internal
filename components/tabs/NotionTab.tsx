@@ -160,6 +160,8 @@ export default function NotionTab() {
             extractedEnv:     env,
             extractedPose:    pose,
             extraDetailCount: item.task.extraInspiDetails?.length ?? 0,
+            bgOverride:       item.task.bgOverride,
+            viewOverride:     item.task.viewOverride,
           })
           // refs déjà OK : [mannequin, ...vêtements] — pas d'inspi dans les refs d'image gen
         }
@@ -497,6 +499,18 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
                   <div style={inspiText}>{state.extractedPose}</div>
                 </div>
               )}
+              {task.bgOverride && (
+                <div style={overrideBox}>
+                  <div style={overrideLabel}>🎯 Override background</div>
+                  <div style={inspiText}>{task.bgOverride}</div>
+                </div>
+              )}
+              {task.viewOverride && (
+                <div style={overrideBox}>
+                  <div style={overrideLabel}>🎯 Override vue / pose</div>
+                  <div style={inspiText}>{task.viewOverride}</div>
+                </div>
+              )}
               {!state.extractedEnv && !state.extractedPose && status === 'pending' && (
                 <div style={{ fontSize: 11, color: '#6B7A8A', fontStyle: 'italic' }}>
                   L'extraction de l'environnement et de la pose se fera au lancement.
@@ -588,6 +602,21 @@ const inspiText: React.CSSProperties = {
   lineHeight: 1.45,
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
+}
+
+const overrideBox: React.CSSProperties = {
+  background: '#FFF8E1',
+  border: '1px solid #F1D78A',
+  borderRadius: 7,
+  padding: 8,
+}
+const overrideLabel: React.CSSProperties = {
+  fontSize: 9,
+  fontWeight: 700,
+  color: '#7A4F00',
+  textTransform: 'uppercase',
+  letterSpacing: '0.08em',
+  marginBottom: 4,
 }
 
 function labelForStatus(s: TaskStatus): string {
