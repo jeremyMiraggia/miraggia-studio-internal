@@ -23,6 +23,7 @@ type Mode = 'batch' | 'inspi'
 
 export default function NotionTab() {
   const [mode, setMode]               = useState<Mode>('batch')
+  const [concurrency, setConcurrency] = useState<number>(3)
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
   const [parsed, setParsed]           = useState<ParsedExport | null>(null)
@@ -107,21 +108,13 @@ export default function NotionTab() {
     setRunning(true)
 
     const queue = states.filter(s => s.enabled)
-    let done = 0
+    let done    = 0
+    let errors  = 0
+    const total = queue.length
 
-    for (let i = 0; i < queue.length; i++) {
-      const item = queue[i]
+    // Traitement d'un seul item — extrait pour pouvoir le run en parallèle
+    const processOne = async (item: TaskState): Promise<void> => {
       setLookExpansion(item.task.lookId, true)
-
-      const label = item.task.taskType === 'detail'
-        ? `Détail ${(item.task.detailIndex ?? 0) + 1}`
-        : item.task.taskType === 'inspi'
-          ? `Inspiration`
-          : (item.task.vueRaw ?? '')
-      setProgress(`Visuel ${i + 1}/${queue.length} · Look ${item.task.numeroLook} · ${label}`)
-
-      // Reset complet de l'état avant un (re)run pour qu'un task déjà 'done'
-      // soit bien régénéré et que l'UI se mette à jour proprement.
       updateState(item.task.id, {
         status: 'running',
         error: undefined,
@@ -131,14 +124,11 @@ export default function NotionTab() {
       })
 
       try {
-        // Branchements spécifiques selon le type de task
         let promptToUse = item.task.prompt
         let refsToUse   = item.task.refs
 
         // ===== INSPI : extract puis generate =====
         if (item.task.taskType === 'inspi' && item.task.inspirationFile) {
-          // 1) Extraction depuis l'image d'inspiration
-          //    On compresse d'abord pour rester sous la limite 4.5 MB de Vercel.
           const inspiCompressed = await compressImage(item.task.inspirationFile, { maxSide: 1600, quality: 0.85 })
           const extractFd = new FormData()
           extractFd.append('images', inspiCompressed)
@@ -148,13 +138,13 @@ export default function NotionTab() {
           if (!exRes.ok || !first || first.error) {
             const msg = first?.error || exData?.error || `Extracteur HTTP ${exRes.status}`
             updateState(item.task.id, { status: 'error', error: truncate(msg) })
-            continue
+            errors++
+            return
           }
           const env  = String(first.environnement ?? '').trim()
           const pose = String(first.pose          ?? '').trim()
           updateState(item.task.id, { extractedEnv: env, extractedPose: pose })
 
-          // 2) Construction du prompt final
           promptToUse = buildInspiPrompt({
             mannequinName:    item.task.mannequinName,
             modelDescription: item.task.modelDescription,
@@ -165,7 +155,6 @@ export default function NotionTab() {
             bgOverride:       item.task.bgOverride,
             viewOverride:     item.task.viewOverride,
           })
-          // refs déjà OK : [mannequin, ...vêtements] — pas d'inspi dans les refs d'image gen
         }
 
         if (item.task.taskType === 'detail') {
@@ -197,20 +186,40 @@ export default function NotionTab() {
         if (!res.ok) {
           const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`
           updateState(item.task.id, { status: 'error', error: truncate(msg) })
-          continue
+          errors++
+          return
         }
         if (data?.imageUrl) {
           updateState(item.task.id, { status: 'done', imageUrl: data.imageUrl })
-          done += 1
+          done++
         } else {
           updateState(item.task.id, { status: 'error', error: data?.error ?? 'Aucune image renvoyée' })
+          errors++
         }
       } catch (e: any) {
         updateState(item.task.id, { status: 'error', error: e?.message ?? 'Erreur réseau' })
+        errors++
+      } finally {
+        const finished = done + errors
+        setProgress(`${finished}/${total} visuels traités · ${done} réussis · ${errors} erreur(s)`)
       }
     }
 
-    setProgress(`Terminé · ${done}/${queue.length} visuel(s) générés`)
+    // Worker pool : on lance `concurrency` workers qui consomment la queue
+    let nextIdx = 0
+    const worker = async () => {
+      while (true) {
+        const i = nextIdx++
+        if (i >= queue.length) return
+        await processOne(queue[i])
+      }
+    }
+
+    const workerCount = Math.max(1, Math.min(concurrency, queue.length))
+    setProgress(`Lancement de ${workerCount} générations en parallèle…`)
+    await Promise.all(Array.from({ length: workerCount }, () => worker()))
+
+    setProgress(`Terminé · ${done}/${total} visuel(s) générés` + (errors > 0 ? ` · ${errors} erreur(s)` : ''))
     setRunning(false)
   }
 
@@ -294,6 +303,17 @@ export default function NotionTab() {
                     {['1K','2K','4K'].map(q => <option key={q}>{q}</option>)}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label style={styles.label}>Parallélisme</label>
+                <select value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} style={styles.select}>
+                  <option value={1}>1 (séquentiel — le plus sûr)</option>
+                  <option value={2}>2 en parallèle</option>
+                  <option value={3}>3 en parallèle (recommandé)</option>
+                  <option value={5}>5 en parallèle (risque de rate-limit)</option>
+                  <option value={8}>8 en parallèle (agressif)</option>
+                </select>
               </div>
 
               <button onClick={handleRunAll} disabled={running || enabledCount === 0} style={{ ...styles.btn, opacity: running || enabledCount === 0 ? 0.6 : 1 }}>
