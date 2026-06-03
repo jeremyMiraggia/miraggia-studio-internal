@@ -159,6 +159,7 @@ export default function NotionTab() {
             outfitCount:      item.task.outfitFiles?.length ?? 0,
             extractedEnv:     env,
             extractedPose:    pose,
+            extraDetailCount: item.task.extraInspiDetails?.length ?? 0,
           })
           // refs déjà OK : [mannequin, ...vêtements] — pas d'inspi dans les refs d'image gen
         }
@@ -472,7 +473,16 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
         {isInspi && (
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, marginTop: 6, alignItems: 'start' }}>
             {task.inspirationFile && (
-              <InspirationThumb file={task.inspirationFile} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <InspirationThumb file={task.inspirationFile} />
+                <div style={{ fontSize: 9, color: '#6B7A8A', textAlign: 'center' }}>inspi</div>
+                {(task.extraInspiDetails ?? []).map((f, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
+                    <InspirationThumb file={f} />
+                    <div style={{ fontSize: 9, color: '#6B7A8A', textAlign: 'center' }}>détail {i + 1}</div>
+                  </div>
+                ))}
+              </div>
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {state.extractedEnv && (

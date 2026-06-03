@@ -72,24 +72,29 @@ export async function parseInspiExport(zipFile: File): Promise<ParsedExport> {
     for (const f of look.filesFront) refs.push(f)
     if (look.filesFront.length === 0) w.push('Aucun vêtement dans FILES (FRONT).')
 
-    // L'image d'inspiration est stockée en première position de detailsFiles
-    // (on a réutilisé ce champ comme "REFERENCE" lors du parsing — voir parseLooks)
-    const inspirationFile = look.detailsFiles[0]
+    // REFERENCE[0] = inspi pour l'extracteur.
+    // REFERENCE[1..N] = détails à intégrer dans le visuel final (envoyés à l'image gen).
+    const inspirationFile   = look.detailsFiles[0]
+    const extraInspiDetails = look.detailsFiles.slice(1)
     if (!inspirationFile) w.push('Aucune image d\'inspiration dans la colonne REFERENCE.')
 
+    // Les détails supplémentaires sont ajoutés aux refs envoyées à l'image gen
+    for (const f of extraInspiDetails) refs.push(f)
+
     tasks.push({
-      id:               `${look.id}-inspi`,
-      lookId:           look.id,
-      numeroLook:       look.numeroLook,
-      taskType:         'inspi',
-      mannequinName:    look.mannequinName!,
-      fondName:         look.fondName ?? '',  // sera enrichi par l'extracteur
-      prompt:           '',                    // construit au runtime après extraction
-      refs,                                    // [mannequin, ...vêtements]
+      id:                `${look.id}-inspi`,
+      lookId:            look.id,
+      numeroLook:        look.numeroLook,
+      taskType:          'inspi',
+      mannequinName:     look.mannequinName!,
+      fondName:          look.fondName ?? '',
+      prompt:            '',                    // construit au runtime après extraction
+      refs,                                     // [mannequin, face?, ...vêtements, ...extras]
       inspirationFile,
-      outfitFiles:      look.filesFront,
-      modelDescription: model?.promptModel,
-      warnings:         w,
+      extraInspiDetails,
+      outfitFiles:       look.filesFront,
+      modelDescription:  model?.promptModel,
+      warnings:          w,
     })
   }
 
@@ -109,9 +114,10 @@ export function buildInspiPrompt(args: {
   outfitCount:      number
   extractedEnv:     string
   extractedPose:    string
+  extraDetailCount?:number    // nombre de photos détail supplémentaires
   notes?:           string
 }): string {
-  const { mannequinName, modelDescription, outfitCount, extractedEnv, extractedPose, notes } = args
+  const { mannequinName, modelDescription, outfitCount, extractedEnv, extractedPose, extraDetailCount = 0, notes } = args
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
@@ -119,6 +125,11 @@ export function buildInspiPrompt(args: {
   )
   parts.push(`ENVIRONNEMENT : ${extractedEnv}.`)
   parts.push(`POSE : ${extractedPose}.`)
+  if (extraDetailCount > 0) {
+    parts.push(
+      `Intègre également ${extraDetailCount > 1 ? `les ${extraDetailCount} détails spécifiques montrés` : 'le détail spécifique montré'} en référence supplémentaire — élément de décor, accessoire, prop ou ambiance visuelle à ajouter au cadre.`,
+    )
+  }
   if (modelDescription) parts.push(`Note mannequin : ${modelDescription}.`)
   if (notes)            parts.push(`Notes : ${notes}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)

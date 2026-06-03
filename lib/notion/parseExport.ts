@@ -50,9 +50,10 @@ export type GenerationTask = {
   detailFile?:   File          // fichier détail brut (utile au runtime)
   promptWithBase?: string      // prompt alternatif quand on a une image de base du look
   // Inspi tasks
-  inspirationFile?: File       // image d'inspiration (envoyée à l'extracteur)
-  outfitFiles?:     File[]     // tenue brute (utile au runtime pour rebuild le prompt)
-  modelDescription?:string
+  inspirationFile?:   File       // image d'inspiration (envoyée à l'extracteur)
+  extraInspiDetails?: File[]     // photos supplémentaires de REFERENCE (détails à intégrer)
+  outfitFiles?:       File[]     // tenue brute (utile au runtime pour rebuild le prompt)
+  modelDescription?:  string
   // Commun
   mannequinName: string
   fondName:      string
