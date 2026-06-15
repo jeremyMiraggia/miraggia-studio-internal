@@ -27,6 +27,7 @@ type Mode = 'batch' | 'inspi'
 export default function NotionTab() {
   const [mode, setMode]               = useState<Mode>('batch')
   const [concurrency, setConcurrency] = useState<number>(2)
+  const [coherenceMode, setCoherenceMode] = useState<boolean>(true)
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
   const [parsed, setParsed]           = useState<ParsedExport | null>(null)
@@ -161,6 +162,37 @@ export default function NotionTab() {
             bgOverride:       item.task.bgOverride,
             viewOverride:     item.task.viewOverride,
           })
+        }
+
+        // ===== POSE COHÉRENCE : poses 2..N d'un même look utilisent la 1re comme base =====
+        if (item.task.taskType === 'pose' && coherenceMode && (item.task.vueIndex ?? 0) > 0) {
+          // Attend qu'au moins une autre pose du même look soit done (max 3 min)
+          const waitStart = Date.now()
+          while (Date.now() - waitStart < 180_000) {
+            const base = statesRef.current.find(s =>
+              s.task.lookId === item.task.lookId &&
+              s.task.taskType === 'pose' &&
+              s.task.id !== item.task.id &&
+              s.status === 'done' &&
+              !!s.imageUrl,
+            )
+            if (base) {
+              // Trouvé : on l'utilise comme base
+              const baseFile = await dataUrlToFile(base.imageUrl!, `coherence_base_${item.task.lookId}.png`)
+              refsToUse   = [baseFile]
+              if (item.task.posePromptWithBase) promptToUse = item.task.posePromptWithBase
+              break
+            }
+            // Si aucune autre pose du look n'est en cours ou en attente, on n'attend pas indéfiniment
+            const anyOther = statesRef.current.some(s =>
+              s.task.lookId === item.task.lookId &&
+              s.task.taskType === 'pose' &&
+              s.task.id !== item.task.id &&
+              (s.status === 'running' || s.status === 'pending'),
+            )
+            if (!anyOther) break
+            await new Promise(r => setTimeout(r, 2000))
+          }
         }
 
         if (item.task.taskType === 'detail') {
@@ -335,6 +367,14 @@ export default function NotionTab() {
                   <option value={8}>8 en parallèle (agressif)</option>
                 </select>
               </div>
+
+              <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer' }}>
+                <input type="checkbox" checked={coherenceMode} onChange={e => setCoherenceMode(e.target.checked)} />
+                🎯 Cohérence entre poses d'un même look
+              </label>
+              <p style={styles.hintSubtle}>
+                Quand activé, les poses 2/3/4 d'un look attendent que la pose 1 soit générée puis l'utilisent comme base — même lumière, même fond, même mannequin, seule la pose change.
+              </p>
 
               <button onClick={handleRunAll} disabled={running || enabledCount === 0} style={{ ...styles.btn, opacity: running || enabledCount === 0 ? 0.6 : 1 }}>
                 {running ? (progress || 'Génération…') : `▶ Tout générer (${enabledCount})`}

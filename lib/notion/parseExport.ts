@@ -44,6 +44,7 @@ export type GenerationTask = {
   vueIndex?:     number
   vueRaw?:       string
   pose?:         PoseLabel
+  posePromptWithBase?: string  // prompt à utiliser quand une autre pose du même look a déjà été générée
   // Detail tasks
   detailIndex?:  number
   detailName?:   string
@@ -152,6 +153,7 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
         mannequinName: look.mannequinName!,
         fondName:      look.fondName!,
         prompt:    buildPosePrompt(look, pose, model),
+        posePromptWithBase: buildPosePromptWithBase(look, pose),
         refs,
         facePhotoFile: model?.facePhotoFile,
         warnings:  w,
@@ -254,6 +256,23 @@ function buildDetailPromptWithBase(look: LookRow, detailFile: File): string {
   )
   parts.push(
     'Recadrer serré sur ce détail tel qu\'il apparaît dans le look déjà shooté : même mannequin, même tenue, même fond, même lumière. Mise au point très précise sur la matière et le tombé, profondeur de champ très courte (f/2.0 ressenti), texture révélée, composition éditoriale.',
+  )
+  if (look.description) parts.push(`Direction artistique : ${look.description}.`)
+  parts.push(NOTION_BOILERPLATE_STYLE)
+  return parts.join('\n\n')
+}
+
+function buildPosePromptWithBase(look: LookRow, pose: PoseLabel): string {
+  const parts: string[] = []
+  parts.push(NOTION_BOILERPLATE_HEADER + '.')
+  parts.push(
+    `Photographie de mode professionnelle. Une image de RÉFÉRENCE DU LOOK COMPLET DÉJÀ SHOOTÉ est fournie (référence #1) : le mannequin "${look.mannequinName}" porte la tenue complète devant le fond "${look.fondName}", avec une certaine lumière et atmosphère.`,
+  )
+  parts.push(
+    `⚠ COHÉRENCE STRICTE — l'objectif est de produire une NOUVELLE VUE du MÊME LOOK, parfaitement cohérente avec la référence : MÊME mannequin (visage, morphologie, peau, cheveux, identité), MÊME tenue (chaque pièce, chaque détail), MÊME fond (lieu, palette, props), MÊME lumière (direction, qualité, température), MÊME atmosphère globale, MÊME esthétique photographique (focale ressentie, profondeur de champ, grain).`,
+  )
+  parts.push(
+    `Seule la POSE et le CADRAGE changent — NOUVELLE POSE : ${poseToPrompt(pose)}.`,
   )
   if (look.description) parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
