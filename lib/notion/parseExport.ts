@@ -31,6 +31,7 @@ export type ModelDef = {
   promptModel?: string
   frontModelFile?: File   // colonne FRONT-model = silhouette / corps
   facePhotoFile?: File    // colonne FACE PHOTO = portrait visage (optionnelle)
+  fondFile?: File         // colonne FOND = fond dédié au mannequin (optionnelle)
 }
 
 export type FondDef = {
@@ -186,6 +187,8 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
     if (!id) continue
     eligibleLookRows.push(r)
   }
+  warnings.push(`📊 CSV LOOK : ${looksRows.length} lignes au total, ${eligibleLookRows.length} avec ID.`)
+
   const lookRowsTouse = (typeof lookLimit === 'number' && lookLimit > 0)
     ? eligibleLookRows.slice(0, lookLimit)
     : eligibleLookRows
@@ -196,11 +199,27 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
   // 2. Collecte les mannequins et fonds RÉELLEMENT utilisés par les N looks retenus
   const usedMannequinNames = new Set<string>()
   const usedFondNames      = new Set<string>()
+  let mannequinFieldFound = 0
+  let fondFieldFound = 0
   for (const r of lookRowsTouse) {
-    const mn = stripRef(String(r['Mannequin'] ?? '').trim())
-    if (mn) usedMannequinNames.add(normName(mn))
+    const mn = stripRef(String(r['Mannequin'] ?? r['Model'] ?? '').trim())
+    if (mn) { usedMannequinNames.add(normName(mn)); mannequinFieldFound++ }
     const fn = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? r['Fond'] ?? r['Décor'] ?? r['Decor'] ?? '').trim())
-    if (fn) usedFondNames.add(normName(fn))
+    if (fn) { usedFondNames.add(normName(fn)); fondFieldFound++ }
+  }
+  warnings.push(`📊 Sur ${lookRowsTouse.length} looks retenus : ${mannequinFieldFound} avec Mannequin, ${fondFieldFound} avec Fond. Mannequins uniques : ${usedMannequinNames.size}. Fonds uniques : ${usedFondNames.size}.`)
+  // Liste des colonnes CSV vues — utile pour debug
+  if (lookRowsTouse.length > 0) {
+    const cols = Object.keys(lookRowsTouse[0])
+    warnings.push(`🔑 Colonnes du CSV LOOK : ${cols.join(' | ')}`)
+  }
+  if (modelsRows.length > 0) {
+    const cols = Object.keys(modelsRows[0])
+    warnings.push(`🔑 Colonnes Models Definition : ${cols.join(' | ')}`)
+  }
+  if (fondsRows.length > 0) {
+    const cols = Object.keys(fondsRows[0])
+    warnings.push(`🔑 Colonnes Fonds/Decors : ${cols.join(' | ')}`)
   }
 
   // 3. Construit la liste des fichiers à extraire — uniquement les références utilisées
@@ -210,6 +229,7 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
     if (!name || !usedMannequinNames.has(normName(name))) continue
     const f1 = decodeRef(String(r['FRONT-model'] ?? '').trim()); if (f1) neededBasenames.add(f1)
     const f2 = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim()); if (f2) neededBasenames.add(f2)
+    const f3 = decodeRef(String(r['FOND'] ?? r['Fond'] ?? '').trim()); if (f3) neededBasenames.add(f3)
   }
   for (const r of fondsRows) {
     const name = String(
@@ -255,10 +275,12 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
 
   for (const look of looks) {
     if (!look.mannequinName) continue
-    if (!look.fondName)      continue
 
     const model = models.get(normName(look.mannequinName))
-    const fond  = fonds.get(normName(look.fondName))
+    const fond  = look.fondName ? fonds.get(normName(look.fondName)) : undefined
+
+    // Si pas de fond explicite et pas de fond intégré au mannequin → skip
+    if (!look.fondName && !model?.fondFile) continue
 
     // ---------- 1. Tasks "pose" (1 par vue valide) ----------
     look.vues.forEach((pose, vueIndex) => {
@@ -268,8 +290,11 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
       if (model?.frontModelFile) refs.push(model.frontModelFile)
       else w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
 
-      if (fond?.fondFile) refs.push(fond.fondFile)
-      else w.push(`Image du fond "${look.fondName}" introuvable.`)
+      // Fond : on essaie d'abord le fond du look (CSV Fonds), sinon le fond intégré au mannequin
+      const effectiveFondFile  = fond?.fondFile ?? model?.fondFile
+      const effectiveFondLabel = look.fondName ?? (model?.fondFile ? `Fond du mannequin ${look.mannequinName}` : 'fond inconnu')
+      if (effectiveFondFile) refs.push(effectiveFondFile)
+      else w.push(`Aucun fond disponible (ni dans le CSV Fonds, ni associé au mannequin "${look.mannequinName}").`)
 
       // Choix des fichiers vêtement selon la VUE
       const vueRefs = filesForView(pose.view, look)
@@ -285,9 +310,9 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
         vueRaw:    pose.raw,
         pose,
         mannequinName: look.mannequinName!,
-        fondName:      look.fondName!,
-        prompt:    buildPosePrompt(look, pose, model),
-        posePromptWithBase: buildPosePromptWithBase(look, pose),
+        fondName:      effectiveFondLabel,
+        prompt:    buildPosePrompt({ ...look, fondName: effectiveFondLabel }, pose, model),
+        posePromptWithBase: buildPosePromptWithBase({ ...look, fondName: effectiveFondLabel }, pose),
         refs,
         facePhotoFile: model?.facePhotoFile,
         warnings:  w,
@@ -302,8 +327,9 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
       if (model?.frontModelFile) refs.push(model.frontModelFile)
       else w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
 
-      if (fond?.fondFile) refs.push(fond.fondFile)
-      else w.push(`Image du fond "${look.fondName}" introuvable.`)
+      const effectiveFondFile2 = fond?.fondFile ?? model?.fondFile
+      if (effectiveFondFile2) refs.push(effectiveFondFile2)
+      else w.push(`Aucun fond disponible pour ce détail.`)
 
       refs.push(detailFile)
 
@@ -325,6 +351,9 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
       })
     })
   }
+
+  // Diagnostic final
+  warnings.push(`✅ Résultat : ${looks.length} looks valides, ${tasks.length} task(s) construite(s), ${models.size} mannequin(s) résolu(s), ${fonds.size} fond(s) résolu(s).`)
 
   return { models, fonds, looks, tasks, warnings }
 }
@@ -464,7 +493,10 @@ async function buildModelsFromRows(rows: any[], index: Map<string, File>): Promi
     const frontModelFile = frontFileRef ? index.get(frontFileRef) : undefined
     const facePhotoRef = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim())
     const facePhotoFile = facePhotoRef ? index.get(facePhotoRef) : undefined
-    m.set(normName(name), { name, promptModel, frontModelFile, facePhotoFile })
+    // Fond intégré au mannequin (colonne FOND dans Models Definition)
+    const fondRef = decodeRef(String(r['FOND'] ?? r['Fond'] ?? '').trim())
+    const fondFile = fondRef ? index.get(fondRef) : undefined
+    m.set(normName(name), { name, promptModel, frontModelFile, facePhotoFile, fondFile })
   }
   return m
 }
@@ -537,18 +569,7 @@ async function buildLooksFromRows(rows: any[], index: Map<string, File>): Promis
 
 async function parseModels(csv: File, index: Map<string, File>): Promise<Map<string, ModelDef>> {
   const rows = await readCsv(csv)
-  const m = new Map<string, ModelDef>()
-  for (const r of rows) {
-    const name = String(r['Name your Model'] ?? r['Name'] ?? '').trim()
-    if (!name) continue
-    const promptModel  = String(r['Prompt Model'] ?? '').trim() || undefined
-    const frontFileRef = decodeRef(String(r['FRONT-model'] ?? '').trim())
-    const frontModelFile = frontFileRef ? index.get(frontFileRef) : undefined
-    const facePhotoRef = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim())
-    const facePhotoFile = facePhotoRef ? index.get(facePhotoRef) : undefined
-    m.set(normName(name), { name, promptModel, frontModelFile, facePhotoFile })
-  }
-  return m
+  return buildModelsFromRows(rows, index)
 }
 
 async function parseFonds(csv: File, index: Map<string, File>): Promise<Map<string, FondDef>> {
