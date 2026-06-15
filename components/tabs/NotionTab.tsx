@@ -63,13 +63,16 @@ export default function NotionTab() {
     if (files.length === 0) return
     setParsing(true)
     try {
-      const result = await (mode === 'inspi' ? parseInspiExport(files[0]) : parseNotionExport(files[0]))
+      const result = await (mode === 'inspi'
+        ? parseInspiExport(files[0], (msg) => setProgress(msg))
+        : parseNotionExport(files[0], (msg) => setProgress(msg)))
       setParsed(result)
       setStates(result.tasks.map(t => ({
         task: t,
         status: 'pending',
         enabled: true,
       })))
+      setProgress('')
     } catch (e: any) {
       setGlobalError(e?.message ?? 'Impossible de parser le zip.')
     }
@@ -326,7 +329,7 @@ export default function NotionTab() {
             minHeight={120}
           />
 
-          {parsing && <p style={styles.hintSubtle}>Lecture et indexation du zip…</p>}
+          {parsing && <p style={styles.hintSubtle}>{progress || 'Lecture et indexation du zip…'}</p>}
 
           {parsed && (
             <div style={styles.statsBox}>

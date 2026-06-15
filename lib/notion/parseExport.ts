@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import Papa from 'papaparse'
+import { compressImage } from '@/lib/compressImage'
 import {
   parsePoseCell,
   poseToPrompt,
@@ -89,7 +90,7 @@ export type ParsedExport = {
 
 /* ============================== ENTRY ============================== */
 
-export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
+export async function parseNotionExport(zipFile: File, onProgress?: (msg: string) => void): Promise<ParsedExport> {
   // JSZip accepte le Blob/File directement — beaucoup plus efficace en RAM
   // que de précharger un ArrayBuffer complet pour les gros zips.
   let zip: JSZip
@@ -113,17 +114,28 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
   }
 
   const fileIndex = new Map<string, File>()
-  await Promise.all(
-    Object.keys(zip.files).map(async (path) => {
-      const entry = zip.files[path]
-      if (entry.dir) return
-      const base = baseName(path)
-      const mime = guessMime(base)
-      const blob = await entry.async('blob')
-      const file = new File([blob], base, { type: mime })
-      fileIndex.set(base, file)
-    }),
-  )
+  const entries = Object.keys(zip.files).filter(p => !zip.files[p].dir)
+  let processed = 0
+  const total = entries.length
+  // Extraction séquentielle pour ne pas charger toutes les images en RAM
+  // d'un coup. Compression à la volée des grosses images.
+  for (const path of entries) {
+    const entry = zip.files[path]
+    const base = baseName(path)
+    const mime = guessMime(base)
+    const blob = await entry.async('blob')
+    let file = new File([blob], base, { type: mime })
+    // Compress images > 1.5 MB pour économiser la RAM
+    if (mime.startsWith('image/') && file.size > 1_500_000) {
+      try { file = await compressImage(file, { maxSide: 2048, quality: 0.85 }) }
+      catch { /* on garde l'original si la compression échoue */ }
+    }
+    fileIndex.set(base, file)
+    processed++
+    if (onProgress && (processed % 5 === 0 || processed === total)) {
+      onProgress(`Extraction ${processed}/${total} (${Math.round(processed * 100 / total)}%)…`)
+    }
+  }
 
   const warnings: string[] = []
 

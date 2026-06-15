@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import Papa from 'papaparse'
+import { compressImage } from '@/lib/compressImage'
 import {
   poseToPrompt,
   NOTION_BOILERPLATE_HEADER,
@@ -31,7 +32,7 @@ type SomboData = {
   backgrounds?: { name: string, description?: string | null, image_url?: string }[]
 }
 
-export async function parseSomboExport(zipFile: File): Promise<ParsedExport> {
+export async function parseSomboExport(zipFile: File, onProgress?: (msg: string) => void): Promise<ParsedExport> {
   let zip: JSZip
   try {
     zip = await JSZip.loadAsync(zipFile)
@@ -49,21 +50,29 @@ export async function parseSomboExport(zipFile: File): Promise<ParsedExport> {
 
   // ===== Index des fichiers par CHEMIN COMPLET (pas baseName, car la structure
   // est hiérarchique : "images/Look 01/face-02.jpeg", "references/models/X.png")
-  const fileIndex      = new Map<string, File>()       // clé = chemin complet
-  const fileIndexBase  = new Map<string, File>()       // clé = basename, secours
+  const fileIndex      = new Map<string, File>()
+  const fileIndexBase  = new Map<string, File>()
 
-  await Promise.all(
-    Object.keys(zip.files).map(async (path) => {
-      const entry = zip.files[path]
-      if (entry.dir) return
-      const base = baseName(path)
-      const mime = guessMime(base)
-      const blob = await entry.async('blob')
-      const file = new File([blob], base, { type: mime })
-      fileIndex.set(path, file)
-      fileIndexBase.set(base, file)
-    }),
-  )
+  const entries = Object.keys(zip.files).filter(p => !zip.files[p].dir)
+  let processed = 0
+  const total = entries.length
+  for (const path of entries) {
+    const entry = zip.files[path]
+    const base = baseName(path)
+    const mime = guessMime(base)
+    const blob = await entry.async('blob')
+    let file = new File([blob], base, { type: mime })
+    if (mime.startsWith('image/') && file.size > 1_500_000) {
+      try { file = await compressImage(file, { maxSide: 2048, quality: 0.85 }) }
+      catch { /* */ }
+    }
+    fileIndex.set(path, file)
+    fileIndexBase.set(base, file)
+    processed++
+    if (onProgress && (processed % 5 === 0 || processed === total)) {
+      onProgress(`Extraction ${processed}/${total} (${Math.round(processed * 100 / total)}%)…`)
+    }
+  }
 
   const warnings: string[] = []
 

@@ -42,7 +42,7 @@ export default function NotionInternalTab() {
     if (files.length === 0) return
     setParsing(true)
     try {
-      const result = await parseSomboExport(files[0])
+      const result = await parseSomboExport(files[0], (msg) => setProgress(msg))
       setParsed(result)
       setStates(result.tasks.map(t => ({
         task: t,
