@@ -57,11 +57,12 @@ export type GenerationTask = {
   bgOverride?:        string     // colonne "Background Description" — modifie l'env extrait
   viewOverride?:      string     // colonne "View Details"          — modifie la pose extraite
   // Commun
-  mannequinName: string
-  fondName:      string
-  prompt:        string
-  refs:          File[]
-  warnings:      string[]
+  mannequinName:   string
+  fondName:        string
+  prompt:          string
+  refs:            File[]
+  facePhotoFile?:  File          // séparé pour pouvoir le dropper au retry
+  warnings:        string[]
 }
 
 export type ParsedExport = {
@@ -131,7 +132,6 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
 
       if (model?.frontModelFile) refs.push(model.frontModelFile)
       else w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
-      if (model?.facePhotoFile)  refs.push(model.facePhotoFile)
 
       if (fond?.fondFile) refs.push(fond.fondFile)
       else w.push(`Image du fond "${look.fondName}" introuvable.`)
@@ -153,6 +153,7 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
         fondName:      look.fondName!,
         prompt:    buildPosePrompt(look, pose, model),
         refs,
+        facePhotoFile: model?.facePhotoFile,
         warnings:  w,
       })
     })
@@ -164,7 +165,6 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
 
       if (model?.frontModelFile) refs.push(model.frontModelFile)
       else w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
-      if (model?.facePhotoFile)  refs.push(model.facePhotoFile)
 
       if (fond?.fondFile) refs.push(fond.fondFile)
       else w.push(`Image du fond "${look.fondName}" introuvable.`)
@@ -184,6 +184,7 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
         prompt:         buildDetailPrompt(look, detailFile, model),
         promptWithBase: buildDetailPromptWithBase(look, detailFile),
         refs,
+        facePhotoFile: model?.facePhotoFile,
         warnings:  w,
       })
     })

@@ -173,11 +173,19 @@ export default function NotionTab() {
 
         const refs = await compressAll(refsToUse, { maxSide: 2048, quality: 0.85 })
 
+        // Face photo séparée : on l'enverra dans un champ dédié pour que
+        // la route puisse la dropper au 2e essai en cas d'IMAGE_SAFETY.
+        let faceCompressed: File | null = null
+        if (item.task.facePhotoFile && item.task.taskType !== 'detail') {
+          faceCompressed = await compressImage(item.task.facePhotoFile, { maxSide: 1600, quality: 0.85 })
+        }
+
         const fd = new FormData()
         fd.append('prompt',  promptToUse)
         fd.append('ratio',   ratio)
         fd.append('quality', quality)
         refs.forEach(f => fd.append('refs', f))
+        if (faceCompressed) fd.append('face', faceCompressed)
 
         const res = await fetch('/api/studio/free', { method: 'POST', body: fd })
         let data: any = null

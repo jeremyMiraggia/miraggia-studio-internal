@@ -67,7 +67,7 @@ export async function parseInspiExport(zipFile: File): Promise<ParsedExport> {
 
     if (model?.frontModelFile) refs.push(model.frontModelFile)
     else                       w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
-    if (model?.facePhotoFile)  refs.push(model.facePhotoFile)
+    // face photo gérée séparément via facePhotoFile (droppée au retry)
 
     for (const f of look.filesFront) refs.push(f)
     if (look.filesFront.length === 0) w.push('Aucun vêtement dans FILES (FRONT).')
@@ -89,8 +89,9 @@ export async function parseInspiExport(zipFile: File): Promise<ParsedExport> {
       taskType:          'inspi',
       mannequinName:     look.mannequinName!,
       fondName:          look.fondName ?? '',
-      prompt:            '',                    // construit au runtime après extraction
+      prompt:            '',
       refs,
+      facePhotoFile:     model?.facePhotoFile,
       inspirationFile,
       extraInspiDetails,
       outfitFiles:       look.filesFront,
