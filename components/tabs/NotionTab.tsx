@@ -23,7 +23,7 @@ type Mode = 'batch' | 'inspi'
 
 export default function NotionTab() {
   const [mode, setMode]               = useState<Mode>('batch')
-  const [concurrency, setConcurrency] = useState<number>(3)
+  const [concurrency, setConcurrency] = useState<number>(2)
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
   const [parsed, setParsed]           = useState<ParsedExport | null>(null)
@@ -309,8 +309,8 @@ export default function NotionTab() {
                 <label style={styles.label}>Parallélisme</label>
                 <select value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} style={styles.select}>
                   <option value={1}>1 (séquentiel — le plus sûr)</option>
-                  <option value={2}>2 en parallèle</option>
-                  <option value={3}>3 en parallèle (recommandé)</option>
+                  <option value={2}>2 en parallèle (recommandé sur Gemini preview)</option>
+                  <option value={3}>3 en parallèle</option>
                   <option value={5}>5 en parallèle (risque de rate-limit)</option>
                   <option value={8}>8 en parallèle (agressif)</option>
                 </select>
