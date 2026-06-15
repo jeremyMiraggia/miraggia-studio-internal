@@ -161,6 +161,71 @@ const POSE_PROMPTS: Record<string, string> = {
     'high-end fashion editorial, Vogue-style sculptural pose. posture varies randomly between: one arm raised overhead drawing a clean line with the other resting on the hip, both arms forming a soft frame around the face, or arms extended sideways like a dancer\'s geste with the weight on the back leg. narrow elegant leg placement, strictly avoid wide triangle legs. no smiling',
 }
 
+/* ============================== MATRICE VIEW × POSE (overrides) ============================== */
+
+/**
+ * Mapping fin : `<View>/<pose>` → prompt complet pour cette combinaison précise.
+ * Quand un override existe ici, il prend le pas sur la composition
+ * VIEW_PROMPTS + POSE_PROMPTS. Idéal pour caler le rendu exact d'une
+ * pose dans une vue particulière.
+ *
+ * Source : tableau Léa Medioni (Notion / Sheets).
+ * Vues : face → Front, profil → Side, dos → Back.
+ * Si la pose n'a pas d'override pour la vue demandée (ex : Close up Haut),
+ * on retombe sur la composition générique.
+ */
+const VIEW_POSE_PROMPTS: Record<string, string> = {
+  // ----- droit -----
+  'Front/droit': 'standing pose, straight posture, arms relaxed, head turned to the side, legs slightly apart, relaxed stance',
+  'Side/droit':  'profile view, side shot, standing pose, straight posture, arms relaxed down the side, looking straight ahead, legs slightly apart, side profile stance',
+  'Back/droit':  'back view, shot from behind, standing pose, straight posture, arms relaxed, facing away from camera, legs slightly apart, relaxed stance',
+
+  // ----- relax -----
+  'Front/relax': 'standing pose, relaxed posture, weight on one hip, one leg slightly bent, arms relaxed, casual stance',
+  'Side/relax':  'side view, profile shot, standing pose, relaxed posture, weight on back hip, one leg slightly bent, arms relaxed, casual stance',
+  'Back/relax':  'back view, shot from behind, standing pose, relaxed posture, weight on one hip, one leg slightly bent, arms relaxed, casual stance',
+
+  // ----- bras croisé side -----
+  'Front/bras croisé side': 'standing pose, arms crossed over chest, head turned looking to the side, relaxed stance with legs slightly apart',
+  'Side/bras croisé side':  'profile view, standing pose, arms crossed over chest, looking to the camera, relaxed stance with legs slightly apart',
+  'Back/bras croisé side':  'back view, shot from behind, standing pose, arms crossed in front, head turned slightly visible from behind, relaxed stance with legs slightly apart',
+
+  // ----- bras croisé face -----
+  'Front/bras croisé face': 'standing pose, arms crossed over chest, relaxed stance with legs slightly apart',
+  'Side/bras croisé face':  'side view, standing pose, arms crossed over chest, relaxed stance with legs slightly apart',
+  'Back/bras croisé face':  'back view, shot from behind, standing pose, arms crossed in front, relaxed stance with legs slightly apart, looking forward away from camera',
+
+  // ----- main poche -----
+  'Front/main poche': 'standing straight, one hand tucked into back pockets, shoulders slightly pulled back, feet close together, looking forward',
+  'Side/main poche':  'profile view, side angle, standing straight, one hand tucked into back pocket clearly visible on the side, shoulders slightly pulled back, feet close together, looking ahead',
+  'Back/main poche':  'back view, shot from behind, standing straight, one hand tucked into back pockets, shoulders slightly pulled back, feet close together, looking forward away from camera',
+
+  // ----- une main derrière le dos -----
+  'Front/une main derrière le dos': 'standing straight, one hand clasped behind back, arms hidden behind torso, upright and confident posture, legs slightly apart',
+  'Side/une main derrière le dos':  'side view, standing straight, one hand clasped behind back, arm extending backwards, upright and confident posture, legs slightly apart',
+  'Back/une main derrière le dos':  'back view, shot from behind, standing straight, one hand clasped behind back clearly visible to camera, upright and confident posture, legs slightly apart',
+
+  // ----- mains derrière le dos -----
+  'Front/mains derrière le dos': 'standing straight, both hands clasped behind back, arms hidden behind torso, upright and confident posture, legs slightly apart',
+  'Side/mains derrière le dos':  'profile view, standing straight, both hands clasped behind back, arm extending backwards, upright and confident posture, legs slightly apart',
+  'Back/mains derrière le dos':  'back view, shot from behind, standing straight, both hands clasped behind back clearly visible to camera, upright and confident posture, legs slightly apart',
+
+  // ----- main derrière la tête -----
+  'Front/main derrière la tête': 'standing pose, one hand resting gently behind the neck naturally, raised elbow pointing outward, opposite arm hanging straight down at the side, straight upright posture',
+  'Side/main derrière la tête':  'side view, standing pose, one hand resting gently behind the neck, raised elbow pointing forward, opposite arm hanging straight down at the side, straight upright posture',
+  'Back/main derrière la tête':  'back view, shot from behind, standing pose, one hand resting gently behind the neck clearly visible, raised elbow pointing outward, opposite arm hanging straight down, straight upright posture',
+
+  // ----- main au visage -----
+  'Front/main au visage': 'standing pose, one arm folded horizontally across waist, opposite arm raised with hand gently touching chin, raised elbow resting on the folded arm, confident relaxed posture',
+  'Side/main au visage':  'profile view, standing pose, one arm folded horizontally across waist, opposite arm raised with hand gently touching chin, raised elbow resting on the folded arm, confident relaxed side posture',
+  'Back/main au visage':  'back view, shot from behind, standing pose, one arm folded across front waist, opposite hand reaching to touch chin, side of face slightly visible from behind, confident relaxed posture',
+
+  // ----- assise -----
+  'Front/assise': 'deep crouching pose, full squat, arms folded and resting on bent knees, torso leaning slightly forward, compact posture',
+  'Side/assise':  'side view, profile shot, deep crouching pose, full squat, arms folded and resting on bent knees, torso leaning slightly forward, compact posture',
+  'Back/assise':  'back view, shot from behind, deep crouching pose, full squat, back facing camera, torso leaning slightly forward, compact posture',
+}
+
 /* ============================== COMBINAISON ============================== */
 
 export function viewToPrompt(view: PoseView): string {
@@ -174,6 +239,10 @@ export function styleToPrompt(style: string): string {
 
 /** Renvoie le prompt complet pour une PoseLabel = VUE + POSE. */
 export function poseToPrompt(label: PoseLabel): string {
+  // 1) Override view+pose exact si dispo (depuis le tableau Léa Medioni)
+  const exactKey = `${label.view}/${label.style.toLowerCase()}`
+  if (VIEW_POSE_PROMPTS[exactKey]) return VIEW_POSE_PROMPTS[exactKey]
+  // 2) Sinon composition générique
   const vuePart  = viewToPrompt(label.view)
   const posePart = styleToPrompt(label.style)
   return `${vuePart}. ${posePart}.`
@@ -206,6 +275,7 @@ export const VIEW_CATALOG: ViewCatalogItem[] = [
 ]
 
 export const POSE_CATALOG: PoseCatalogItem[] = [
+  // Poses originales Vogue-style
   { key: 'simple',      description: 'Standing pose neutre, mains au repos, sérénité éditoriale.' },
   { key: 'nonchalante', description: 'Slouch décontracté, mains dans les poches, asymétrie fluide.' },
   { key: 'mouvement',   description: 'Marche figée, torsion du torse, énergie suspendue.' },
@@ -215,6 +285,17 @@ export const POSE_CATALOG: PoseCatalogItem[] = [
   { key: 'reflective',  description: 'Introspectif, main au menton, regard légèrement baissé.' },
   { key: 'attitude',    description: 'Stance assertif, mains aux hanches, présence forte.' },
   { key: 'silhouette',  description: 'Sculptural, bras dessinant une ligne, geste de danseur.' },
+  // Poses Léa Medioni (matrice view × pose détaillée)
+  { key: 'droit',                       description: 'Standing droit, bras relâchés, tête tournée sur le côté.' },
+  { key: 'relax',                       description: 'Poids sur une hanche, une jambe légèrement pliée.' },
+  { key: 'bras croisé side',            description: 'Bras croisés sur la poitrine, regard de côté.' },
+  { key: 'bras croisé face',            description: 'Bras croisés sur la poitrine, face caméra.' },
+  { key: 'main poche',                  description: 'Une main dans la poche arrière, épaules redressées.' },
+  { key: 'une main derrière le dos',    description: 'Une main jointe derrière le dos, posture confiante.' },
+  { key: 'mains derrière le dos',       description: 'Deux mains jointes derrière le dos, posture confiante.' },
+  { key: 'main derrière la tête',       description: 'Une main détendue derrière la nuque, coude levé.' },
+  { key: 'main au visage',              description: 'Un bras plié à la taille, autre main effleurant le menton.' },
+  { key: 'assise',                      description: 'Squat / accroupi profond, bras pliés sur les genoux.' },
 ]
 
 /* ============================== BOILERPLATE ============================== */
