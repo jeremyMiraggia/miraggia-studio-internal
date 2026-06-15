@@ -179,17 +179,7 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
   const fondsRows  = csvFondsText  ? parseCsvText(csvFondsText)  : []
   const looksRows  = csvLookText   ? parseCsvText(csvLookText)   : []
 
-  // Construit la liste des fichiers à extraire (referenced filenames)
-  const neededBasenames = new Set<string>()
-  for (const r of modelsRows) {
-    const f1 = decodeRef(String(r['FRONT-model'] ?? '').trim()); if (f1) neededBasenames.add(f1)
-    const f2 = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim()); if (f2) neededBasenames.add(f2)
-  }
-  for (const r of fondsRows) {
-    const f = decodeRef(String(r['Reference image'] ?? r['Reference Image'] ?? r['FOND'] ?? r['File'] ?? '').trim())
-    if (f) neededBasenames.add(f)
-  }
-  // Construit la liste des looks (filtrés par lookLimit + non vides)
+  // 1. Filtre les looks (non vides + limite N premiers)
   const eligibleLookRows: any[] = []
   for (const r of looksRows) {
     const id = String(r['ID'] ?? '').trim()
@@ -202,6 +192,35 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
   if (typeof lookLimit === 'number' && lookLimit > 0 && eligibleLookRows.length > lookLimit) {
     warnings.push(`Limité aux ${lookLimit} premiers looks (sur ${eligibleLookRows.length}).`)
   }
+
+  // 2. Collecte les mannequins et fonds RÉELLEMENT utilisés par les N looks retenus
+  const usedMannequinNames = new Set<string>()
+  const usedFondNames      = new Set<string>()
+  for (const r of lookRowsTouse) {
+    const mn = stripRef(String(r['Mannequin'] ?? '').trim())
+    if (mn) usedMannequinNames.add(normName(mn))
+    const fn = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? r['Fond'] ?? r['Décor'] ?? r['Decor'] ?? '').trim())
+    if (fn) usedFondNames.add(normName(fn))
+  }
+
+  // 3. Construit la liste des fichiers à extraire — uniquement les références utilisées
+  const neededBasenames = new Set<string>()
+  for (const r of modelsRows) {
+    const name = String(r['Name your Model'] ?? r['Name'] ?? '').trim()
+    if (!name || !usedMannequinNames.has(normName(name))) continue
+    const f1 = decodeRef(String(r['FRONT-model'] ?? '').trim()); if (f1) neededBasenames.add(f1)
+    const f2 = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim()); if (f2) neededBasenames.add(f2)
+  }
+  for (const r of fondsRows) {
+    const name = String(
+      r['Decor name'] ?? r['Decor Name'] ?? r['Décor name']
+      ?? r['Name your Model'] ?? r['Name'] ?? r['Fond'] ?? '',
+    ).trim()
+    if (!name || !usedFondNames.has(normName(name))) continue
+    const f = decodeRef(String(r['Reference image'] ?? r['Reference Image'] ?? r['FOND'] ?? r['File'] ?? '').trim())
+    if (f) neededBasenames.add(f)
+  }
+  // Vêtements et détails des N looks retenus
   for (const r of lookRowsTouse) {
     for (const colName of ['FILES (FRONT)', 'FILES (BACK)', 'FILES (BACK) (1)', 'DETAILS']) {
       const raw = String(r[colName] ?? '').trim()
