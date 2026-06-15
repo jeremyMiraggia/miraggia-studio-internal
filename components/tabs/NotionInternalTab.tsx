@@ -40,6 +40,12 @@ export default function NotionInternalTab() {
     setExpanded({})
 
     if (files.length === 0) return
+    const sizeGB = files[0].size / (1024 * 1024 * 1024)
+    if (sizeGB > 2.0) {
+      setGlobalError(`Le ZIP fait ${sizeGB.toFixed(1)} GB — au-delà de la limite navigateur (~2 GB). Découpe l'export en plusieurs zips plus petits.`)
+      setZips([])
+      return
+    }
     setParsing(true)
     try {
       const result = await parseSomboExport(files[0], (msg) => setProgress(msg))

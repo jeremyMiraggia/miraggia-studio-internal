@@ -28,6 +28,7 @@ export default function NotionTab() {
   const [mode, setMode]               = useState<Mode>('batch')
   const [concurrency, setConcurrency] = useState<number>(2)
   const [coherenceMode, setCoherenceMode] = useState<boolean>(true)
+  const [lookLimit, setLookLimit] = useState<string>('')
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
   const [parsed, setParsed]           = useState<ParsedExport | null>(null)
@@ -61,11 +62,25 @@ export default function NotionTab() {
     setExpanded({})
 
     if (files.length === 0) return
+
+    // Pre-check : > 2 GB est trop pour le navigateur. JSZip charge tout en RAM.
+    const sizeGB = files[0].size / (1024 * 1024 * 1024)
+    if (sizeGB > 2.0) {
+      setGlobalError(
+        `Le ZIP fait ${sizeGB.toFixed(1)} GB — c'est au-delà de ce que JSZip peut charger en navigateur ` +
+        `(~2 GB max). Découpe l'export en plusieurs zips plus petits côté Notion ` +
+        `(ex. par marque, par campagne, ou par lot de 50 looks). Une fois découpé, redépose ici.`,
+      )
+      setZips([])
+      return
+    }
+
     setParsing(true)
     try {
+      const limit = lookLimit.trim() && Number(lookLimit) > 0 ? Number(lookLimit) : undefined
       const result = await (mode === 'inspi'
-        ? parseInspiExport(files[0], (msg) => setProgress(msg))
-        : parseNotionExport(files[0], (msg) => setProgress(msg)))
+        ? parseInspiExport(files[0], (msg) => setProgress(msg), limit)
+        : parseNotionExport(files[0], (msg) => setProgress(msg), limit))
       setParsed(result)
       setStates(result.tasks.map(t => ({
         task: t,
@@ -328,6 +343,21 @@ export default function NotionTab() {
             hint={mode === 'inspi' ? "ZIP avec LOOK (LIFESTYLE).csv + Models Definition.csv + images + références" : "ZIP avec LOOK*.csv + Models Definition*.csv + Fonds*.csv + images"}
             minHeight={120}
           />
+
+          <div>
+            <label style={styles.label}>Limiter aux N premiers looks (optionnel)</label>
+            <input
+              type="number"
+              min={1}
+              value={lookLimit}
+              onChange={e => setLookLimit(e.target.value)}
+              placeholder="ex. 10 (vide = tout traiter)"
+              style={{ ...styles.select, padding: '8px 10px' }}
+            />
+            <p style={{ ...styles.hintSubtle, marginTop: 4 }}>
+              Pratique pour tester un gros ZIP : ne traite que les N premiers looks. Re-dépose le ZIP après avoir changé cette valeur.
+            </p>
+          </div>
 
           {parsing && <p style={styles.hintSubtle}>{progress || 'Lecture et indexation du zip…'}</p>}
 

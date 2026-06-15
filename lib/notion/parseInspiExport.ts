@@ -20,7 +20,7 @@ import type { ParsedExport, GenerationTask, ModelDef, LookRow } from './parseExp
  *
  * Pour chaque ligne, on crée UNE seule task de type 'inspi'.
  */
-export async function parseInspiExport(zipFile: File, onProgress?: (msg: string) => void): Promise<ParsedExport> {
+export async function parseInspiExport(zipFile: File, onProgress?: (msg: string) => void, lookLimit?: number): Promise<ParsedExport> {
   let zip: JSZip
   try {
     zip = await JSZip.loadAsync(zipFile)
@@ -71,7 +71,12 @@ export async function parseInspiExport(zipFile: File, onProgress?: (msg: string)
   if (!csvModels) warnings.push('CSV "Models Definition" introuvable.')
 
   const models = csvModels ? await parseModels(csvModels, fileIndex) : new Map<string, ModelDef>()
-  const looks  = csvLook   ? await parseLooks(csvLook,    fileIndex) : []
+  let looks  = csvLook   ? await parseLooks(csvLook,    fileIndex) : []
+
+  if (typeof lookLimit === 'number' && lookLimit > 0 && looks.length > lookLimit) {
+    warnings.push(`Limité aux ${lookLimit} premiers looks (sur ${looks.length}).`)
+    looks = looks.slice(0, lookLimit)
+  }
 
   // Construction des tasks 'inspi' (1 par look)
   const tasks: GenerationTask[] = []

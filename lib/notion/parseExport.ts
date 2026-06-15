@@ -90,7 +90,7 @@ export type ParsedExport = {
 
 /* ============================== ENTRY ============================== */
 
-export async function parseNotionExport(zipFile: File, onProgress?: (msg: string) => void): Promise<ParsedExport> {
+export async function parseNotionExport(zipFile: File, onProgress?: (msg: string) => void, lookLimit?: number): Promise<ParsedExport> {
   // JSZip accepte le Blob/File directement — beaucoup plus efficace en RAM
   // que de précharger un ArrayBuffer complet pour les gros zips.
   let zip: JSZip
@@ -149,7 +149,13 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
 
   const models = csvModels ? await parseModels(csvModels, fileIndex) : new Map<string, ModelDef>()
   const fonds  = csvFonds  ? await parseFonds(csvFonds,   fileIndex) : new Map<string, FondDef>()
-  const looks  = csvLook   ? await parseLooks(csvLook,    fileIndex) : []
+  let looks  = csvLook   ? await parseLooks(csvLook,    fileIndex) : []
+
+  // Limite "premiers N looks" si demandée
+  if (typeof lookLimit === 'number' && lookLimit > 0 && looks.length > lookLimit) {
+    warnings.push(`Limité aux ${lookLimit} premiers looks (sur ${looks.length}).`)
+    looks = looks.slice(0, lookLimit)
+  }
 
   /* ============== Construction des tâches ============== */
   const tasks: GenerationTask[] = []
