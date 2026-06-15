@@ -9,6 +9,19 @@ import {
   type PoseView,
 } from '@/lib/poses'
 
+function friendlyZipError(file: File, err: any, nested = false): Error {
+  const sizeMB = Math.round(file.size / (1024 * 1024))
+  const msg = String(err?.message || err || '')
+  let hint = ''
+  if (/permission|could not be read|not readable/i.test(msg)) {
+    hint = ` Le ZIP fait ${sizeMB} MB — c'est probablement la RAM navigateur qui sature. Essaie : (1) fermer les autres onglets, (2) redémarrer le navigateur, (3) découper l'export Notion en plusieurs zips plus petits (par marque ou par campagne).`
+  } else if (/invalid|corrupted|signature/i.test(msg)) {
+    hint = ` Le ZIP semble corrompu — re-télécharge l'export depuis Notion.`
+  }
+  const where = nested ? "Lecture du ZIP imbriqué (Part-1.zip)" : "Lecture du ZIP"
+  return new Error(`${where} : ${msg || 'erreur inconnue'}.${hint}`)
+}
+
 /* ============================== TYPES ============================== */
 
 export type ModelDef = {
@@ -77,16 +90,26 @@ export type ParsedExport = {
 /* ============================== ENTRY ============================== */
 
 export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
-  const buf = await zipFile.arrayBuffer()
-  let zip = await JSZip.loadAsync(buf)
+  // JSZip accepte le Blob/File directement — beaucoup plus efficace en RAM
+  // que de précharger un ArrayBuffer complet pour les gros zips.
+  let zip: JSZip
+  try {
+    zip = await JSZip.loadAsync(zipFile)
+  } catch (e: any) {
+    throw friendlyZipError(zipFile, e)
+  }
 
   // Notion peut imbriquer un zip dans un zip (ExportBlock…-Part-1.zip)
   const nestedZip = Object.keys(zip.files).find(
     name => /Part-\d+\.zip$/i.test(name) && !zip.files[name].dir,
   )
   if (nestedZip) {
-    const inner = await zip.files[nestedZip].async('blob')
-    zip = await JSZip.loadAsync(await inner.arrayBuffer())
+    try {
+      const inner = await zip.files[nestedZip].async('blob')
+      zip = await JSZip.loadAsync(inner)
+    } catch (e: any) {
+      throw friendlyZipError(zipFile, e, true)
+    }
   }
 
   const fileIndex = new Map<string, File>()

@@ -32,8 +32,20 @@ type SomboData = {
 }
 
 export async function parseSomboExport(zipFile: File): Promise<ParsedExport> {
-  const buf = await zipFile.arrayBuffer()
-  const zip = await JSZip.loadAsync(buf)
+  let zip: JSZip
+  try {
+    zip = await JSZip.loadAsync(zipFile)
+  } catch (e: any) {
+    const sizeMB = Math.round(zipFile.size / (1024 * 1024))
+    const msg = String(e?.message || e || '')
+    let hint = ''
+    if (/permission|could not be read|not readable/i.test(msg)) {
+      hint = ` Le ZIP fait ${sizeMB} MB — RAM navigateur saturée. Ferme les autres onglets et réessaie.`
+    } else if (/invalid|corrupted|signature/i.test(msg)) {
+      hint = ' Le ZIP semble corrompu — re-télécharge l\'export.'
+    }
+    throw new Error(`Lecture du ZIP : ${msg || 'erreur inconnue'}.${hint}`)
+  }
 
   // ===== Index des fichiers par CHEMIN COMPLET (pas baseName, car la structure
   // est hiérarchique : "images/Look 01/face-02.jpeg", "references/models/X.png")
