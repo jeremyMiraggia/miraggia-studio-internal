@@ -104,7 +104,7 @@ export async function parseNotionExport(zipFile: File): Promise<ParsedExport> {
 
   const csvLook   = findCsvByPrefix(fileIndex, ['LOOK', 'Looks', 'Look '])
   const csvModels = findCsvByPrefix(fileIndex, ['Models Definition', 'Models', 'Modeles'])
-  const csvFonds  = findCsvByPrefix(fileIndex, ['Fonds', 'Backgrounds'])
+  const csvFonds  = findCsvByPrefix(fileIndex, ['Fonds', 'Backgrounds', 'Decors Definition', 'Decors', 'Décors'])
 
   if (!csvLook)   warnings.push('CSV "LOOK …" introuvable.')
   if (!csvModels) warnings.push('CSV "Models Definition" introuvable.')
@@ -314,9 +314,17 @@ async function parseFonds(csv: File, index: Map<string, File>): Promise<Map<stri
   const rows = await readCsv(csv)
   const m = new Map<string, FondDef>()
   for (const r of rows) {
-    const name = String(r['Name your Model'] ?? r['Name'] ?? r['Fond'] ?? '').trim()
+    const name = String(
+      r['Decor name'] ?? r['Decor Name'] ?? r['Décor name']
+      ?? r['Name your Model'] ?? r['Name'] ?? r['Fond']
+      ?? '',
+    ).trim()
     if (!name) continue
-    const fileRef = decodeRef(String(r['FOND'] ?? r['File'] ?? '').trim())
+    const fileRef = decodeRef(String(
+      r['Reference image'] ?? r['Reference Image']
+      ?? r['FOND'] ?? r['File']
+      ?? '',
+    ).trim())
     const fondFile = fileRef ? index.get(fileRef) : undefined
     m.set(normName(name), { name, fondFile })
   }
@@ -332,7 +340,7 @@ async function parseLooks(csv: File, index: Map<string, File>): Promise<LookRow[
     if (!id) continue
 
     const mannequinName = stripRef(String(r['Mannequin'] ?? '').trim()) || undefined
-    const fondName      = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? '').trim()) || undefined
+    const fondName      = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? r['Fond'] ?? r['Décor'] ?? r['Decor'] ?? '').trim()) || undefined
     const filesFrontRaw = String(r['FILES (FRONT)'] ?? '').trim()
     const filesBackRaw  = String(r['FILES (BACK)']  ?? '').trim()
     const detailsRaw    = String(r['DETAILS']       ?? '').trim()

@@ -65,21 +65,36 @@ const VIEW_ALIASES: Record<string, PoseView> = {
   '3 4 dos gauche':  'Back',
 }
 
-/** Parse une cellule Notion "Vue, pose" en PoseLabel structuré. Null si illisible. */
+/**
+ * Parse une cellule Notion "Vue, pose" en PoseLabel structuré.
+ * Tolère :
+ *   - "Front, simple"           (ordre canonique)
+ *   - "simple, Front"           (ordre inversé — détecte la vue où qu'elle soit)
+ *   - "3/4 face droite, mode"   (vues composées)
+ *   - "Side, regard intense"    (pose libre multi-mots)
+ *   - "main poche, Front"       (pose libre + vue en 2e)
+ * Retourne null si on ne reconnaît aucune vue dans la cellule.
+ */
 export function parsePoseCell(cell: string | null | undefined): PoseLabel | null {
   if (!cell) return null
   const trimmed = cell.trim()
   if (!trimmed) return null
 
-  // Séparateurs tolérés : virgule, slash, pipe, point médian
   const parts = trimmed.split(/[,/|·]/).map(s => s.trim()).filter(Boolean)
   if (parts.length < 2) return null
 
-  const viewKey = normalizeKey(parts[0])
-  const view = VIEW_ALIASES[viewKey]
-  if (!view) return null
+  // On cherche la vue dans n'importe laquelle des parts (ordre flexible)
+  let viewIndex = -1
+  let view: PoseView | null = null
+  for (let i = 0; i < parts.length; i++) {
+    const v = VIEW_ALIASES[normalizeKey(parts[i])]
+    if (v) { view = v; viewIndex = i; break }
+  }
+  if (!view || viewIndex < 0) return null
 
-  const style = parts.slice(1).join(' ').trim().toLowerCase()
+  // Toutes les autres parts forment la pose (concaténées)
+  const styleParts = parts.filter((_, i) => i !== viewIndex)
+  const style = styleParts.join(' ').trim().toLowerCase()
   if (!style) return null
 
   return { view, style, raw: trimmed }
