@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import Papa from 'papaparse'
 import { compressImage } from '@/lib/compressImage'
+import { readZipIndex, extractEntry, type ZipEntry } from './zipReader'
 import {
   parsePoseCell,
   poseToPrompt,
@@ -91,71 +92,144 @@ export type ParsedExport = {
 /* ============================== ENTRY ============================== */
 
 export async function parseNotionExport(zipFile: File, onProgress?: (msg: string) => void, lookLimit?: number): Promise<ParsedExport> {
-  // JSZip accepte le Blob/File directement — beaucoup plus efficace en RAM
-  // que de précharger un ArrayBuffer complet pour les gros zips.
-  let zip: JSZip
+  // Stratégie LAZY : on lit d'abord l'index du ZIP (~64 KB), puis on
+  // extrait UNIQUEMENT les fichiers nécessaires pour les premiers N looks.
+  // Le fichier source n'est jamais entièrement chargé en RAM.
+  onProgress?.('Lecture de l\'index du ZIP…')
+  let zipIndex: Map<string, ZipEntry>
   try {
-    zip = await JSZip.loadAsync(zipFile)
+    zipIndex = await readZipIndex(zipFile)
   } catch (e: any) {
     throw friendlyZipError(zipFile, e)
   }
 
-  // Notion peut imbriquer un zip dans un zip (ExportBlock…-Part-1.zip)
-  const nestedZip = Object.keys(zip.files).find(
-    name => /Part-\d+\.zip$/i.test(name) && !zip.files[name].dir,
-  )
-  if (nestedZip) {
+  // Si zip imbriqué Notion (Part-1.zip), on bascule dessus
+  let workingFile: Blob = zipFile
+  const nestedKey = [...zipIndex.keys()].find(k => /Part-\d+\.zip$/i.test(k))
+  if (nestedKey) {
+    onProgress?.('Extraction du ZIP imbriqué (Part-1.zip)…')
     try {
-      const inner = await zip.files[nestedZip].async('blob')
-      zip = await JSZip.loadAsync(inner)
+      workingFile = await extractEntry(zipFile, zipIndex.get(nestedKey)!)
+      zipIndex = await readZipIndex(workingFile)
     } catch (e: any) {
       throw friendlyZipError(zipFile, e, true)
     }
   }
 
-  const fileIndex = new Map<string, File>()
-  const entries = Object.keys(zip.files).filter(p => !zip.files[p].dir)
-  let processed = 0
-  const total = entries.length
-  // Extraction séquentielle pour ne pas charger toutes les images en RAM
-  // d'un coup. Compression à la volée des grosses images.
-  for (const path of entries) {
-    const entry = zip.files[path]
-    const base = baseName(path)
+  // Helper : extrait une entrée du ZIP courant et la renvoie comme File compressé si image
+  const extractAsFile = async (key: string): Promise<File | undefined> => {
+    const entry = zipIndex.get(key)
+    if (!entry) return undefined
+    const blob = await extractEntry(workingFile, entry)
+    const base = baseName(key)
     const mime = guessMime(base)
-    const blob = await entry.async('blob')
     let file = new File([blob], base, { type: mime })
-    // Compress images > 1.5 MB pour économiser la RAM
     if (mime.startsWith('image/') && file.size > 1_500_000) {
-      try { file = await compressImage(file, { maxSide: 2048, quality: 0.85 }) }
-      catch { /* on garde l'original si la compression échoue */ }
+      try { file = await compressImage(file, { maxSide: 2048, quality: 0.85 }) } catch { /* */ }
     }
-    fileIndex.set(base, file)
-    processed++
-    if (onProgress && (processed % 5 === 0 || processed === total)) {
-      onProgress(`Extraction ${processed}/${total} (${Math.round(processed * 100 / total)}%)…`)
-    }
+    return file
   }
+
+  // Pour les CSV : on lit le texte (les CSV sont petits, pas besoin de compression)
+  const readCsvText = async (key: string): Promise<string | undefined> => {
+    const entry = zipIndex.get(key)
+    if (!entry) return undefined
+    const blob = await extractEntry(workingFile, entry)
+    return await blob.text()
+  }
+
+  // Index par basename pour les lookups depuis CSV
+  const keyByBasename = new Map<string, string>()
+  for (const key of zipIndex.keys()) {
+    keyByBasename.set(baseName(key), key)
+  }
+
+  const fileIndex = new Map<string, File>()
 
   const warnings: string[] = []
 
-  const csvLook   = findCsvByPrefix(fileIndex, ['LOOK', 'Looks', 'Look '])
-  const csvModels = findCsvByPrefix(fileIndex, ['Models Definition', 'Models', 'Modeles'])
-  const csvFonds  = findCsvByPrefix(fileIndex, ['Fonds', 'Backgrounds', 'Decors Definition', 'Decors', 'Décors'])
-
-  if (!csvLook)   warnings.push('CSV "LOOK …" introuvable.')
-  if (!csvModels) warnings.push('CSV "Models Definition" introuvable.')
-  if (!csvFonds)  warnings.push('CSV "Fonds" introuvable.')
-
-  const models = csvModels ? await parseModels(csvModels, fileIndex) : new Map<string, ModelDef>()
-  const fonds  = csvFonds  ? await parseFonds(csvFonds,   fileIndex) : new Map<string, FondDef>()
-  let looks  = csvLook   ? await parseLooks(csvLook,    fileIndex) : []
-
-  // Limite "premiers N looks" si demandée
-  if (typeof lookLimit === 'number' && lookLimit > 0 && looks.length > lookLimit) {
-    warnings.push(`Limité aux ${lookLimit} premiers looks (sur ${looks.length}).`)
-    looks = looks.slice(0, lookLimit)
+  // Recherche des CSV dans l'index par préfixe sur le basename
+  const findCsvKey = (prefixes: string[]): string | undefined => {
+    for (const key of zipIndex.keys()) {
+      const base = baseName(key).toLowerCase()
+      if (!base.endsWith('.csv')) continue
+      if (base.includes('_all.csv')) continue
+      for (const p of prefixes) {
+        if (base.startsWith(p.toLowerCase())) return key
+      }
+    }
+    return undefined
   }
+
+  const csvLookKey   = findCsvKey(['LOOK', 'Looks', 'Look '])
+  const csvModelsKey = findCsvKey(['Models Definition', 'Models', 'Modeles'])
+  const csvFondsKey  = findCsvKey(['Fonds', 'Backgrounds', 'Decors Definition', 'Decors', 'Décors'])
+
+  if (!csvLookKey)   warnings.push('CSV "LOOK …" introuvable.')
+  if (!csvModelsKey) warnings.push('CSV "Models Definition" introuvable.')
+  if (!csvFondsKey)  warnings.push('CSV "Fonds" introuvable.')
+
+  // Lis les CSV (petits, immédiats)
+  onProgress?.('Parsing des CSV…')
+  const csvLookText   = csvLookKey   ? await readCsvText(csvLookKey)   : undefined
+  const csvModelsText = csvModelsKey ? await readCsvText(csvModelsKey) : undefined
+  const csvFondsText  = csvFondsKey  ? await readCsvText(csvFondsKey)  : undefined
+
+  const modelsRows = csvModelsText ? parseCsvText(csvModelsText) : []
+  const fondsRows  = csvFondsText  ? parseCsvText(csvFondsText)  : []
+  const looksRows  = csvLookText   ? parseCsvText(csvLookText)   : []
+
+  // Construit la liste des fichiers à extraire (referenced filenames)
+  const neededBasenames = new Set<string>()
+  for (const r of modelsRows) {
+    const f1 = decodeRef(String(r['FRONT-model'] ?? '').trim()); if (f1) neededBasenames.add(f1)
+    const f2 = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim()); if (f2) neededBasenames.add(f2)
+  }
+  for (const r of fondsRows) {
+    const f = decodeRef(String(r['Reference image'] ?? r['Reference Image'] ?? r['FOND'] ?? r['File'] ?? '').trim())
+    if (f) neededBasenames.add(f)
+  }
+  // Construit la liste des looks (filtrés par lookLimit + non vides)
+  const eligibleLookRows: any[] = []
+  for (const r of looksRows) {
+    const id = String(r['ID'] ?? '').trim()
+    if (!id) continue
+    eligibleLookRows.push(r)
+  }
+  const lookRowsTouse = (typeof lookLimit === 'number' && lookLimit > 0)
+    ? eligibleLookRows.slice(0, lookLimit)
+    : eligibleLookRows
+  if (typeof lookLimit === 'number' && lookLimit > 0 && eligibleLookRows.length > lookLimit) {
+    warnings.push(`Limité aux ${lookLimit} premiers looks (sur ${eligibleLookRows.length}).`)
+  }
+  for (const r of lookRowsTouse) {
+    for (const colName of ['FILES (FRONT)', 'FILES (BACK)', 'FILES (BACK) (1)', 'DETAILS']) {
+      const raw = String(r[colName] ?? '').trim()
+      if (!raw) continue
+      for (const piece of raw.split(',').map(s => decodeRef(s.trim())).filter(Boolean)) {
+        neededBasenames.add(piece)
+      }
+    }
+  }
+
+  // Extrait les fichiers nécessaires
+  onProgress?.(`Extraction de ${neededBasenames.size} image(s) référencée(s)…`)
+  let extracted = 0
+  for (const base of neededBasenames) {
+    const key = keyByBasename.get(base)
+    if (!key) continue
+    const file = await extractAsFile(key)
+    if (file) fileIndex.set(base, file)
+    extracted++
+    if (onProgress && (extracted % 5 === 0 || extracted === neededBasenames.size)) {
+      onProgress(`Extraction ${extracted}/${neededBasenames.size} fichier(s) référencé(s)…`)
+    }
+  }
+
+  // Construit models/fonds/looks à partir des CSV déjà parsés + fileIndex partiel
+  const models = csvModelsText ? await buildModelsFromRows(modelsRows, fileIndex) : new Map<string, ModelDef>()
+  const fonds  = csvFondsText  ? await buildFondsFromRows(fondsRows,  fileIndex) : new Map<string, FondDef>()
+  let looks  = csvLookText   ? await buildLooksFromRows(lookRowsTouse, fileIndex) : []
 
   /* ============== Construction des tâches ============== */
   const tasks: GenerationTask[] = []
@@ -353,6 +427,93 @@ async function readCsv(file: File): Promise<any[]> {
   const cleaned = text.replace(/^﻿/, '')
   const parsed = Papa.parse(cleaned, { header: true, skipEmptyLines: true })
   return parsed.data as any[]
+}
+
+function parseCsvText(text: string): any[] {
+  const cleaned = text.replace(/^﻿/, '')
+  const parsed = Papa.parse(cleaned, { header: true, skipEmptyLines: true })
+  return parsed.data as any[]
+}
+
+async function buildModelsFromRows(rows: any[], index: Map<string, File>): Promise<Map<string, ModelDef>> {
+  const m = new Map<string, ModelDef>()
+  for (const r of rows) {
+    const name = String(r['Name your Model'] ?? r['Name'] ?? '').trim()
+    if (!name) continue
+    const promptModel  = String(r['Prompt Model'] ?? '').trim() || undefined
+    const frontFileRef = decodeRef(String(r['FRONT-model'] ?? '').trim())
+    const frontModelFile = frontFileRef ? index.get(frontFileRef) : undefined
+    const facePhotoRef = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim())
+    const facePhotoFile = facePhotoRef ? index.get(facePhotoRef) : undefined
+    m.set(normName(name), { name, promptModel, frontModelFile, facePhotoFile })
+  }
+  return m
+}
+
+async function buildFondsFromRows(rows: any[], index: Map<string, File>): Promise<Map<string, FondDef>> {
+  const m = new Map<string, FondDef>()
+  for (const r of rows) {
+    const name = String(
+      r['Decor name'] ?? r['Decor Name'] ?? r['Décor name']
+      ?? r['Name your Model'] ?? r['Name'] ?? r['Fond']
+      ?? '',
+    ).trim()
+    if (!name) continue
+    const fileRef = decodeRef(String(
+      r['Reference image'] ?? r['Reference Image']
+      ?? r['FOND'] ?? r['File']
+      ?? '',
+    ).trim())
+    const fondFile = fileRef ? index.get(fileRef) : undefined
+    m.set(normName(name), { name, fondFile })
+  }
+  return m
+}
+
+async function buildLooksFromRows(rows: any[], index: Map<string, File>): Promise<LookRow[]> {
+  const out: LookRow[] = []
+  for (const r of rows) {
+    const id          = String(r['ID'] ?? '').trim()
+    const numeroLook  = String(r['Numero Look'] ?? '').trim()
+    if (!id) continue
+
+    const mannequinName = stripRef(String(r['Mannequin'] ?? '').trim()) || undefined
+    const fondName      = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? r['Fond'] ?? r['Décor'] ?? r['Decor'] ?? '').trim()) || undefined
+    const filesFrontRaw = String(r['FILES (FRONT)'] ?? '').trim()
+    const filesBackRaw  = String(r['FILES (BACK)']  ?? '').trim()
+    const detailsRaw    = String(r['DETAILS']       ?? '').trim()
+    const description   = String(r['DESCRIPTION']   ?? '').trim() || undefined
+
+    const filesFront   = resolveFileList(filesFrontRaw, index)
+    const filesBack    = resolveFileList(filesBackRaw,  index)
+    const detailsFiles = resolveFileList(detailsRaw,    index)
+
+    const poseColumns = Object.keys(r)
+      .filter(k => /^\s*vue\s*et\s*pose\s*\d+\s*$/i.test(k))
+      .sort((a, b) => {
+        const na = Number(a.match(/\d+/)?.[0] ?? 0)
+        const nb = Number(b.match(/\d+/)?.[0] ?? 0)
+        return na - nb
+      })
+
+    const vues: PoseLabel[] = []
+    for (const col of poseColumns) {
+      const cell = String(r[col] ?? '').trim()
+      const p    = parsePoseCell(cell)
+      if (p) vues.push(p)
+    }
+
+    const isFilled = !!mannequinName || !!fondName ||
+                     filesFront.length > 0 || filesBack.length > 0 ||
+                     detailsFiles.length > 0 || vues.length > 0
+    if (!isFilled) continue
+
+    out.push({
+      id, numeroLook, mannequinName, fondName,
+      filesFront, filesBack, detailsFiles, description, vues,
+    })
+  }
+  return out
 }
 
 async function parseModels(csv: File, index: Map<string, File>): Promise<Map<string, ModelDef>> {

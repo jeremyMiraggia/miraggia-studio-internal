@@ -63,16 +63,17 @@ export default function NotionTab() {
 
     if (files.length === 0) return
 
-    // Pre-check : > 2 GB est trop pour le navigateur. JSZip charge tout en RAM.
+    // Pre-check : la lecture lazy supporte jusqu'à ~10 GB. Au-delà, on prévient.
     const sizeGB = files[0].size / (1024 * 1024 * 1024)
-    if (sizeGB > 2.0) {
+    if (sizeGB > 10.0) {
       setGlobalError(
-        `Le ZIP fait ${sizeGB.toFixed(1)} GB — c'est au-delà de ce que JSZip peut charger en navigateur ` +
-        `(~2 GB max). Découpe l'export en plusieurs zips plus petits côté Notion ` +
-        `(ex. par marque, par campagne, ou par lot de 50 looks). Une fois découpé, redépose ici.`,
+        `Le ZIP fait ${sizeGB.toFixed(1)} GB — au-delà de la limite pratique (~10 GB). Découpe l'export.`,
       )
       setZips([])
       return
+    }
+    if (sizeGB > 3.0) {
+      setProgress(`ZIP volumineux (${sizeGB.toFixed(1)} GB) — utilise "Limiter aux N premiers looks" pour un premier essai rapide.`)
     }
 
     setParsing(true)
