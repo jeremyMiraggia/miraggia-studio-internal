@@ -225,9 +225,9 @@ function filesForView(view: PoseView, look: LookRow): { files: File[], warnings:
 
 function modelRefDescription(model?: ModelDef): string {
   if (model?.facePhotoFile) {
-    return 'deux références en image fournies : silhouette/corps + portrait visage — à utiliser conjointement pour respecter la morphologie ET les traits du visage'
+    return 'deux références en image fournies : silhouette/corps + portrait visage. ⚠ PRÉSERVATION D\'IDENTITÉ STRICTE : reproduire EXACTEMENT les traits du visage de la référence portrait (forme du visage, yeux, nez, bouche, sourcils, ligne de mâchoire), la couleur et la coiffure des cheveux, le grain de peau. La silhouette/corps donne la morphologie générale. Le visage généré doit être instantanément reconnaissable comme le même que celui de la référence portrait, sous tous les angles'
   }
-  return 'référence en image fournie'
+  return 'référence en image fournie. ⚠ PRÉSERVATION D\'IDENTITÉ : reproduire fidèlement les traits du mannequin de référence'
 }
 
 function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): string {

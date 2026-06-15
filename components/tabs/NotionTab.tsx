@@ -177,7 +177,7 @@ export default function NotionTab() {
         // la route puisse la dropper au 2e essai en cas d'IMAGE_SAFETY.
         let faceCompressed: File | null = null
         if (item.task.facePhotoFile && item.task.taskType !== 'detail') {
-          faceCompressed = await compressImage(item.task.facePhotoFile, { maxSide: 1600, quality: 0.85 })
+          faceCompressed = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
         }
 
         const fd = new FormData()

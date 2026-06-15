@@ -131,7 +131,7 @@ export function buildInspiPrompt(args: {
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
-    `Photographie de mode professionnelle du mannequin "${mannequinName}" (deux références en image fournies : silhouette/corps + portrait visage, à utiliser pour respecter la morphologie ET les traits du visage), portant la tenue montrée en référence (${outfitCount} fichier${outfitCount > 1 ? 's' : ''}).`,
+    `Photographie de mode professionnelle du mannequin "${mannequinName}" (deux références en image fournies : silhouette/corps + portrait visage). ⚠ PRÉSERVATION D'IDENTITÉ STRICTE : reproduire EXACTEMENT les traits du visage de la référence portrait (forme du visage, yeux, nez, bouche, sourcils, ligne de mâchoire), la couleur et la coiffure des cheveux, le grain de peau. La silhouette/corps donne la morphologie générale. Le visage doit être instantanément reconnaissable comme le même que celui de la référence portrait. Le mannequin porte la tenue montrée en référence (${outfitCount} fichier${outfitCount > 1 ? 's' : ''}).`,
   )
   parts.push(`ENVIRONNEMENT (base extraite de l\'image d\'inspiration) : ${extractedEnv}.`)
   if (bgOverride) {

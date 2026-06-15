@@ -55,6 +55,11 @@ export async function POST(request: Request) {
       '- The image to produce is for a professional fashion editorial / commercial portfolio (Vogue-style).',
       '- Content is family-safe : fully clothed subject, no nudity, no suggestive content, no minors.',
       '- Style is artistic high-end fashion photography.',
+      '',
+      '🎯 FACE / BODY CONSISTENCY (very important) :',
+      '- The output must keep the SAME FACE as in the portrait reference (same eyes, nose, mouth, jawline, hair color & cut, skin tone, eyebrows). The fashion model must remain visually identical across all generated variants.',
+      '- The body / silhouette must match the body reference (height, build, posture base).',
+      '- Do not invent a new face. Do not blend. Stay faithful to the portrait reference.',
     ].join('\n')
 
     // Suffixe spécifique quand on dropt la face (pour expliquer pourquoi le visage manque)
