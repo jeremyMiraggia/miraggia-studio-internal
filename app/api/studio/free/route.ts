@@ -108,7 +108,14 @@ export async function POST(request: Request) {
       if (a.delay > 0) await sleep(a.delay)
       const body = buildBody(a.withFace, a.includeNoFaceSuffix)
       const att = await callGemini(apiKey, body)
-      if (att.ok && att.imageUrl) return NextResponse.json({ imageUrl: att.imageUrl })
+      if (att.ok && att.imageUrl) {
+        return NextResponse.json({
+          imageUrl:    att.imageUrl,
+          attempt:     i + 1,                 // 1..3
+          faceUsed:    a.withFace,            // true si la face photo a été envoyée
+          faceWasAvailable: !!faceInline,     // true si une face photo existait pour ce mannequin
+        })
+      }
       if (!att.ok) {
         return NextResponse.json({ error: att.error, raw: att.raw }, { status: att.status })
       }

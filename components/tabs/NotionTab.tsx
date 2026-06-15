@@ -17,6 +17,9 @@ type TaskState = {
   error?:    string
   extractedEnv?:  string
   extractedPose?: string
+  finalAttempt?:     number
+  faceUsed?:         boolean
+  faceWasAvailable?: boolean
 }
 
 type Mode = 'batch' | 'inspi'
@@ -121,6 +124,9 @@ export default function NotionTab() {
         imageUrl: undefined,
         extractedEnv: undefined,
         extractedPose: undefined,
+        finalAttempt: undefined,
+        faceUsed: undefined,
+        faceWasAvailable: undefined,
       })
 
       try {
@@ -198,7 +204,13 @@ export default function NotionTab() {
           return
         }
         if (data?.imageUrl) {
-          updateState(item.task.id, { status: 'done', imageUrl: data.imageUrl })
+          updateState(item.task.id, {
+            status: 'done',
+            imageUrl: data.imageUrl,
+            finalAttempt:     typeof data.attempt === 'number' ? data.attempt : undefined,
+            faceUsed:         typeof data.faceUsed === 'boolean' ? data.faceUsed : undefined,
+            faceWasAvailable: typeof data.faceWasAvailable === 'boolean' ? data.faceWasAvailable : undefined,
+          })
           done++
         } else {
           updateState(item.task.id, { status: 'error', error: data?.error ?? 'Aucune image renvoyée' })
@@ -571,6 +583,14 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
             } style={styles.linkBtnDark}>⬇</a>
             <a href={imageUrl} target="_blank" rel="noreferrer"                                  style={styles.linkBtnLight}>↗</a>
           </div>
+          {state.faceWasAvailable && (
+            state.faceUsed
+              ? <span style={facePreservedBadge} title="La face photo du mannequin a bien été envoyée à Gemini (1re tentative).">✓ visage préservé</span>
+              : <span style={faceDroppedBadge} title={`La face photo a été droppée au ${state.finalAttempt ?? '?'}e essai pour passer le filtre IMAGE_SAFETY de Gemini. Le visage généré est cohérent mais peut différer de la référence portrait.`}>⚠ visage régénéré (essai {state.finalAttempt ?? '?'})</span>
+          )}
+          {state.faceWasAvailable === false && state.imageUrl && (
+            <span style={faceNoneBadge} title="Aucune face photo n'était fournie dans le Models Definition pour ce mannequin.">— pas de face photo</span>
+          )}
         </div>
       )}
     </div>
@@ -768,4 +788,20 @@ const styles: Record<string, React.CSSProperties> = {
   catalogDesc:    { fontSize: 12, color: '#0D4A5C', lineHeight: 1.45 },
   catalogFooter:  { fontSize: 12, color: '#6B7A8A', marginTop: 16, marginBottom: 0, lineHeight: 1.5, padding: '10px 12px', background: '#E8F2F5', borderRadius: 6 },
   kbd:            { background: '#E8F2F5', padding: '1px 6px', borderRadius: 4, fontFamily: 'monospace', fontSize: 12, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.1)' },
+}
+
+const facePreservedBadge: React.CSSProperties = {
+  display: 'inline-block', padding: '3px 7px',
+  background: '#DCF3E2', color: '#1F7A35', border: '1px solid #B7E4C3',
+  borderRadius: 4, fontSize: 10, fontWeight: 700, textAlign: 'center', cursor: 'help',
+}
+const faceDroppedBadge: React.CSSProperties = {
+  display: 'inline-block', padding: '3px 7px',
+  background: '#FFF8E1', color: '#7A4F00', border: '1px solid #F1D78A',
+  borderRadius: 4, fontSize: 10, fontWeight: 700, textAlign: 'center', cursor: 'help',
+}
+const faceNoneBadge: React.CSSProperties = {
+  display: 'inline-block', padding: '3px 7px',
+  background: '#F5F7F9', color: '#6B7A8A', border: '1px solid rgba(13,74,92,0.15)',
+  borderRadius: 4, fontSize: 10, fontWeight: 600, textAlign: 'center', cursor: 'help',
 }
