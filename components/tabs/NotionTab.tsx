@@ -300,30 +300,37 @@ export default function NotionTab() {
           const isWallBehind   = framing === 'haut' || framing === 'mi-corps'
 
           const shadowRule = isWallBehind
-            ? 'SHADOW ON WALL (CRITICAL): do NOT cast any visible projected silhouette of the model on the new wall/backdrop. The model is standing IN FRONT OF the wall with normal depth between her body and the wall (~30-60 cm) — she is NOT pressed against it. The wall stays clean and lit by ambient diffuse light. A very subtle soft contact-AO darkening MAY appear only around her hair, shoulders and neck where her body genuinely occludes ambient light, but NEVER a hard projected silhouette of the head/shoulders on the wall.'
+            ? 'SHADOW ON WALL: do NOT cast any hard projected silhouette of the model on the new wall/backdrop — the model stands ~30-60 cm in front of the wall, not pressed against it. The wall stays clean. A very subtle soft contact-AO darkening MAY appear only around her hair, shoulders and neck where her body genuinely occludes ambient light, but NEVER a hard projected silhouette.'
             : isFloorVisible
-              ? 'SHADOW ON FLOOR: cast a VERY LIGHT, VERY SOFT shadow on the new ground — just enough to ground the model in the scene, nothing more. Keep it discreet, almost subliminal: the eye should not focus on it. The shadow should faintly follow the SILHOUETTE of the body in her current pose, with a slight elongation in the direction opposite to the existing key light visible in REFERENCE #2. ABSOLUTELY NO REFLECTION on the floor — even if the floor looks polished, do NOT mirror the model. ABSOLUTELY NO dark uniform oval or disc under the feet — that always looks fake. ABSOLUTELY NO dark patch that competes with the model visually. Think of a soft diffuse penumbra on matte concrete: barely visible, slightly darker only right at the foot contact point, fading to nothing within 30-50 cm.'
+              ? 'SHADOW ON FLOOR: cast a clearly visible but NATURAL soft shadow on the ground at the feet of the model — like a real fashion editorial photograph. The shadow follows the SILHOUETTE of the body in her current pose (gap between the feet, leg angle, body weight distribution). Direction and softness match the existing key light visible in REFERENCE #2. The shadow is darker and slightly more defined right at the contact points (where the feet touch the floor), then softens and fades within ~40-60 cm. ABSOLUTELY NO mirror reflection on the floor, even if the floor looks polished. NO uniform dark oval or disc. NO harsh hard-edged shadow. Just a real, believable photographic ground shadow that anchors the body in the scene — similar to the soft natural shadow you would see in a Vogue editorial.'
               : 'SHADOW: keep the lighting/ambience natural and coherent with REFERENCE #2 — no hard projected silhouette, no reflection on the floor, no fake dark oval.'
 
           const vogueStyle = 'Vogue-style editorial photography. Shot on film, visible grain, subtle blur, slight motion softness. Imperfect focus, organic textures, realistic skin with no heavy retouching. Raw, intimate, spontaneous fashion moment. High-end but not overly polished.'
 
           const swapPrompt = [
             'You are given TWO images :',
-            '- REFERENCE #1 : a fashion photo of a model on a PURE WHITE background.',
-            '- REFERENCE #2 : a target backdrop image.',
+            '- REFERENCE #1 : a fashion photo of a model on a PURE WHITE STUDIO background (flat frontal studio light).',
+            '- REFERENCE #2 : a target backdrop / scene with its own lighting and ambient atmosphere.',
             '',
-            '⚠ TASK : Replace the white background of REFERENCE #1 with the EXACT backdrop of REFERENCE #2.',
+            '⚠ TASK : Composite the model from REFERENCE #1 into the scene of REFERENCE #2, with proper photographic INTEGRATION (not a flat cutout).',
             '',
-            'STRICT REQUIREMENTS :',
-            '- The MODEL must remain 100% IDENTICAL to REFERENCE #1 — same face, same body, same pose, same outfit, same skin texture, same hair, same shadows ON THE BODY itself (self-shadowing of the body).',
-            '- Only the background (the white area surrounding the model) is replaced.',
-            '- The new background must be the EXACT pixel content of REFERENCE #2 — same color, same texture, same lighting direction, same gradient.',
+            'PRESERVE FROM REFERENCE #1 (identity & appearance) :',
+            '- Face features, hair shape and color, skin tone, age and morphology — same person.',
+            '- Body shape, pose, posture, gesture, orientation.',
+            '- Outfit : exact same garments, colors, prints, cut, accessories, shoes — no alteration.',
+            '',
+            'REPLACE FROM REFERENCE #2 (scene & light) :',
+            '- The white background is fully replaced by the EXACT pixel content of REFERENCE #2 — same color, same texture, same gradient, same architectural elements.',
+            '- ⚠ RE-LIGHT the model so the light direction, color temperature, intensity, and softness MATCH the scene of REFERENCE #2. The face, the t-shirt, the skirt, the skin, the hair, the shoes must look naturally ILLUMINATED BY the same light source as the background — not by the original flat white-studio light of REFERENCE #1. Add natural skin tone warmth and the ambient color cast of the scene. Add subtle highlights and self-shadowing on the body that come from the new light source direction.',
             '- ' + shadowRule,
-            '- Do NOT crop the model. Do NOT change the framing. Do NOT regenerate the person.',
+            '',
+            'KEEP :',
+            '- Same framing, same crop, same camera angle as REFERENCE #1.',
+            '- Same person — do NOT regenerate the face, do NOT change the outfit.',
             '',
             'PHOTOGRAPHIC STYLE : ' + vogueStyle,
             '',
-            'Generate the composited image now.',
+            'Generate the integrated photograph now — the result must feel like a single coherent fashion editorial shot taken in the scene of REFERENCE #2.',
           ].join('\n')
 
           const fd2 = new FormData()
