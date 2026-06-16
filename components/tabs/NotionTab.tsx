@@ -27,7 +27,7 @@ type Mode = 'batch' | 'inspi'
 export default function NotionTab() {
   const [mode, setMode]               = useState<Mode>('batch')
   const [concurrency, setConcurrency] = useState<number>(2)
-  const [coherenceMode, setCoherenceMode] = useState<boolean>(true)
+  const [coherenceMode, setCoherenceMode] = useState<boolean>(false)
   const [lookLimit, setLookLimit] = useState<string>('')
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
@@ -431,7 +431,9 @@ export default function NotionTab() {
                 🎯 Cohérence entre poses d'un même look
               </label>
               <p style={styles.hintSubtle}>
-                Quand activé, les poses 2/3/4 d'un look attendent que la pose 1 soit générée puis l'utilisent comme base — même lumière, même fond, même mannequin, seule la pose change.
+                <strong>Désactivé par défaut</strong> : chaque pose est générée indépendamment avec le fond + mannequin envoyés fraîchement (fond toujours fidèle à la référence — comme la plateforme principale).
+                <br /><br />
+                Si activé : les poses 2/3/4 utilisent la pose 1 comme base, ce qui améliore la cohérence visuelle entre poses mais peut faire dériver le fond.
               </p>
 
               <button onClick={handleRunAll} disabled={running || enabledCount === 0} style={{ ...styles.btn, opacity: running || enabledCount === 0 ? 0.6 : 1 }}>
