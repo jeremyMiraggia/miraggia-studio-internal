@@ -6,6 +6,8 @@ import {
   parsePoseCell,
   poseToPrompt,
   viewCropInstruction,
+  orientationToPrompt,
+  framingToHint,
   BACKGROUND_PRESERVATION_INSTRUCTION,
   NOTION_BOILERPLATE_HEADER,
   NOTION_BOILERPLATE_STYLE,
@@ -213,7 +215,7 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
   let mannequinFieldFound = 0
   let fondFieldFound = 0
   for (const r of lookRowsTouse) {
-    const mn = stripRef(String(r['Mannequin'] ?? r['Model'] ?? '').trim())
+    const mn = stripRef(String(r['Mannequin'] ?? r['Model'] ?? r['Modèle'] ?? r['Modele'] ?? '').trim())
     if (mn) { usedMannequinNames.add(normName(mn)); mannequinFieldFound++ }
     const fn = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? r['Fond'] ?? r['Décor'] ?? r['Decor'] ?? '').trim())
     if (fn) { usedFondNames.add(normName(fn)); fondFieldFound++ }
@@ -330,7 +332,7 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
         bodyPhotoFile:   model?.frontModelFile,
         backgroundFile:  effectiveFondFile,
         productFiles:    vueRefs.files,
-        framingHint:     viewToFramingHint(pose.view),
+        framingHint:     framingToHint(pose.framing),
         warnings:  w,
       })
     })
@@ -408,17 +410,7 @@ function filesForView(view: PoseView, look: LookRow): { files: File[], warnings:
   return { files, warnings: w }
 }
 
-/** Mappe une PoseView vers le framing hint attendu par la route /api/studio/free */
-function viewToFramingHint(view: PoseView): string {
-  switch (view) {
-    case 'CloseUpHaut': return 'haut'
-    case 'CloseUpBas':  return 'bas'
-    case 'Front':
-    case 'Side':
-    case 'Back':
-    default:            return 'plein'
-  }
-}
+
 
 function modelRefDescription(model?: ModelDef): string {
   if (model?.facePhotoFile) {
@@ -433,6 +425,7 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
   parts.push(
     `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence, devant le fond "${look.fondName}" (référence en image fournie).`,
   )
+  parts.push(`⚠ ORIENTATION DU SUJET : ${orientationToPrompt(pose.orientation)}. C'est l'orientation du corps par rapport à la caméra — distincte du cadrage.`)
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
   parts.push(viewCropInstruction(pose.view))
   parts.push(BACKGROUND_PRESERVATION_INSTRUCTION)
@@ -463,14 +456,13 @@ function buildPosePromptWithBase(look: LookRow, pose: PoseLabel): string {
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
-    `Photographie de mode professionnelle. Une image de RÉFÉRENCE DU LOOK COMPLET DÉJÀ SHOOTÉ est fournie (référence #1) : le mannequin "${look.mannequinName}" porte la tenue complète devant le fond "${look.fondName}", avec une certaine lumière et atmosphère.`,
+    `Photographie de mode professionnelle. Une image de RÉFÉRENCE DU LOOK COMPLET DÉJÀ SHOOTÉ est fournie (référence #1) : le mannequin "${look.mannequinName}" porte la tenue complète devant le fond "${look.fondName}".`,
   )
   parts.push(
-    `⚠ COHÉRENCE STRICTE — l'objectif est de produire une NOUVELLE VUE du MÊME LOOK, parfaitement cohérente avec la référence : MÊME mannequin (visage, morphologie, peau, cheveux, identité), MÊME tenue (chaque pièce, chaque détail), MÊME fond (lieu, palette, props, couleur exacte, teinte, luminosité), MÊME lumière (direction, qualité, température), MÊME atmosphère globale, MÊME esthétique photographique (focale ressentie, profondeur de champ, grain).`,
+    `⚠ COHÉRENCE STRICTE — produire une NOUVELLE VUE du MÊME LOOK, cohérente avec la référence : MÊME mannequin, MÊME tenue, MÊME fond (couleur, teinte, luminosité exactes), MÊME lumière, MÊME esthétique.`,
   )
-  parts.push(
-    `Seule la POSE et le CADRAGE changent — NOUVELLE POSE : ${poseToPrompt(pose)}.`,
-  )
+  parts.push(`⚠ ORIENTATION DU SUJET : ${orientationToPrompt(pose.orientation)}.`)
+  parts.push(`NOUVELLE POSE : ${poseToPrompt(pose)}.`)
   parts.push(viewCropInstruction(pose.view))
   if (look.description) parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
@@ -561,13 +553,13 @@ async function buildLooksFromRows(rows: any[], index: Map<string, File>): Promis
   const out: LookRow[] = []
   for (const r of rows) {
     const id          = String(r['ID'] ?? '').trim()
-    const numeroLook  = String(r['Numero Look'] ?? '').trim()
+    const numeroLook  = String(r['Numero Look'] ?? r['NumLook'] ?? r['SKU'] ?? r['Propriété'] ?? r['Propriete'] ?? '').trim() || id
     if (!id) continue
 
-    const mannequinName = stripRef(String(r['Mannequin'] ?? '').trim()) || undefined
+    const mannequinName = stripRef(String(r['Mannequin'] ?? r['Model'] ?? r['Modèle'] ?? r['Modele'] ?? '').trim()) || undefined
     const fondName      = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? r['Fond'] ?? r['Décor'] ?? r['Decor'] ?? '').trim()) || undefined
     const filesFrontRaw = String(r['FILES (FRONT)'] ?? '').trim()
-    const filesBackRaw  = String(r['FILES (BACK)']  ?? '').trim()
+    const filesBackRaw  = String(r['FILES (BACK)']  ?? r['FILES (BACK) (1)'] ?? '').trim()
     const detailsRaw    = String(r['DETAILS']       ?? '').trim()
     const description   = String(r['DESCRIPTION']   ?? '').trim() || undefined
 

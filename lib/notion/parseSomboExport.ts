@@ -324,15 +324,21 @@ function buildFondsMap(
  */
 function buildPoseLabelFromSomboFields(view: string, pose: string): PoseLabel | null {
   if (!view || !pose) return null
-  // On crée une cellule virtuelle pour réutiliser parsePoseCell
   const cell = `${view}, ${pose}`
-  // import statique de parsePoseCell pas dispo ici, on duplique la logique :
   const viewKey = normalizeKey(view)
   const viewMapped = VIEW_ALIASES_INTERNAL[viewKey]
   if (!viewMapped) return null
   const style = pose.toLowerCase().trim()
   if (!style) return null
-  return { view: viewMapped, style, raw: cell }
+  const isCloseUp = viewMapped === 'CloseUpHaut' || viewMapped === 'CloseUpBas'
+  return {
+    orientation: (isCloseUp ? 'Front' : viewMapped) as 'Front'|'Side'|'Back',
+    framing:     (isCloseUp ? viewMapped : 'Plein') as 'Plein'|'CloseUpHaut'|'CloseUpBas'|'Detail',
+    pose:        style,
+    raw:         cell,
+    view:        viewMapped,
+    style,
+  }
 }
 
 /**

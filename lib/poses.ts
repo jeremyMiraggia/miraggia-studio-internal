@@ -20,12 +20,19 @@
 
 /* ============================== TYPES ============================== */
 
-export type PoseView = 'Front' | 'Side' | 'Back' | 'CloseUpHaut' | 'CloseUpBas'
+export type PoseView        = 'Front' | 'Side' | 'Back' | 'CloseUpHaut' | 'CloseUpBas'
+export type PoseOrientation = 'Front' | 'Side' | 'Back'                     // direction du sujet
+export type PoseFraming     = 'Plein' | 'CloseUpHaut' | 'CloseUpBas' | 'Detail' // cadrage
 
 export type PoseLabel = {
-  view:  PoseView
-  style: string  // ex : "simple", "nonchalante", "mouvement", "mode"
-  raw:   string  // la cellule d'origine, ex "Front, nonchalante"
+  // ===== 3 dimensions exposées séparément =====
+  orientation: PoseOrientation  // Front / Side / Back
+  framing:     PoseFraming      // Plein / Close up haut / Close up bas / Detail
+  pose:        string           // posture libre : "simple", "main poche", "relax"...
+  raw:         string           // cellule d'origine, ex "Front, bras croisé side, close up bas"
+  // ===== Backward-compat (deprecated, à supprimer plus tard) =====
+  view:        PoseView         // = framing prioritaire, sinon orientation
+  style:       string           // = pose
 }
 
 /* ============================== PARSING ============================== */
@@ -91,28 +98,43 @@ export function parsePoseCell(cell: string | null | undefined): PoseLabel | null
   const parts = trimmed.split(/[,/|·]/).map(s => s.trim()).filter(Boolean)
   if (parts.length < 2) return null
 
-  // On collecte TOUTES les parts qui sont reconnues comme une vue
-  type Match = { index: number, view: PoseView }
-  const matches: Match[] = []
+  // Collecte TOUTES les parts qui matchent une vue, on les classe ensuite
+  // en orientation (Front/Side/Back) ou framing (CloseUpHaut/Bas).
+  const orientationIndexes: { index: number, val: PoseOrientation }[] = []
+  const framingIndexes:     { index: number, val: PoseFraming }[]     = []
   for (let i = 0; i < parts.length; i++) {
     const v = VIEW_ALIASES[normalizeKey(parts[i])]
-    if (v) matches.push({ index: i, view: v })
+    if (!v) continue
+    if (v === 'CloseUpHaut' || v === 'CloseUpBas') {
+      framingIndexes.push({ index: i, val: v as PoseFraming })
+    } else {
+      orientationIndexes.push({ index: i, val: v as PoseOrientation })
+    }
   }
-  if (matches.length === 0) return null
 
-  // Priorité : si un close-up est présent, il gagne. Sinon on prend le 1er match.
-  const closeUpMatch = matches.find(m => m.view === 'CloseUpHaut' || m.view === 'CloseUpBas')
-  const chosen = closeUpMatch ?? matches[0]
-  const view = chosen.view
-  const viewIndex = chosen.index
+  // Si rien de détectable, on bail out
+  if (orientationIndexes.length === 0 && framingIndexes.length === 0) return null
 
-  // Toutes les autres parts forment la pose — y compris d'autres vues détectées
-  // (ex. "Front, ..., close up bas" → view=CloseUpBas, style="front ...")
-  const styleParts = parts.filter((_, i) => i !== viewIndex)
-  const style = styleParts.join(' ').trim().toLowerCase()
-  if (!style) return null
+  const orientation: PoseOrientation = orientationIndexes[0]?.val ?? 'Front'
+  const framing:     PoseFraming     = framingIndexes[0]?.val     ?? 'Plein'
 
-  return { view, style, raw: trimmed }
+  // La pose = toutes les autres parts (celles qui n'étaient pas des vues)
+  const usedIndexes = new Set<number>([
+    ...orientationIndexes.map(o => o.index),
+    ...framingIndexes.map(f => f.index),
+  ])
+  const poseParts = parts.filter((_, i) => !usedIndexes.has(i))
+  const pose = poseParts.join(' ').trim().toLowerCase()
+  if (!pose) return null
+
+  // Backward-compat : view = framing si différent de Plein, sinon orientation
+  const view: PoseView =
+    framing === 'CloseUpHaut' ? 'CloseUpHaut' :
+    framing === 'CloseUpBas'  ? 'CloseUpBas'  :
+    framing === 'Detail'      ? 'CloseUpBas'  : // fallback (Detail n'existe pas dans PoseView)
+    orientation as PoseView
+
+  return { orientation, framing, pose, raw: trimmed, view, style: pose }
 }
 
 function normalizeKey(s: string): string {
@@ -312,6 +334,27 @@ export const POSE_CATALOG: PoseCatalogItem[] = [
   { key: 'main au visage',              description: 'Un bras plié à la taille, autre main effleurant le menton.' },
   { key: 'assise',                      description: 'Squat / accroupi profond, bras pliés sur les genoux.' },
 ]
+
+/* ============================== ORIENTATION / FRAMING HELPERS ============================== */
+
+/** Texte injecté dans le prompt pour décrire l'orientation du sujet. */
+export function orientationToPrompt(o: PoseOrientation): string {
+  switch (o) {
+    case 'Front': return 'le sujet est ORIENTÉ FACE CAMÉRA (de face)'
+    case 'Side':  return 'le sujet est ORIENTÉ EN PROFIL STRICT (de côté, généralement profil gauche)'
+    case 'Back':  return 'le sujet est ORIENTÉ DE DOS (dos complet à la caméra)'
+  }
+}
+
+/** Convertit le framing PoseFraming vers le string attendu par /api/studio/free?framing=… */
+export function framingToHint(f: PoseFraming): string {
+  switch (f) {
+    case 'Plein':       return 'plein'
+    case 'CloseUpHaut': return 'haut'
+    case 'CloseUpBas':  return 'bas'
+    case 'Detail':      return 'detail'
+  }
+}
 
 /* ============================== HARD CONSTRAINTS ============================== */
 
