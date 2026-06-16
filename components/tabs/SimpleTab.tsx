@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
 
@@ -73,6 +74,32 @@ export default function SimpleTab() {
     if (localFailures.length) setFailures(localFailures)
   }
 
+  const exportZip = async () => {
+    if (!results.length) return
+    const zip = new JSZip()
+    for (let i = 0; i < results.length; i++) {
+      try {
+        const blob = await (await fetch(results[i])).blob()
+        // Détermine l'extension à partir du data URL (image/jpeg, image/png, etc.)
+        const mimeMatch = results[i].match(/^data:image\/(\w+)/)
+        const ext = mimeMatch ? mimeMatch[1].replace('jpeg', 'jpg') : 'jpg'
+        const base = subjects[i]?.name?.replace(/\.[^.]+$/, '') ?? `simple_${i + 1}`
+        zip.file(`${base}.${ext}`, blob)
+      } catch (err) {
+        console.warn('[SimpleTab] export ZIP failed for image', i, err)
+      }
+    }
+    const out = await zip.generateAsync({ type: 'blob' })
+    const url = URL.createObjectURL(out)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `simple_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
   return (
     <div>
       <h2 style={styles.title}>🖼️ Simple</h2>
@@ -129,9 +156,16 @@ export default function SimpleTab() {
           </button>
 
           {!loading && results.length > 0 && (
-            <p style={styles.hintSubtle}>
-              {results.length} / {subjects.length} image(s) générée(s).
-            </p>
+            <>
+              <p style={styles.hintSubtle}>
+                {results.length} / {subjects.length} image(s) générée(s).
+              </p>
+              {results.length > 1 && (
+                <button onClick={exportZip} style={styles.btnSecondary}>
+                  ⬇ Télécharger tout (ZIP)
+                </button>
+              )}
+            </>
           )}
         </div>
 
@@ -186,6 +220,7 @@ const styles: Record<string, React.CSSProperties> = {
   textarea:    { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', resize: 'vertical', minHeight: 72, boxSizing: 'border-box' as const },
   select:      { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', background: '#fff' },
   btn:         { padding: '11px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
+  btnSecondary:{ padding: '10px', background: '#fff', color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.25)', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
   emptyState:  { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff' },
   resultCard:  { background: '#fff', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
   downloadBtn: { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600 },

@@ -135,38 +135,10 @@ export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 }
 
 /**
- * Prompt pour la passe Gemini "ajoute une ombre naturelle" sur le composite.
- * Utilisé seulement pour plein pied et close-up bas (où le sol est visible).
- *
- * Objectif : une ombre EXTRÊMEMENT subtile, à peine visible, comme dans une
- * vraie photo éditoriale tournée dans un cyclorama avec lumière diffuse douce.
- * On insiste lourdement sur la subtilité pour contrebalancer la tendance de
- * Gemini à over-draw les ombres.
+ * Prompt minimaliste pour la passe Gemini "ajoute une ombre naturelle".
+ * Approche à la SimpleTab : on laisse Gemini gérer le rendu avec juste
+ * l'intention. Moins d'instructions = meilleurs résultats avec Gemini
+ * (il s'appuie sur son prior éditorial naturel).
  */
-export const SHADOW_ADD_PROMPT = [
-  'You are given a fashion editorial photograph of a model standing on a floor. The model currently has NO floor shadow under her feet, making her look slightly disconnected from the ground.',
-  '',
-  '⚠ ABSOLUTE TASK : add ONE VERY SUBTLE, BARELY VISIBLE soft shadow just at the contact points where the feet meet the floor. Think of editorial fashion photography shot in a studio with soft diffuse window light — the shadow is delicate, gentle, almost a whisper.',
-  '',
-  'PRESERVATION (CRITICAL — pixel-perfect, do NOT touch ANYTHING else):',
-  '- Model : face, hair, skin, outfit, pose, all garment details → 100 % identical to input.',
-  '- Background : walls, floor, lighting, ambiance, all existing elements → 100 % identical to input.',
-  '- Framing, crop, camera angle, composition → 100 % identical to input.',
-  '',
-  'THE SHADOW — STRICT GUIDELINES :',
-  '- INTENSITY : EXTREMELY LIGHT. Just barely darker than the floor — like 5 to 10 % darker at the strongest point. The viewer should almost NOT notice the shadow on first look ; it should feel like it has always been there.',
-  '- EXTENT : VERY LOCAL. Hugs the immediate footprint of the shoes / feet. Fades to invisible within 10 to 20 cm around the feet. Do NOT extend behind, in front, or sideways further than necessary.',
-  '- SHAPE : a small soft contact shadow at the feet (NOT a large oval, NOT a projected silhouette of the body, NOT a dark patch, NOT a halo around the entire base).',
-  '- COLOR : a tinted version of the floor color (slightly darker), NEVER pure black, NEVER gray that contrasts with the floor.',
-  '- DIRECTION : matches the existing scene\'s lighting if visible ; otherwise stays compact under the feet.',
-  '- LIGHTING REFERENCE : soft diffuse light from a large overhead softbox or a north-facing window — gentle, low contrast.',
-  '',
-  'FORBIDDEN PATTERNS (these are what AI typically over-does — DO NOT do them) :',
-  '- ❌ A big dark oval around the model.',
-  '- ❌ A long cast shadow stretching meters away.',
-  '- ❌ A dark patch competing visually with the model.',
-  '- ❌ A pure black or gray shadow that doesn\'t match the floor color.',
-  '- ❌ Any reflection of the model on the floor (even if floor is shiny).',
-  '',
-  'The output should be VISUALLY 99 % identical to the input ; the only difference is a delicate, whisper-soft contact shadow at the feet that grounds the model naturally.',
-].join('\n')
+export const SHADOW_ADD_PROMPT =
+  'Add a subtle, natural soft shadow under the model\'s feet, consistent with the existing scene lighting. Keep the model, the background, the framing and everything else exactly identical to the input — only the shadow is added.'

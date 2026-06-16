@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, compositeOnBackground, blobToDataUrl, dataUrlToBlob, SHADOW_ADD_PROMPT } from '@/lib/composite'
+import { segmentForeground, compositeOnBackground, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -197,33 +197,39 @@ export default function CompositeTab() {
           progressStep:      'composite',
         })
 
-        // ===== Étape 4 : Passe Gemini "ajoute une ombre" =====
+        // ===== Étape 4 : Fusion finale style "Simple" =====
+        // On envoie le mannequin segmenté (PNG transparent) + le fond seul à
+        // /api/studio/simple, qui fusionne via Gemini avec une lumière + ombre
+        // naturelles (comme dans l'onglet Simple).
         // Seulement quand le sol est visible (plein pied / close-up bas).
-        // Pour close-up haut (mur derrière, sol croppé) → pas d'ombre.
+        // Pour close-up haut (mur, sol croppé) → on garde le composite Canvas.
         const needsShadow = shadowEnabled && (framing === 'plein' || framing === 'bas')
         if (needsShadow) {
-          setProgress(`Ombre Gemini · look ${item.task.numeroLook} · ${done + errors}/${total}`)
+          setProgress(`Fusion Simple · look ${item.task.numeroLook} · ${done + errors}/${total}`)
           updateState(item.task.id, { progressStep: 'shadow' })
 
           try {
-            const compressedComposite = await compressImage(compositeFile, { maxSide: 2048, quality: 0.92 })
-            const fdShadow = new FormData()
-            fdShadow.append('prompt',  SHADOW_ADD_PROMPT)
-            fdShadow.append('ratio',   ratio)
-            fdShadow.append('quality', quality)
-            fdShadow.append('refs',    compressedComposite)
+            // Subject = mannequin segmenté (PNG transparent)
+            const segmentedFile = new File([segmented], 'subject.png', { type: 'image/png' })
+            const subjectCompressed = await compressImage(segmentedFile, { maxSide: 2048, quality: 0.92 })
+            const bgCompressed      = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.92 })
 
-            const resShadow = await fetch('/api/studio/free', { method: 'POST', body: fdShadow })
-            const dataShadow: any = await resShadow.json().catch(() => null)
-            if (resShadow.ok && dataShadow?.imageUrl) {
-              // Écrase imageUrl (final) avec le résultat post-ombre, mais imageUrlComposite (pré-ombre) reste pour comparaison
-              updateState(item.task.id, { imageUrl: dataShadow.imageUrl })
+            const fdSimple = new FormData()
+            fdSimple.append('subject',    subjectCompressed)
+            fdSimple.append('background', bgCompressed)
+            fdSimple.append('brief',      'Photographie de mode professionnelle, ombre naturelle subtile au sol, lumière cohérente entre sujet et fond.')
+            fdSimple.append('ratio',      ratio)
+            fdSimple.append('quality',    quality)
+
+            const resSimple = await fetch('/api/studio/simple', { method: 'POST', body: fdSimple })
+            const dataSimple: any = await resSimple.json().catch(() => null)
+            if (resSimple.ok && dataSimple?.imageUrl) {
+              updateState(item.task.id, { imageUrl: dataSimple.imageUrl })
             } else {
-              // Échec de la passe ombre : imageUrl reste = composite pré-ombre
-              console.warn('[composite] passe ombre Gemini échouée :', dataShadow?.error || resShadow.status)
+              console.warn('[composite] fusion Simple échouée :', dataSimple?.error || resSimple.status)
             }
           } catch (err: any) {
-            console.warn('[composite] passe ombre Gemini exception :', err?.message)
+            console.warn('[composite] fusion Simple exception :', err?.message)
           }
         }
 
@@ -348,13 +354,14 @@ export default function CompositeTab() {
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(13,74,92,0.08)' }}>
               <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer' }}>
                 <input type="checkbox" checked={shadowEnabled} onChange={e => setShadowEnabled(e.target.checked)} />
-                Ajouter une ombre via passe Gemini (sol visible uniquement)
+                Fusion finale style &quot;Simple&quot; (sol visible uniquement)
               </label>
               <p style={{ fontSize: 11, color: '#6B7A8A', marginTop: 4, lineHeight: 1.5 }}>
-                Pour les <strong>plein pied</strong> et <strong>close-up bas</strong>, une 4e passe Gemini ajoute
-                une ombre naturelle au sol (préservation pixel-perfect du reste).
+                Pour les <strong>plein pied</strong> et <strong>close-up bas</strong>, on envoie le mannequin segmenté + le fond seul
+                à <code>/api/studio/simple</code> qui fusionne via Gemini avec une lumière et une ombre naturelles
+                (comme dans l&apos;onglet Simple).
                 <br />
-                Pour les <strong>close-up haut</strong>, pas d&apos;ombre (le bg est croppé aux 30 % du haut pour ne pas voir le sol).
+                Pour les <strong>close-up haut</strong>, on garde le composite Canvas (bg croppé aux 30 % du haut).
                 <br />
                 Coût : <strong>+1 appel Gemini</strong> par visuel concerné.
               </p>
@@ -454,7 +461,7 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
     gemini:    '1️⃣ Gemini',
     segment:   '2️⃣ Segmentation',
     composite: '3️⃣ Composite',
-    shadow:    '4️⃣ Ombre Gemini',
+    shadow:    '4️⃣ Fusion Simple',
     done:      '✓ Done',
   }
 
@@ -486,7 +493,7 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
         )}
         {imageUrl && (
           <ImgThumb
-            label={imageUrlComposite && imageUrlComposite !== imageUrl ? '4. Final + ombre' : '3. Composite'}
+            label={imageUrlComposite && imageUrlComposite !== imageUrl ? '4. Final (fusion Simple)' : '3. Composite'}
             url={imageUrl}
             highlight
           />
