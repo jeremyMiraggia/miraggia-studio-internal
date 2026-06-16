@@ -25,7 +25,7 @@ type TaskState = {
 export default function CompositeTab() {
   const [concurrency, setConcurrency]   = useState<number>(2)
   const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)
-  const [shadowOpacity, setShadowOpacity] = useState<number>(0.18)
+  const [shadowOpacity, setShadowOpacity] = useState<number>(0.30)
   const [lookLimit, setLookLimit] = useState<string>('')
 
   const [zips, setZips]               = useState<File[]>([])
@@ -315,7 +315,7 @@ export default function CompositeTab() {
               {shadowEnabled && (
                 <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 11, color: '#6B7A8A' }}>Opacité ombre :</span>
-                  <input type="range" min="0.05" max="0.35" step="0.01"
+                  <input type="range" min="0.05" max="0.55" step="0.02"
                     value={shadowOpacity} onChange={e => setShadowOpacity(Number(e.target.value))} />
                   <span style={{ fontSize: 11, color: '#0D4A5C', fontWeight: 600, width: 40 }}>{(shadowOpacity * 100).toFixed(0)}%</span>
                 </div>

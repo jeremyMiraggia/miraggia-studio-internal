@@ -58,8 +58,8 @@ export async function compositeOnBackground(
   } = {},
 ): Promise<File> {
   const addShadow         = options.addShadow         ?? true
-  const shadowOpacity     = options.shadowOpacity     ?? 0.18
-  const shadowSpreadFactor= options.shadowSpreadFactor?? 1.6
+  const shadowOpacity     = options.shadowOpacity     ?? 0.30
+  const shadowSpreadFactor= options.shadowSpreadFactor?? 2.5
 
   const [modelBmp, bgBmp] = await Promise.all([
     createImageBitmap(segmentedPng),
@@ -80,10 +80,12 @@ export async function compositeOnBackground(
 
   // 2) Ombre synthétique sous les pieds (avant le mannequin pour qu'elle soit derrière)
   if (addShadow) {
-    const feet = await detectModelFeet(segmentedPng, W, H)
-    if (feet) {
-      drawShadowEllipse(ctx, feet, shadowOpacity, shadowSpreadFactor)
+    let feet = await detectModelFeet(segmentedPng, W, H)
+    if (!feet) {
+      // Fallback : ombre par défaut centrée au bas du canvas
+      feet = { cx: W / 2, bottom: H - 8, width: W * 0.18 }
     }
+    drawShadowEllipse(ctx, feet, shadowOpacity, shadowSpreadFactor)
   }
 
   // 3) Mannequin par-dessus
@@ -159,19 +161,33 @@ function drawShadowEllipse(
   opacity: number,
   spread: number,
 ) {
-  const rx = (feet.width / 2) * spread
-  const ry = rx * 0.20   // ellipse aplatie (vue de dessus, perspective sol)
+  // Largeur de base de l'ombre : aux moins 60 % de la largeur du canvas
+  // garanti pour que ça soit visible même si la détection des pieds
+  // n'a trouvé qu'une zone étroite (un seul pied vers l'avant par ex).
+  const minFeetWidth = Math.max(feet.width, ctx.canvas.width * 0.12)
+  const rx = (minFeetWidth / 2) * spread
+  const ry = Math.max(14, rx * 0.28)
   const cx = feet.cx
-  const cy = feet.bottom - 2
+  // Centre VERTICALEMENT sur la ligne des pieds : la moitié haute est
+  // cachée par le mannequin (= contact shadow propre), la moitié basse
+  // s'étend dans le sol et reste visible.
+  const cy = feet.bottom
 
   ctx.save()
-  // Blur via filter (supporté Chrome/Safari/FF récents)
-  const blurPx = Math.max(8, Math.round(rx * 0.18))
-  ctx.filter = `blur(${blurPx}px)`
-  ctx.fillStyle = 'rgba(0,0,0,1)'
-  ctx.globalAlpha = opacity
+  // Radial gradient au lieu de filter blur : opacité contrôlable, fade
+  // smooth, ne dépend pas du support filter (qui peut foirer selon navigateur).
+  // Astuce : on travaille en espace transformé (cercle) qu'on aplatit en
+  // ellipse via scale, ce qui garde le gradient circulaire.
+  ctx.translate(cx, cy)
+  ctx.scale(1, ry / rx)
+  const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx)
+  grad.addColorStop(0.0, `rgba(0,0,0,${opacity})`)
+  grad.addColorStop(0.4, `rgba(0,0,0,${(opacity * 0.55).toFixed(3)})`)
+  grad.addColorStop(0.8, `rgba(0,0,0,${(opacity * 0.12).toFixed(3)})`)
+  grad.addColorStop(1.0, 'rgba(0,0,0,0)')
+  ctx.fillStyle = grad
   ctx.beginPath()
-  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+  ctx.arc(0, 0, rx, 0, Math.PI * 2)
   ctx.fill()
   ctx.restore()
 }

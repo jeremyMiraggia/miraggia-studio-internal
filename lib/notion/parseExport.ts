@@ -1,7 +1,7 @@
 import JSZip from 'jszip'
 import Papa from 'papaparse'
 import { compressImage } from '@/lib/compressImage'
-import { readZipIndex, extractEntry, type ZipEntry } from './zipReader'
+import { readZipIndex, extractEntry, getEntryDataOffset, type ZipEntry } from './zipReader'
 import {
   parsePoseCell,
   poseToPrompt,
@@ -118,14 +118,20 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
     throw friendlyZipError(zipFile, e)
   }
 
-  // Si zip imbriqué Notion (Part-1.zip), on bascule dessus
-  let workingFile: Blob = zipFile
+  // Si zip imbriqué Notion (Part-1.zip), on lit son index directement dans
+  // le fichier d'origine via baseOffset, sans le détacher en Blob slice.
+  // Ça évite le double-slice qui plante Chrome au-delà de 4 GB.
+  const workingFile: Blob = zipFile
   const nestedKey = [...zipIndex.keys()].find(k => /Part-\d+\.zip$/i.test(k))
   if (nestedKey) {
-    onProgress?.('Extraction du ZIP imbriqué (Part-1.zip)…')
+    onProgress?.('Lecture du ZIP imbriqué (Part-1.zip) en mode offset…')
     try {
-      workingFile = await extractEntry(zipFile, zipIndex.get(nestedKey)!)
-      zipIndex = await readZipIndex(workingFile)
+      const nestedEntry = zipIndex.get(nestedKey)!
+      if (nestedEntry.method !== 0) {
+        throw new Error(`Le ZIP imbriqué ${nestedEntry.name} est compressé (method=${nestedEntry.method}), pas supporté en mode offset. Re-exporte depuis Notion en non-compressé.`)
+      }
+      const { dataOffset, csize } = await getEntryDataOffset(zipFile, nestedEntry)
+      zipIndex = await readZipIndex(zipFile, { baseOffset: dataOffset, virtualSize: csize })
     } catch (e: any) {
       throw friendlyZipError(zipFile, e, true)
     }
