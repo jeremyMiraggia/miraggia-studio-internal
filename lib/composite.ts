@@ -18,33 +18,164 @@
 
 import { cropTopPercent } from '@/lib/imageCrop'
 
-// Lazy-loaded segmenter ; le 1er load télécharge ~80 MB de modèle ONNX.
-let _segmenter: ((input: Blob | string | ArrayBuffer) => Promise<Blob>) | null = null
+/* ============================== Segmenters ============================== */
 
-export async function loadSegmenter() {
-  if (_segmenter) return _segmenter
-  const mod: any = await import('@imgly/background-removal')
-  const fn = (mod.removeBackground ?? mod.default?.removeBackground ?? mod.default) as any
-  if (typeof fn !== 'function') {
-    throw new Error('@imgly/background-removal : fonction removeBackground introuvable.')
+// Lazy-loaded segmenters — on essaye BiRefNet en 1er (meilleur sur les
+// vêtements blancs), fallback automatique sur @imgly/background-removal
+// (RMBG-1.4) si BiRefNet échoue.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _hfPipe: any = null
+let _hfTried = false
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _imglyFn: any = null
+
+/**
+ * Charge BiRefNet via @huggingface/transformers. Première utilisation =
+ * download ~80-180 MB du modèle ONNX (cache navigateur ensuite).
+ * Retourne null si la lib ou le modèle ne peuvent pas être chargés.
+ */
+async function getBiRefNetPipe(onProgress?: (msg: string) => void) {
+  if (_hfPipe) return _hfPipe
+  if (_hfTried) return null
+  _hfTried = true
+  try {
+    onProgress?.('Chargement BiRefNet via @huggingface/transformers (1er run : ~80-180 MB)...')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mod: any = await import('@huggingface/transformers')
+    const pipeline = mod.pipeline ?? mod.default?.pipeline
+    if (typeof pipeline !== 'function') throw new Error('pipeline() introuvable')
+    // briaai/RMBG-2.0 = successeur de RMBG-1.4, bien meilleur sur les vêtements
+    // blancs/clairs. Si pas dispo, fallback automatique.
+    _hfPipe = await pipeline('image-segmentation', 'briaai/RMBG-1.4')
+    return _hfPipe
+  } catch (err) {
+    console.warn('[composite] BiRefNet/HF init failed, will fallback to @imgly:', err)
+    return null
   }
-  _segmenter = fn
+}
+
+/**
+ * Charge @imgly/background-removal (fallback). Première utilisation = ~80 MB.
+ */
+async function getImglySegmenter() {
+  if (_imglyFn) return _imglyFn
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mod: any = await import('@imgly/background-removal')
+  const fn = mod.removeBackground ?? mod.default?.removeBackground ?? mod.default
+  if (typeof fn !== 'function') throw new Error('@imgly removeBackground introuvable')
+  _imglyFn = fn
   return fn as (input: Blob | string | ArrayBuffer) => Promise<Blob>
 }
 
 /**
+ * Compose un mask de segmentation (grayscale) avec l'image source pour
+ * produire un PNG avec canal alpha.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function maskToTransparentPng(source: Blob, maskRaw: any): Promise<Blob> {
+  const bmp = await createImageBitmap(source)
+  const W = bmp.width
+  const H = bmp.height
+
+  const canvas = document.createElement('canvas')
+  canvas.width = W
+  canvas.height = H
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas 2D unavailable')
+  ctx.drawImage(bmp, 0, 0)
+  const imgData = ctx.getImageData(0, 0, W, H)
+
+  // maskRaw : { data: Uint8Array (grayscale 0-255), width, height, channels: 1 }
+  const mw = maskRaw.width ?? W
+  const mh = maskRaw.height ?? H
+
+  let alphaData: Uint8ClampedArray | Uint8Array
+  if (mw === W && mh === H) {
+    alphaData = maskRaw.data
+  } else {
+    // Resize via canvas si dims différentes
+    const tempCanvas = document.createElement('canvas')
+    tempCanvas.width = mw
+    tempCanvas.height = mh
+    const tempCtx = tempCanvas.getContext('2d')
+    if (!tempCtx) throw new Error('Canvas 2D unavailable')
+    const maskImg = new ImageData(mw, mh)
+    for (let i = 0; i < mw * mh; i++) {
+      const v = maskRaw.data[i]
+      maskImg.data[i * 4 + 0] = v
+      maskImg.data[i * 4 + 1] = v
+      maskImg.data[i * 4 + 2] = v
+      maskImg.data[i * 4 + 3] = 255
+    }
+    tempCtx.putImageData(maskImg, 0, 0)
+
+    const resizeCanvas = document.createElement('canvas')
+    resizeCanvas.width = W
+    resizeCanvas.height = H
+    const resizeCtx = resizeCanvas.getContext('2d')
+    if (!resizeCtx) throw new Error('Canvas 2D unavailable')
+    resizeCtx.drawImage(tempCanvas, 0, 0, W, H)
+    const resized = resizeCtx.getImageData(0, 0, W, H)
+    alphaData = new Uint8ClampedArray(W * H)
+    for (let i = 0; i < W * H; i++) alphaData[i] = resized.data[i * 4]
+  }
+
+  for (let i = 0; i < W * H; i++) {
+    imgData.data[i * 4 + 3] = alphaData[i]
+  }
+  ctx.putImageData(imgData, 0, 0)
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob null')), 'image/png')
+  })
+}
+
+/**
  * Segmente l'image : renvoie un PNG avec canal alpha (fond transparent).
- * Premier appel = ~10-30 s (download du modèle), suivants = ~2-5 s.
+ * Stratégie :
+ *  1. BiRefNet (RMBG-2.0) via @huggingface/transformers — meilleur sur
+ *     les vêtements blancs/clairs. Download ~80-180 MB au 1er run.
+ *  2. Fallback automatique sur @imgly/background-removal (RMBG-1.4) si
+ *     BiRefNet ne charge pas ou échoue (lib manquante, modèle indispo,
+ *     timeout, etc.).
  */
 export async function segmentForeground(
   input: Blob,
   onProgress?: (msg: string) => void,
 ): Promise<Blob> {
-  onProgress?.('Chargement du modèle de segmentation (cache navigateur après le 1er run)...')
-  const removeBg = await loadSegmenter()
+  // === Tentative 1 : BiRefNet ===
+  const pipe = await getBiRefNetPipe(onProgress)
+  if (pipe) {
+    try {
+      onProgress?.('Segmentation BiRefNet...')
+      const url = URL.createObjectURL(input)
+      let output: any
+      try {
+        output = await pipe(url)
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+      // output = [{ mask, label, score }, ...] — on prend la 1re segmentation
+      const first = Array.isArray(output) ? output[0] : output
+      const maskRaw = first?.mask ?? first
+      if (!maskRaw || !maskRaw.data) throw new Error('BiRefNet : mask absent dans la sortie')
+      return await maskToTransparentPng(input, maskRaw)
+    } catch (err) {
+      console.warn('[composite] BiRefNet segmentation failed, fallback @imgly:', err)
+    }
+  }
+
+  // === Tentative 2 : @imgly/background-removal (RMBG-1.4) ===
+  onProgress?.('Fallback : segmentation @imgly RMBG-1.4...')
+  const removeBg = await getImglySegmenter()
   onProgress?.('Extraction du mannequin du fond...')
-  const result = await removeBg(input)
-  return result
+  return await removeBg(input)
+}
+
+// Helper conservé pour compat (le mode RMBG direct n'est plus exposé,
+// segmentForeground orchestre tout)
+export async function loadSegmenter() {
+  return await getImglySegmenter()
 }
 
 export type CompositeOptions = {
