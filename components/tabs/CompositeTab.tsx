@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, compositeOnBackground, fillSegmentationHoles, createChromaBackground, extractByChromaKey, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { segmentForeground, compositeOnBackground, fillSegmentationHoles, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -26,7 +26,6 @@ type TaskState = {
 export default function CompositeTab() {
   const [concurrency, setConcurrency]   = useState<number>(2)
   const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)   // active la passe Gemini "ajoute une ombre"
-  const [segMethod, setSegMethod] = useState<'chroma' | 'rmbg'>('chroma')   // chroma = Gemini sur fond vert, rmbg = lib ML
   const [lookLimit, setLookLimit] = useState<string>('')
 
   const [zips, setZips]               = useState<File[]>([])
@@ -139,29 +138,15 @@ export default function CompositeTab() {
         }
 
         const body  = await compressImage(item.task.bodyPhotoFile,  { maxSide: 2048, quality: 0.90 })
+        const bg    = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.92 })
         const prods = await compressAll(item.task.productFiles ?? [], { maxSide: 2048, quality: 0.85 })
-
-        // En mode chroma : on demande à Gemini de générer le mannequin sur fond
-        // VERT CHROMA UNI (segmentation triviale derrière). Le fond cible n'est
-        // PAS envoyé en étape 1 — il sera réintroduit à l'étape 4 (fusion Simple)
-        // où Gemini fera la cohérence lumière.
-        // En mode rmbg : on envoie le fond cible comme avant (Gemini intègre la lumière).
-        let bgForGemini: File
-        let decorLabelForGemini: string
-        if (segMethod === 'chroma') {
-          bgForGemini = await createChromaBackground(1024, 1536)
-          decorLabelForGemini = 'PURE GREEN CHROMA KEY background (#00C000) — uniform flat green, NO scene elements, NO floor, NO walls visible. The model must be cleanly isolated against this solid green for later compositing.'
-        } else {
-          bgForGemini = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.92 })
-          decorLabelForGemini = item.task.fondName
-        }
 
         const fd = new FormData()
         fd.append('prompt',  item.task.prompt)
         fd.append('ratio',   ratio)
         fd.append('quality', quality)
         fd.append('mannequinBody', body)
-        fd.append('background',    bgForGemini)
+        fd.append('background',    bg)
         for (const p of prods) fd.append('products', p)
         if (item.task.facePhotoFile) {
           const face = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
@@ -169,7 +154,7 @@ export default function CompositeTab() {
         }
         fd.append('framing',        item.task.framingHint ?? 'plein')
         fd.append('mannequinLabel', item.task.mannequinName)
-        fd.append('decorLabel',     decorLabelForGemini)
+        fd.append('decorLabel',     item.task.fondName)
 
         setProgress(`Gemini · look ${item.task.numeroLook} · ${done + errors}/${total}`)
         const res = await fetch('/api/studio/free', { method: 'POST', body: fd })
@@ -188,26 +173,19 @@ export default function CompositeTab() {
           progressStep: 'segment',
         })
 
-        // ===== Étape 2 : Extraction du mannequin =====
-        // Mode chroma : extraction triviale par chroma key (~50 ms, déterministe)
-        // Mode rmbg   : segmentation ML BRIA RMBG + hole-fill (~2-5 s, ~80 MB de modèle)
+        // ===== Étape 2 : Segmentation ML + hole-fill =====
+        setProgress(`Segmentation · look ${item.task.numeroLook} · ${done + errors}/${total}`)
         const geminiBlob = await dataUrlToBlob(data.imageUrl)
+        const rawSegmented = await segmentForeground(geminiBlob, (msg) =>
+          setProgress(`Segmentation · ${msg} · look ${item.task.numeroLook}`),
+        )
+        setProgress(`Refinement (hole-fill) · look ${item.task.numeroLook}`)
         let segmented: Blob
-        if (segMethod === 'chroma') {
-          setProgress(`Chroma key extraction · look ${item.task.numeroLook}`)
-          segmented = await extractByChromaKey(geminiBlob, { despill: true })
-        } else {
-          setProgress(`Segmentation RMBG · look ${item.task.numeroLook}`)
-          const rawSegmented = await segmentForeground(geminiBlob, (msg) =>
-            setProgress(`Segmentation · ${msg} · look ${item.task.numeroLook}`),
-          )
-          setProgress(`Refinement (hole-fill) · look ${item.task.numeroLook}`)
-          try {
-            segmented = await fillSegmentationHoles(rawSegmented, geminiBlob)
-          } catch (err: any) {
-            console.warn('[composite] hole-fill failed, using raw segmentation:', err?.message)
-            segmented = rawSegmented
-          }
+        try {
+          segmented = await fillSegmentationHoles(rawSegmented, geminiBlob)
+        } catch (err: any) {
+          console.warn('[composite] hole-fill failed, using raw segmentation:', err?.message)
+          segmented = rawSegmented
         }
         const segmentedDataUrl = await blobToDataUrl(segmented)
         updateState(item.task.id, { imageUrlSegmented: segmentedDataUrl, progressStep: 'composite' })
@@ -382,26 +360,6 @@ export default function CompositeTab() {
             </div>
 
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(13,74,92,0.08)' }}>
-              <label style={{ ...styles.label, display: 'block', textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', marginBottom: 6 }}>
-                Méthode d&apos;extraction du mannequin
-              </label>
-              <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
-                  <input type="radio" name="segMethod" checked={segMethod === 'chroma'} onChange={() => setSegMethod('chroma')} />
-                  🟢 Chroma key (Gemini fond vert) <em style={{ color: '#1F7A35', fontSize: 10 }}>recommandé</em>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
-                  <input type="radio" name="segMethod" checked={segMethod === 'rmbg'} onChange={() => setSegMethod('rmbg')} />
-                  🤖 RMBG (lib ML) <em style={{ color: '#6B7A8A', fontSize: 10 }}>fallback</em>
-                </label>
-              </div>
-              <p style={{ fontSize: 11, color: '#6B7A8A', marginBottom: 16, lineHeight: 1.5 }}>
-                <strong>Chroma key</strong> : Gemini génère le mannequin sur fond vert pur, extraction triviale et déterministe.
-                Plus rapide et zéro erreur sur vêtements blancs.
-                <br />
-                <strong>RMBG</strong> : segmentation ML client-side (~80 MB de modèle). À utiliser si chroma ne marche pas pour un cas particulier.
-              </p>
-
               <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer' }}>
                 <input type="checkbox" checked={shadowEnabled} onChange={e => setShadowEnabled(e.target.checked)} />
                 Fusion finale style &quot;Simple&quot; (sol visible uniquement)
