@@ -118,20 +118,25 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
     throw friendlyZipError(zipFile, e)
   }
 
-  // Si zip imbriqué Notion (Part-1.zip), on lit son index directement dans
-  // le fichier d'origine via baseOffset, sans le détacher en Blob slice.
-  // Ça évite le double-slice qui plante Chrome au-delà de 4 GB.
-  const workingFile: Blob = zipFile
+  // Si zip imbriqué Notion (Part-1.zip), on lit son index :
+  //  - method 0 (stored) : path rapide offset-based, ZERO RAM
+  //  - method 8 (deflate) : décompression complète en Blob (le browser
+  //    store les grosses Blobs sur disque, ça marche jusqu'à plusieurs GB)
+  let workingFile: Blob = zipFile
   const nestedKey = [...zipIndex.keys()].find(k => /Part-\d+\.zip$/i.test(k))
   if (nestedKey) {
-    onProgress?.('Lecture du ZIP imbriqué (Part-1.zip) en mode offset…')
     try {
       const nestedEntry = zipIndex.get(nestedKey)!
-      if (nestedEntry.method !== 0) {
-        throw new Error(`Le ZIP imbriqué ${nestedEntry.name} est compressé (method=${nestedEntry.method}), pas supporté en mode offset. Re-exporte depuis Notion en non-compressé.`)
+      if (nestedEntry.method === 0) {
+        onProgress?.('Lecture du ZIP imbriqué (Part-1.zip) en mode offset…')
+        const { dataOffset, csize } = await getEntryDataOffset(zipFile, nestedEntry)
+        zipIndex = await readZipIndex(zipFile, { baseOffset: dataOffset, virtualSize: csize })
+      } else {
+        onProgress?.(`Décompression du ZIP imbriqué (${Math.round(nestedEntry.size / (1024*1024))} MB)… ça peut prendre 30-60 s.`)
+        workingFile = await extractEntry(zipFile, nestedEntry)
+        onProgress?.('Lecture de l\'index du ZIP imbriqué…')
+        zipIndex = await readZipIndex(workingFile)
       }
-      const { dataOffset, csize } = await getEntryDataOffset(zipFile, nestedEntry)
-      zipIndex = await readZipIndex(zipFile, { baseOffset: dataOffset, virtualSize: csize })
     } catch (e: any) {
       throw friendlyZipError(zipFile, e, true)
     }
