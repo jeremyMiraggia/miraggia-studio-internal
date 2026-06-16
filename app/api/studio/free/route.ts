@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
+import { compressGeminiImage } from '@/lib/serverImageCompress'
 
 export const maxDuration = 300
+export const runtime = 'nodejs'
 
 /**
  * Génération via Gemini 3 Pro Image Preview.
@@ -148,14 +150,14 @@ export async function POST(request: Request) {
         })
       }
       if (!att.ok) {
-        return NextResponse.json({ error: att.error, raw: att.raw }, { status: att.status })
+        return NextResponse.json({ error: att.error, raw: trimRaw(att.raw) }, { status: att.status })
       }
       last = att
     }
 
     const detail = buildDetailMessage(last!)
     return NextResponse.json(
-      { error: `Aucune image générée après 3 tentatives. ${detail}`, raw: last?.raw },
+      { error: `Aucune image générée après 3 tentatives. ${detail}`, raw: trimRaw(last?.raw) },
       { status: 502 },
     )
 
@@ -198,10 +200,19 @@ async function callGemini(apiKey: string, body: string): Promise<GeminiAttempt> 
   const parts = candidate?.content?.parts ?? []
   for (const part of parts) {
     if (part?.inlineData?.mimeType?.startsWith('image/')) {
+      // Recompression JPEG q90 pour réduire la bande passante Vercel
+      // (Gemini renvoie souvent du PNG ~2-5 MB → JPEG ~300-700 KB).
+      const compressed = await compressGeminiImage(
+        part.inlineData.data,
+        part.inlineData.mimeType,
+        { format: 'jpeg', quality: 90 },
+      )
       return {
         ok: true, status: res.status,
-        imageUrl: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-        finishReason, blockReason, raw: data,
+        imageUrl: `data:${compressed.mime};base64,${compressed.base64}`,
+        finishReason, blockReason,
+        // Note : on NE renvoie PAS `raw: data` en succès — payload Gemini complet
+        // peut peser plusieurs MB (parts text/usage/etc.) sans utilité pour le client.
       }
     }
   }
@@ -225,6 +236,22 @@ function buildDetailMessage(att: GeminiAttempt): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * Tronque les payloads Gemini volumineux avant de les renvoyer au client.
+ * Évite que des `inlineData` parasites de plusieurs MB ne soient sérialisés
+ * dans les réponses d'erreur (gros impact sur la bande passante Vercel).
+ */
+function trimRaw(raw: unknown): unknown {
+  if (!raw) return raw
+  try {
+    const s = JSON.stringify(raw)
+    if (s.length <= 4_000) return raw
+    return { truncated: true, preview: s.slice(0, 4_000) + '…' }
+  } catch {
+    return { truncated: true, preview: '[non sérialisable]' }
+  }
 }
 
 /* ============================== framing ============================== */

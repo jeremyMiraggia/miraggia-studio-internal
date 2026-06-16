@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
+import { compressGeminiImage } from '@/lib/serverImageCompress'
 
 export const maxDuration = 300
+export const runtime = 'nodejs'
 
 export async function POST(request: Request) {
   try {
@@ -72,7 +74,14 @@ Résultat photographique professionnel, lumière cohérente entre sujet et fond,
 
     for (const part of parts) {
       if (part.inlineData?.mimeType?.startsWith('image/')) {
-        const imageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+        // Recompression server-side : PNG Gemini → JPEG q90, gain ~7-10× sur la
+        // bande passante sortante Vercel.
+        const compressed = await compressGeminiImage(
+          part.inlineData.data,
+          part.inlineData.mimeType,
+          { format: 'jpeg', quality: 90 },
+        )
+        const imageData = `data:${compressed.mime};base64,${compressed.base64}`
         return NextResponse.json({ imageUrl: imageData })
       }
     }
