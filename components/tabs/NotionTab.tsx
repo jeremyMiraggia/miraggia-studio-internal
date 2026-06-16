@@ -15,6 +15,7 @@ type TaskState = {
   status:  TaskStatus
   enabled: boolean
   imageUrl?: string
+  imageUrlStep1?: string   // step 1 du mode 2-étapes (fond blanc, conservé pour comparaison)
   error?:    string
   extractedEnv?:  string
   extractedPose?: string
@@ -144,6 +145,7 @@ export default function NotionTab() {
         status: 'running',
         error: undefined,
         imageUrl: undefined,
+        imageUrlStep1: undefined,
         extractedEnv: undefined,
         extractedPose: undefined,
         finalAttempt: undefined,
@@ -278,6 +280,10 @@ export default function NotionTab() {
             return
           }
 
+          // Step 1 OK : on stocke immédiatement le visuel fond blanc pour que l'utilisateur
+          // le voie pendant que la step 2 (swap) tourne (~30-60 s de plus).
+          updateState(item.task.id, { imageUrlStep1: data1.imageUrl })
+
           // ----- STEP 2 : swap fond -----
           const step1File = await dataUrlToFile(data1.imageUrl, `step1_look_${item.task.lookId}.png`)
           // Si CloseUpHaut, on crop le fond aux 30% du haut (mur seulement, pas de sol)
@@ -296,8 +302,10 @@ export default function NotionTab() {
           const shadowRule = isWallBehind
             ? 'SHADOW ON WALL (CRITICAL): do NOT cast any visible projected silhouette of the model on the new wall/backdrop. The model is standing IN FRONT OF the wall with normal depth between her body and the wall (~30-60 cm) — she is NOT pressed against it. The wall stays clean and lit by ambient diffuse light. A very subtle soft contact-AO darkening MAY appear only around her hair, shoulders and neck where her body genuinely occludes ambient light, but NEVER a hard projected silhouette of the head/shoulders on the wall.'
             : isFloorVisible
-              ? 'SHADOW ON FLOOR: cast a NATURAL, anatomically-correct soft shadow on the new ground that exactly follows the SILHOUETTE of the model in her current pose — the shape of the legs, the gap between the feet, the angle of the body, the arms if they protrude sideways. The shadow direction must match the existing key light visible in REFERENCE #2. Make it softer at the edges, darker and sharper only at the contact points (feet on the ground), and progressively faded with distance from the contact point. Do NOT paint a generic uniform dark oval or disc under the feet — that always looks fake. If the model has one foot forward, the shadow under that foot is more elongated; if both feet are together, the shadow stays compact under them. Match the floor material — on a glossy floor add a very subtle reflection, on matte concrete a soft diffuse penumbra.'
-              : 'SHADOW: keep the lighting/ambience natural and coherent with REFERENCE #2 — no hard projected silhouette, no fake dark oval.'
+              ? 'SHADOW ON FLOOR: cast a VERY LIGHT, VERY SOFT shadow on the new ground — just enough to ground the model in the scene, nothing more. Keep it discreet, almost subliminal: the eye should not focus on it. The shadow should faintly follow the SILHOUETTE of the body in her current pose, with a slight elongation in the direction opposite to the existing key light visible in REFERENCE #2. ABSOLUTELY NO REFLECTION on the floor — even if the floor looks polished, do NOT mirror the model. ABSOLUTELY NO dark uniform oval or disc under the feet — that always looks fake. ABSOLUTELY NO dark patch that competes with the model visually. Think of a soft diffuse penumbra on matte concrete: barely visible, slightly darker only right at the foot contact point, fading to nothing within 30-50 cm.'
+              : 'SHADOW: keep the lighting/ambience natural and coherent with REFERENCE #2 — no hard projected silhouette, no reflection on the floor, no fake dark oval.'
+
+          const vogueStyle = 'Vogue-style editorial photography. Shot on film, visible grain, subtle blur, slight motion softness. Imperfect focus, organic textures, realistic skin with no heavy retouching. Raw, intimate, spontaneous fashion moment. High-end but not overly polished.'
 
           const swapPrompt = [
             'You are given TWO images :',
@@ -312,6 +320,8 @@ export default function NotionTab() {
             '- The new background must be the EXACT pixel content of REFERENCE #2 — same color, same texture, same lighting direction, same gradient.',
             '- ' + shadowRule,
             '- Do NOT crop the model. Do NOT change the framing. Do NOT regenerate the person.',
+            '',
+            'PHOTOGRAPHIC STYLE : ' + vogueStyle,
             '',
             'Generate the composited image now.',
           ].join('\n')
@@ -328,11 +338,10 @@ export default function NotionTab() {
           const data2: any = await res2.json().catch(() => null)
           if (!res2.ok || !data2?.imageUrl) {
             const msg = (data2 && (data2.error || data2.message)) || `Step 2 HTTP ${res2.status}`
-            // On garde quand même la step 1 comme résultat de secours
+            // imageUrlStep1 est déjà set ; on marque la tâche done avec une erreur explicative.
             updateState(item.task.id, {
               status: 'done',
-              imageUrl: data1.imageUrl,
-              error: 'Step 2 échouée : ' + truncate(msg) + ' — image step 1 (fond blanc) conservée.',
+              error: 'Step 2 échouée : ' + truncate(msg) + ' — seul le visuel fond blanc (step 1) est disponible.',
             })
             done++
           } else {
@@ -696,7 +705,7 @@ function LookGroup({
 /* ============================== TaskRow ============================== */
 
 function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }) {
-  const { task, status, imageUrl, error, enabled } = state
+  const { task, status, imageUrl, imageUrlStep1, error, enabled } = state
   const color =
     status === 'done'    ? '#1F7A35'
     : status === 'error' ? '#9B1C1C'
@@ -787,17 +796,32 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
 
       <span style={{ ...statusPill, color, borderColor: color }}>{labelForStatus(status)}</span>
 
-      {imageUrl && (
+      {(imageUrl || imageUrlStep1) && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-          <img src={imageUrl} alt={task.id} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
-          <div style={{ display: 'flex', gap: 4 }}>
-            <a href={imageUrl} download={
-              task.taskType === 'detail'
-                ? `look_${task.numeroLook}_detail${(task.detailIndex ?? 0) + 1}.png`
-                : `look_${task.numeroLook}_vue${(task.vueIndex ?? 0) + 1}.png`
-            } style={styles.linkBtnDark}>⬇</a>
-            <a href={imageUrl} target="_blank" rel="noreferrer"                                  style={styles.linkBtnLight}>↗</a>
-          </div>
+          {imageUrlStep1 && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <img src={imageUrlStep1} alt={`${task.id}-step1`} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
+              <div style={{ fontSize: 9, color: '#6B7A8A', fontWeight: 600 }}>Step 1 · fond blanc</div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <a href={imageUrlStep1} download={`look_${task.numeroLook}_vue${(task.vueIndex ?? 0) + 1}_step1.png`} style={styles.linkBtnDark}>⬇</a>
+                <a href={imageUrlStep1} target="_blank" rel="noreferrer" style={styles.linkBtnLight}>↗</a>
+              </div>
+            </div>
+          )}
+          {imageUrl && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <img src={imageUrl} alt={task.id} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
+              {imageUrlStep1 && <div style={{ fontSize: 9, color: '#1F7A35', fontWeight: 700 }}>Step 2 · fond final</div>}
+              <div style={{ display: 'flex', gap: 4 }}>
+                <a href={imageUrl} download={
+                  task.taskType === 'detail'
+                    ? `look_${task.numeroLook}_detail${(task.detailIndex ?? 0) + 1}.png`
+                    : `look_${task.numeroLook}_vue${(task.vueIndex ?? 0) + 1}.png`
+                } style={styles.linkBtnDark}>⬇</a>
+                <a href={imageUrl} target="_blank" rel="noreferrer" style={styles.linkBtnLight}>↗</a>
+              </div>
+            </div>
+          )}
           {state.faceWasAvailable && (
             state.faceUsed
               ? <span style={facePreservedBadge} title="La face photo du mannequin a bien été envoyée à Gemini (1re tentative).">✓ visage préservé</span>
