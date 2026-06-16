@@ -5,6 +5,8 @@ import { readZipIndex, extractEntry, type ZipEntry } from './zipReader'
 import {
   parsePoseCell,
   poseToPrompt,
+  viewCropInstruction,
+  BACKGROUND_PRESERVATION_INSTRUCTION,
   NOTION_BOILERPLATE_HEADER,
   NOTION_BOILERPLATE_STYLE,
   type PoseLabel,
@@ -402,6 +404,8 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
     `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence, devant le fond "${look.fondName}" (référence en image fournie).`,
   )
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
+  parts.push(viewCropInstruction(pose.view))
+  parts.push(BACKGROUND_PRESERVATION_INSTRUCTION)
   if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
   if (look.description)   parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
@@ -432,11 +436,12 @@ function buildPosePromptWithBase(look: LookRow, pose: PoseLabel): string {
     `Photographie de mode professionnelle. Une image de RÉFÉRENCE DU LOOK COMPLET DÉJÀ SHOOTÉ est fournie (référence #1) : le mannequin "${look.mannequinName}" porte la tenue complète devant le fond "${look.fondName}", avec une certaine lumière et atmosphère.`,
   )
   parts.push(
-    `⚠ COHÉRENCE STRICTE — l'objectif est de produire une NOUVELLE VUE du MÊME LOOK, parfaitement cohérente avec la référence : MÊME mannequin (visage, morphologie, peau, cheveux, identité), MÊME tenue (chaque pièce, chaque détail), MÊME fond (lieu, palette, props), MÊME lumière (direction, qualité, température), MÊME atmosphère globale, MÊME esthétique photographique (focale ressentie, profondeur de champ, grain).`,
+    `⚠ COHÉRENCE STRICTE — l'objectif est de produire une NOUVELLE VUE du MÊME LOOK, parfaitement cohérente avec la référence : MÊME mannequin (visage, morphologie, peau, cheveux, identité), MÊME tenue (chaque pièce, chaque détail), MÊME fond (lieu, palette, props, couleur exacte, teinte, luminosité), MÊME lumière (direction, qualité, température), MÊME atmosphère globale, MÊME esthétique photographique (focale ressentie, profondeur de champ, grain).`,
   )
   parts.push(
     `Seule la POSE et le CADRAGE changent — NOUVELLE POSE : ${poseToPrompt(pose)}.`,
   )
+  parts.push(viewCropInstruction(pose.view))
   if (look.description) parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
   return parts.join('\n\n')
@@ -451,6 +456,7 @@ function buildDetailPrompt(look: LookRow, detailFile: File, model?: ModelDef): s
   parts.push(
     'Cadrage serré sur le détail, mise au point très précise sur la matière et le tombé, lumière qui révèle la texture, profondeur de champ très courte (f/2.0 ressenti), composition éditoriale.',
   )
+  parts.push(BACKGROUND_PRESERVATION_INSTRUCTION)
   if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
   if (look.description)   parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)

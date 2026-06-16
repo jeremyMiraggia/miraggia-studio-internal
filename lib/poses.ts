@@ -298,6 +298,37 @@ export const POSE_CATALOG: PoseCatalogItem[] = [
   { key: 'assise',                      description: 'Squat / accroupi profond, bras pliés sur les genoux.' },
 ]
 
+/* ============================== HARD CONSTRAINTS ============================== */
+
+/**
+ * Instruction de cadrage stricte selon la vue.
+ * À insérer DANS le prompt envoyé à Gemini pour forcer la composition.
+ * Sinon Gemini "déborde" souvent et montre tout (pieds quand on demande
+ * close-up haut, visage quand on demande close-up bas, etc.).
+ */
+export function viewCropInstruction(view: PoseView): string {
+  switch (view) {
+    case 'CloseUpHaut':
+      return '⚠ CADRAGE STRICT (priorité absolue) : la photo finale doit montrer UNIQUEMENT la tête, les épaules et le haut de la poitrine (half-body / bust shot). Ne montre JAMAIS les hanches, les jambes, les pieds, ni les chaussures. Si une chaussure ou un détail de jambe est visible dans les images de référence vêtement, IGNORE-le complètement. Crop au-dessus de la poitrine. C\'est NON-NÉGOCIABLE.'
+    case 'CloseUpBas':
+      return '⚠ CADRAGE STRICT (priorité absolue) : la photo finale doit montrer UNIQUEMENT le bas du corps (de la taille aux pieds, ou des genoux aux pieds). Ne montre JAMAIS le visage, la tête, ni le haut du buste. Crop sous la taille. Les chaussures et les jambes sont la star de la composition. C\'est NON-NÉGOCIABLE.'
+    case 'Front':
+      return '⚠ CADRAGE : plan américain face caméra, sujet visible de pied jusqu\'aux genoux (ou pieds compris si l\'inclut naturellement). Reste fidèle au cadrage demandé.'
+    case 'Side':
+      return '⚠ CADRAGE : plan américain en profil strict, sujet visible de pied jusqu\'aux genoux. Reste fidèle au cadrage demandé.'
+    case 'Back':
+      return '⚠ CADRAGE : plan américain dos complet caméra, sujet visible de la tête jusqu\'aux genoux. Reste fidèle au cadrage demandé.'
+  }
+}
+
+/**
+ * Instruction de préservation du fond.
+ * Gemini a tendance à modifier la teinte / couleur du fond pour "harmoniser"
+ * avec le sujet. On le force à respecter EXACTEMENT le fond de référence.
+ */
+export const BACKGROUND_PRESERVATION_INSTRUCTION =
+  '⚠ FOND STRICT (priorité absolue) : utilise EXACTEMENT le fond montré en image de référence. Conserve à l\'identique la couleur du fond, sa teinte, sa luminosité, sa température (chaud/froid), sa texture, ses zones d\'ombre et de lumière, et toute marque visible (transitions sol/mur, props, plinthes, etc.). N\'ajuste PAS la colorimétrie du fond pour l\'harmoniser avec la tenue. Le fond doit être visuellement IDENTIQUE au fichier de référence fourni.'
+
 /* ============================== BOILERPLATE ============================== */
 
 export const NOTION_BOILERPLATE_HEADER =
