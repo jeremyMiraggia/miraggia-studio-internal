@@ -53,9 +53,16 @@ export default function CompositeTab() {
 
     const sizeGB = files[0].size / (1024 * 1024 * 1024)
     if (sizeGB > 10.0) {
-      setGlobalError(`Le ZIP fait ${sizeGB.toFixed(1)} GB — au-delà de 10 GB. Découpe l'export.`)
+      setGlobalError(`Le ZIP fait ${sizeGB.toFixed(1)} GB — au-delà de la limite pratique (~10 GB). Découpe l'export.`)
       setZips([])
       return
+    }
+    if (sizeGB > 3.0) {
+      const limitSet = lookLimit.trim() && Number(lookLimit) > 0
+      setProgress(
+        `ZIP volumineux (${sizeGB.toFixed(1)} GB)` +
+        (limitSet ? ` — limité aux ${lookLimit} premiers looks ✓` : ' — pense à remplir "Limite looks" pour un premier essai rapide (ex : 3)'),
+      )
     }
 
     setParsing(true)
@@ -245,10 +252,22 @@ export default function CompositeTab() {
         → composite sur les <strong>pixels exacts</strong> du fond de référence → ombre synthétique soft.
         <br />
         <em>Premier run : ~30 s de download du modèle de segmentation (cache navigateur après).</em>
+        <br />
+        💡 <strong>Gros ZIP (5 GB+) ?</strong> Remplis "Limite looks" <em>avant</em> de drop le ZIP (ex : 3) pour ne parser/extraire que les premiers looks.
       </p>
 
-      <Dropzone files={zips} onChange={handleZipChange} accept=".zip" multiple={false}
-        label="Glisse-dépose ton export Notion (.zip)" />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 200px', gap: 12, alignItems: 'end', marginBottom: 8 }}>
+        <Dropzone files={zips} onChange={handleZipChange} accept=".zip" multiple={false}
+          label="Glisse-dépose ton export Notion (.zip)" />
+        <div>
+          <label style={styles.label}>Limite looks (avant le drop)</label>
+          <input value={lookLimit} onChange={e => setLookLimit(e.target.value)} placeholder="ex : 3"
+            style={styles.input} type="number" min="1" />
+          <div style={{ fontSize: 10, color: '#6B7A8A', marginTop: 4 }}>
+            Pour tester sur N looks seulement, indispensable pour les gros ZIPs (4-5 GB+).
+          </div>
+        </div>
+      </div>
 
       {parsing && <div style={styles.info}>📦 Parsing en cours… {progress}</div>}
       {globalError && <div style={styles.errorBox}>⚠ {globalError}</div>}
@@ -478,7 +497,6 @@ const styles: Record<string, React.CSSProperties> = {
   errorBox:  { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, whiteSpace: 'pre-wrap' },
   statsBox:  { background: '#E8F2F5', color: '#0D4A5C', borderRadius: 8, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, marginTop: 12 },
   emptyState:{ textAlign: 'center', padding: '60px 24px', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff', lineHeight: 1.5 },
-  lookCard:  { background: '#fff', borderRadius: 10, border: '1px solid rgba(13,74,92,0.1)', overflow: 'hidden' },
   lookHead:  { padding: '10px 14px', background: '#F5F7F9', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', borderBottom: '1px solid rgba(13,74,92,0.08)' },
 }
 
