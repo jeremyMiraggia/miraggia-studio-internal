@@ -10,18 +10,20 @@ import LifestyleTab  from '@/components/tabs/LifestyleTab'
 import VideoTab      from '@/components/tabs/VideoTab'
 import NotionTab        from '@/components/tabs/NotionTab'
 import NotionInternalTab from '@/components/tabs/NotionInternalTab'
+import CompositeTab      from '@/components/tabs/CompositeTab'
 
 const TABS = [
-  { id: 'simple',     label: '🖼️ Simple' },
+  { id: 'simple',          label: '🖼️ Simple' },
   { id: 'notion',          label: '📥 Notion' },
   { id: 'notion-internal', label: '📥 Notion Internal' },
-  { id: 'lookbook',   label: '👗 Lookbook' },
-  { id: 'ghost',      label: '👻 Ghost' },
-  { id: 'lifestyle',  label: '🌴 Lifestyle' },
-  { id: 'video',      label: '🎬 Video' },
-  { id: 'batch',      label: '📋 Batch' },
-  { id: 'free',       label: '🧠 Free Prompt' },
-  { id: 'extract',    label: '🔍 Extracteur' },
+  { id: 'composite',       label: '🎯 Composite (test)' },
+  { id: 'lookbook',        label: '👗 Lookbook' },
+  { id: 'ghost',           label: '👻 Ghost' },
+  { id: 'lifestyle',       label: '🌴 Lifestyle' },
+  { id: 'video',           label: '🎬 Video' },
+  { id: 'batch',           label: '📋 Batch' },
+  { id: 'free',            label: '🧠 Free Prompt' },
+  { id: 'extract',         label: '🔍 Extracteur' },
 ]
 
 export default function StudioPage() {
@@ -40,7 +42,7 @@ export default function StudioPage() {
               background: tab === t.id ? '#E8F2F5' : 'transparent',
               color: tab === t.id ? '#0D4A5C' : '#6B7A8A',
               borderLeft: tab === t.id ? '3px solid #0D4A5C' : '3px solid transparent',
-              transition: 'all 0.15s'
+              transition: 'all 0.15s',
             }}
           >
             {t.label}
@@ -50,16 +52,17 @@ export default function StudioPage() {
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
-        {tab === 'simple'    && <SimpleTab />}
+        {tab === 'simple'          && <SimpleTab />}
         {tab === 'notion'          && <NotionTab />}
         {tab === 'notion-internal' && <NotionInternalTab />}
-        {tab === 'lookbook'  && <LookbookTab />}
-        {tab === 'ghost'     && <GhostTab />}
-        {tab === 'lifestyle' && <LifestyleTab />}
-        {tab === 'video'     && <VideoTab />}
-        {tab === 'batch'     && <BatchTab />}
-        {tab === 'free'      && <FreePromptTab />}
-        {tab === 'extract'   && <ExtractTab />}
+        {tab === 'composite'       && <CompositeTab />}
+        {tab === 'lookbook'        && <LookbookTab />}
+        {tab === 'ghost'           && <GhostTab />}
+        {tab === 'lifestyle'       && <LifestyleTab />}
+        {tab === 'video'           && <VideoTab />}
+        {tab === 'batch'           && <BatchTab />}
+        {tab === 'free'            && <FreePromptTab />}
+        {tab === 'extract'         && <ExtractTab />}
       </div>
     </div>
   )
