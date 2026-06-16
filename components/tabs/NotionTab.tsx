@@ -288,6 +288,17 @@ export default function NotionTab() {
           const bgCompressed = await compressImage(targetBg, { maxSide: 2048, quality: 0.92 })
           const step1Compressed = await compressImage(step1File, { maxSide: 2048, quality: 0.92 })
 
+          // Instructions d'ombre adaptées au cadrage de la tâche
+          const framing = item.task.framingHint ?? 'plein'
+          const isFloorVisible = framing === 'plein' || framing === 'bas'
+          const isWallBehind   = framing === 'haut' || framing === 'mi-corps'
+
+          const shadowRule = isWallBehind
+            ? 'SHADOW ON WALL (CRITICAL): do NOT cast any visible projected silhouette of the model on the new wall/backdrop. The model is standing IN FRONT OF the wall with normal depth between her body and the wall (~30-60 cm) — she is NOT pressed against it. The wall stays clean and lit by ambient diffuse light. A very subtle soft contact-AO darkening MAY appear only around her hair, shoulders and neck where her body genuinely occludes ambient light, but NEVER a hard projected silhouette of the head/shoulders on the wall.'
+            : isFloorVisible
+              ? 'SHADOW ON FLOOR: cast a NATURAL, anatomically-correct soft shadow on the new ground that exactly follows the SILHOUETTE of the model in her current pose — the shape of the legs, the gap between the feet, the angle of the body, the arms if they protrude sideways. The shadow direction must match the existing key light visible in REFERENCE #2. Make it softer at the edges, darker and sharper only at the contact points (feet on the ground), and progressively faded with distance from the contact point. Do NOT paint a generic uniform dark oval or disc under the feet — that always looks fake. If the model has one foot forward, the shadow under that foot is more elongated; if both feet are together, the shadow stays compact under them. Match the floor material — on a glossy floor add a very subtle reflection, on matte concrete a soft diffuse penumbra.'
+              : 'SHADOW: keep the lighting/ambience natural and coherent with REFERENCE #2 — no hard projected silhouette, no fake dark oval.'
+
           const swapPrompt = [
             'You are given TWO images :',
             '- REFERENCE #1 : a fashion photo of a model on a PURE WHITE background.',
@@ -296,10 +307,10 @@ export default function NotionTab() {
             '⚠ TASK : Replace the white background of REFERENCE #1 with the EXACT backdrop of REFERENCE #2.',
             '',
             'STRICT REQUIREMENTS :',
-            '- The MODEL must remain 100% IDENTICAL to REFERENCE #1 — same face, same body, same pose, same outfit, same skin texture, same hair, same shadows on the body.',
+            '- The MODEL must remain 100% IDENTICAL to REFERENCE #1 — same face, same body, same pose, same outfit, same skin texture, same hair, same shadows ON THE BODY itself (self-shadowing of the body).',
             '- Only the background (the white area surrounding the model) is replaced.',
             '- The new background must be the EXACT pixel content of REFERENCE #2 — same color, same texture, same lighting direction, same gradient.',
-            '- Add a subtle natural shadow under the model\'s feet that is coherent with the new floor (if visible) or with the wall lighting.',
+            '- ' + shadowRule,
             '- Do NOT crop the model. Do NOT change the framing. Do NOT regenerate the person.',
             '',
             'Generate the composited image now.',
