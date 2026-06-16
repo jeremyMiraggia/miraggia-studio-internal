@@ -385,9 +385,16 @@ export default function CompositeTab() {
         <div style={styles.emptyState}>
           📦 Drop ton export Notion (.zip) pour commencer.<br />
           <span style={{ fontSize: 11 }}>Le runner ne traite que les poses (pas les détails) en mode Composite.</span>
+
+          <div style={{ marginTop: 20, padding: 14, background: '#FFF8E1', border: '1px solid #F1D78A', borderRadius: 8, textAlign: 'left', color: '#7A4F00', fontSize: 12, lineHeight: 1.5 }}>
+            💡 <strong>Gros ZIP (3-10 GB) ?</strong> Renseigne le champ <strong>"Limite looks"</strong> (à droite du Dropzone) <em>avant</em> de drop le fichier.
+            Le parseur lit alors le ZIP en lazy et n'extrait que les images des N premiers looks — pas besoin de tout charger pour tester.
+            <br />Exemple : pour un test rapide, mets <code>2</code> ou <code>3</code>.
+          </div>
+
           <div style={{ marginTop: 16, fontSize: 11, color: '#6B7A8A', textAlign: 'left' }}>
-            <strong>Vues supportées</strong> : {VIEW_CATALOG.join(', ')}<br />
-            <strong>Poses supportées</strong> : {POSE_CATALOG.join(', ')}
+            <strong>Vues supportées</strong> : {VIEW_CATALOG.map(v => v.label ?? v.key).join(', ')}<br />
+            <strong>Poses supportées</strong> : {POSE_CATALOG.map(p => p.key).join(', ')}
           </div>
         </div>
       )}
