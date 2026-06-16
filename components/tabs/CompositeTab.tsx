@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, compositeOnBackground, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { segmentForeground, compositeOnBackground, blobToDataUrl, dataUrlToBlob, SHADOW_ADD_PROMPT } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -19,13 +19,12 @@ type TaskState = {
   error?: string
   faceUsed?:         boolean
   faceWasAvailable?: boolean
-  progressStep?: 'gemini' | 'segment' | 'composite' | 'done'
+  progressStep?: 'gemini' | 'segment' | 'composite' | 'shadow' | 'done'
 }
 
 export default function CompositeTab() {
   const [concurrency, setConcurrency]   = useState<number>(2)
-  const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)
-  const [shadowOpacity, setShadowOpacity] = useState<number>(0.30)
+  const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)   // active la passe Gemini "ajoute une ombre"
   const [lookLimit, setLookLimit] = useState<string>('')
 
   const [zips, setZips]               = useState<File[]>([])
@@ -183,13 +182,48 @@ export default function CompositeTab() {
 
         // ===== Étape 3 : Composite =====
         setProgress(`Composite · look ${item.task.numeroLook} · ${done + errors}/${total}`)
-        const finalFile = await compositeOnBackground(segmented, item.task.backgroundFile, {
-          addShadow:     shadowEnabled,
-          shadowOpacity: shadowOpacity,
+        const framing = item.task.framingHint ?? 'plein'
+        const compositeFile = await compositeOnBackground(segmented, item.task.backgroundFile, {
+          framingHint: framing,
         })
-        const finalDataUrl = await blobToDataUrl(finalFile)
+        let finalDataUrl = await blobToDataUrl(compositeFile)
         updateState(item.task.id, {
           imageUrl:     finalDataUrl,
+          progressStep: 'composite',
+        })
+
+        // ===== Étape 4 : Passe Gemini "ajoute une ombre" =====
+        // Seulement quand le sol est visible (plein pied / close-up bas).
+        // Pour close-up haut (mur derrière, sol croppé) → pas d'ombre.
+        const needsShadow = shadowEnabled && (framing === 'plein' || framing === 'bas')
+        if (needsShadow) {
+          setProgress(`Ombre Gemini · look ${item.task.numeroLook} · ${done + errors}/${total}`)
+          updateState(item.task.id, { progressStep: 'shadow' })
+
+          try {
+            const compressedComposite = await compressImage(compositeFile, { maxSide: 2048, quality: 0.92 })
+            const fdShadow = new FormData()
+            fdShadow.append('prompt',  SHADOW_ADD_PROMPT)
+            fdShadow.append('ratio',   ratio)
+            fdShadow.append('quality', quality)
+            fdShadow.append('refs',    compressedComposite)
+
+            const resShadow = await fetch('/api/studio/free', { method: 'POST', body: fdShadow })
+            const dataShadow: any = await resShadow.json().catch(() => null)
+            if (resShadow.ok && dataShadow?.imageUrl) {
+              finalDataUrl = dataShadow.imageUrl
+              updateState(item.task.id, { imageUrl: finalDataUrl })
+            } else {
+              // Échec de la passe ombre : on garde le composite sans ombre
+              // (pas d'erreur fatale — l'image est utilisable mais "flottante").
+              console.warn('[composite] passe ombre Gemini échouée :', dataShadow?.error || resShadow.status)
+            }
+          } catch (err: any) {
+            console.warn('[composite] passe ombre Gemini exception :', err?.message)
+          }
+        }
+
+        updateState(item.task.id, {
           status:       'done',
           progressStep: 'done',
         })
@@ -310,16 +344,16 @@ export default function CompositeTab() {
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(13,74,92,0.08)' }}>
               <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer' }}>
                 <input type="checkbox" checked={shadowEnabled} onChange={e => setShadowEnabled(e.target.checked)} />
-                Ombre synthétique sous les pieds
+                Ajouter une ombre via passe Gemini (sol visible uniquement)
               </label>
-              {shadowEnabled && (
-                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 11, color: '#6B7A8A' }}>Opacité ombre :</span>
-                  <input type="range" min="0.05" max="0.55" step="0.02"
-                    value={shadowOpacity} onChange={e => setShadowOpacity(Number(e.target.value))} />
-                  <span style={{ fontSize: 11, color: '#0D4A5C', fontWeight: 600, width: 40 }}>{(shadowOpacity * 100).toFixed(0)}%</span>
-                </div>
-              )}
+              <p style={{ fontSize: 11, color: '#6B7A8A', marginTop: 4, lineHeight: 1.5 }}>
+                Pour les <strong>plein pied</strong> et <strong>close-up bas</strong>, une 4e passe Gemini ajoute
+                une ombre naturelle au sol (préservation pixel-perfect du reste).
+                <br />
+                Pour les <strong>close-up haut</strong>, pas d&apos;ombre (le bg est croppé aux 30 % du haut pour ne pas voir le sol).
+                <br />
+                Coût : <strong>+1 appel Gemini</strong> par visuel concerné.
+              </p>
             </div>
 
             <div style={styles.statsBox}>
@@ -416,6 +450,7 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
     gemini:    '1️⃣ Gemini',
     segment:   '2️⃣ Segmentation',
     composite: '3️⃣ Composite',
+    shadow:    '4️⃣ Ombre Gemini',
     done:      '✓ Done',
   }
 

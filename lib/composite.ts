@@ -7,11 +7,16 @@
  *     → on extrait le mannequin sur fond transparent.
  *  3. Composite Canvas : on dessine les PIXELS EXACTS du fond de référence,
  *     puis on pose le mannequin extrait par-dessus.
- *  4. (optionnel) Ombre synthétique soft sous les pieds, ellipse aplatie
- *     centrée sur la base du mannequin détectée.
+ *     - Pour les close-up haut (sol non visible) : crop le bg aux 30% du haut
+ *       AVANT de composer, pour éviter de voir le sol derrière la tête.
+ *  4. (côté CompositeTab) — pour les framings où le sol est visible (plein
+ *     pied, bas), une 4e passe Gemini ajoute une ombre naturelle sous les
+ *     pieds en préservant le reste pixel-pour-pixel.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+import { cropTopPercent } from '@/lib/imageCrop'
 
 // Lazy-loaded segmenter ; le 1er load télécharge ~80 MB de modèle ONNX.
 let _segmenter: ((input: Blob | string | ArrayBuffer) => Promise<Blob>) | null = null
@@ -42,28 +47,40 @@ export async function segmentForeground(
   return result
 }
 
+export type CompositeOptions = {
+  /**
+   * Si défini sur 'haut' (close-up haut), on crop le fond aux 30% du haut
+   * avant le composite — ainsi on ne voit pas le sol derrière la tête.
+   */
+  framingHint?: string
+}
+
 /**
  * Composite : pose le mannequin (PNG transparent) sur le fond de référence.
  * Le canvas final a la résolution du mannequin (= sortie Gemini).
+ *
+ * Pas d'ombre ajoutée ici — l'ombre est gérée par une passe Gemini
+ * supplémentaire côté runner (seulement quand le sol est visible).
  */
 export async function compositeOnBackground(
   segmentedPng: Blob,
   backgroundFile: File,
-  options: {
-    addShadow?: boolean
-    /** opacité max au centre (default 0.18). */
-    shadowOpacity?: number
-    /** facteur d'élargissement de l'ombre par rapport à la largeur des pieds (default 1.6). */
-    shadowSpreadFactor?: number
-  } = {},
+  options: CompositeOptions = {},
 ): Promise<File> {
-  const addShadow         = options.addShadow         ?? true
-  const shadowOpacity     = options.shadowOpacity     ?? 0.30
-  const shadowSpreadFactor= options.shadowSpreadFactor?? 2.5
+  // Pour close-up haut : on coupe le fond pour ne garder que la partie
+  // haute (mur), pas de sol visible derrière la tête.
+  let bgFile = backgroundFile
+  if (options.framingHint === 'haut') {
+    try {
+      bgFile = await cropTopPercent(backgroundFile, 30)
+    } catch (err) {
+      console.warn('[composite] cropTopPercent fallback:', err)
+    }
+  }
 
   const [modelBmp, bgBmp] = await Promise.all([
     createImageBitmap(segmentedPng),
-    createImageBitmap(backgroundFile),
+    createImageBitmap(bgFile),
   ])
 
   const W = modelBmp.width
@@ -75,20 +92,7 @@ export async function compositeOnBackground(
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Impossible d\'obtenir le contexte 2D du canvas.')
 
-  // 1) Fond de référence (cover-fit aux dimensions du mannequin)
   drawCover(ctx, bgBmp, W, H)
-
-  // 2) Ombre synthétique sous les pieds (avant le mannequin pour qu'elle soit derrière)
-  if (addShadow) {
-    let feet = await detectModelFeet(segmentedPng, W, H)
-    if (!feet) {
-      // Fallback : ombre par défaut centrée au bas du canvas
-      feet = { cx: W / 2, bottom: H - 8, width: W * 0.18 }
-    }
-    drawShadowEllipse(ctx, feet, shadowOpacity, shadowSpreadFactor)
-  }
-
-  // 3) Mannequin par-dessus
   ctx.drawImage(modelBmp, 0, 0)
 
   return new Promise<File>((resolve, reject) => {
@@ -114,84 +118,6 @@ function drawCover(ctx: CanvasRenderingContext2D, bmp: ImageBitmap, W: number, H
   ctx.drawImage(bmp, x, y, w, h)
 }
 
-/**
- * Détecte la position des pieds (= bas du sujet segmenté).
- * Renvoie le centre horizontal, la position Y du bas, et la largeur du bas.
- */
-async function detectModelFeet(
-  segmentedPng: Blob,
-  W: number,
-  H: number,
-): Promise<{ cx: number; bottom: number; width: number } | null> {
-  const bmp = await createImageBitmap(segmentedPng)
-  // Canvas off-screen pour scanner les pixels
-  const off = document.createElement('canvas')
-  off.width = W
-  off.height = H
-  const offCtx = off.getContext('2d')
-  if (!offCtx) return null
-  offCtx.drawImage(bmp, 0, 0, W, H)
-  let data: Uint8ClampedArray
-  try {
-    data = offCtx.getImageData(0, 0, W, H).data
-  } catch {
-    return null
-  }
-
-  // Scan from bottom : trouver la 1re row contenant du sujet (alpha > 128)
-  for (let y = H - 1; y >= 0; y--) {
-    let minX = -1, maxX = -1
-    for (let x = 0; x < W; x++) {
-      const alpha = data[(y * W + x) * 4 + 3]
-      if (alpha > 128) {
-        if (minX < 0) minX = x
-        maxX = x
-      }
-    }
-    if (minX >= 0) {
-      return { cx: (minX + maxX) / 2, bottom: y, width: maxX - minX + 1 }
-    }
-  }
-  return null
-}
-
-function drawShadowEllipse(
-  ctx: CanvasRenderingContext2D,
-  feet: { cx: number; bottom: number; width: number },
-  opacity: number,
-  spread: number,
-) {
-  // Largeur de base de l'ombre : aux moins 60 % de la largeur du canvas
-  // garanti pour que ça soit visible même si la détection des pieds
-  // n'a trouvé qu'une zone étroite (un seul pied vers l'avant par ex).
-  const minFeetWidth = Math.max(feet.width, ctx.canvas.width * 0.12)
-  const rx = (minFeetWidth / 2) * spread
-  const ry = Math.max(14, rx * 0.28)
-  const cx = feet.cx
-  // Centre VERTICALEMENT sur la ligne des pieds : la moitié haute est
-  // cachée par le mannequin (= contact shadow propre), la moitié basse
-  // s'étend dans le sol et reste visible.
-  const cy = feet.bottom
-
-  ctx.save()
-  // Radial gradient au lieu de filter blur : opacité contrôlable, fade
-  // smooth, ne dépend pas du support filter (qui peut foirer selon navigateur).
-  // Astuce : on travaille en espace transformé (cercle) qu'on aplatit en
-  // ellipse via scale, ce qui garde le gradient circulaire.
-  ctx.translate(cx, cy)
-  ctx.scale(1, ry / rx)
-  const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx)
-  grad.addColorStop(0.0, `rgba(0,0,0,${opacity})`)
-  grad.addColorStop(0.4, `rgba(0,0,0,${(opacity * 0.55).toFixed(3)})`)
-  grad.addColorStop(0.8, `rgba(0,0,0,${(opacity * 0.12).toFixed(3)})`)
-  grad.addColorStop(1.0, 'rgba(0,0,0,0)')
-  ctx.fillStyle = grad
-  ctx.beginPath()
-  ctx.arc(0, 0, rx, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.restore()
-}
-
 /* ============================== utils ============================== */
 
 export function blobToDataUrl(blob: Blob): Promise<string> {
@@ -207,3 +133,27 @@ export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const res = await fetch(dataUrl)
   return res.blob()
 }
+
+/**
+ * Prompt pour la passe Gemini "ajoute une ombre naturelle" sur le composite.
+ * Utilisé seulement pour plein pied et close-up bas (où le sol est visible).
+ */
+export const SHADOW_ADD_PROMPT = [
+  'You are given a fashion editorial composite where a model has been pasted on a background scene. CURRENTLY THERE IS NO SHADOW under the model\'s feet — she looks like she is floating slightly above the ground, which is not realistic.',
+  '',
+  'ABSOLUTE TASK: Add ONE natural soft shadow on the floor directly under the model\'s feet.',
+  '',
+  'PRESERVATION (CRITICAL — pixel-perfect, do NOT alter):',
+  '- The model herself : face, hair, skin, outfit, pose, all clothing details → 100 % identical to the input.',
+  '- The background : walls, floor texture and color, lighting, all existing scene elements → 100 % identical to the input.',
+  '- The framing, the camera angle, the composition → 100 % identical to the input.',
+  '',
+  'THE ONLY ADDITION (one soft shadow on the floor):',
+  '- Shape : follows the model\'s silhouette in her current pose (gap between feet, leg angle, body weight distribution).',
+  '- Direction : matches the existing key light visible in the scene.',
+  '- Color : tinted by the floor material (NOT pure black — slightly darker version of the floor color).',
+  '- Intensity : subtle, editorial, ~20-30 % darker than the floor at the contact points, fading to nothing within ~40-50 cm.',
+  '- Style : a real, believable fashion editorial photograph shadow.',
+  '',
+  'The output must be VISUALLY INDISTINGUISHABLE from the input EXCEPT for the added shadow under the feet. Do NOT regenerate or restyle anything else.',
+].join('\n')
