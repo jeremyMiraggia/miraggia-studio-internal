@@ -13,6 +13,7 @@ import {
   NOTION_BOILERPLATE_STYLE,
   type PoseLabel,
   type PoseView,
+  type PoseOrientation,
 } from '@/lib/poses'
 
 function friendlyZipError(file: File, err: any, nested = false): Error {
@@ -310,7 +311,7 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
       else w.push(`Aucun fond disponible (ni dans le CSV Fonds, ni associé au mannequin "${look.mannequinName}").`)
 
       // Choix des fichiers vêtement selon la VUE
-      const vueRefs = filesForView(pose.view, look)
+      const vueRefs = filesForOrientation(pose.orientation, look)
       for (const f of vueRefs.files) refs.push(f)
       for (const wmsg of vueRefs.warnings) w.push(wmsg)
 
@@ -382,25 +383,42 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
 
 /* ============================== Builders ============================== */
 
-function filesForView(view: PoseView, look: LookRow): { files: File[], warnings: string[] } {
+/**
+ * Sélectionne les fichiers vêtement selon l'ORIENTATION du sujet (Front / Side / Back).
+ *
+ *  - Front → FILES (FRONT) uniquement (le mannequin est de face, on voit le devant des vêtements)
+ *  - Back  → FILES (BACK)  uniquement (le mannequin est de dos, on voit le dos des vêtements)
+ *  - Side  → FILES (FRONT) + FILES (BACK) (de profil, on voit les deux côtés)
+ *
+ * ⚠ Indépendant du FRAMING (close-up, plein pied, etc.) : c'est uniquement
+ * l'orientation qui dicte quel côté du vêtement est visible et donc quels
+ * fichiers de référence envoyer à Gemini.
+ */
+function filesForOrientation(orientation: PoseOrientation, look: LookRow): { files: File[], warnings: string[] } {
   const w: string[] = []
   let files: File[] = []
 
-  switch (view) {
+  switch (orientation) {
     case 'Back':
       files = look.filesBack
-      if (look.filesBack.length === 0) w.push('Aucun fichier dans FILES (BACK) — vue Back impossible à habiller.')
+      if (look.filesBack.length === 0) {
+        // Fallback : si pas de BACK fourni, on tente quand même avec FRONT
+        files = look.filesFront
+        if (look.filesFront.length === 0) {
+          w.push('Aucun fichier dans FILES (BACK) ni FILES (FRONT) — vue de dos impossible à habiller.')
+        } else {
+          w.push('FILES (BACK) vide — fallback sur FILES (FRONT) (Gemini doit inférer le dos).')
+        }
+      }
       break
 
     case 'Side':
       files = [...look.filesFront, ...look.filesBack]
-      if (look.filesFront.length === 0) w.push('FILES (FRONT) vide — vue Side incomplète.')
-      if (look.filesBack.length  === 0) w.push('FILES (BACK) vide — vue Side incomplète.')
+      if (look.filesFront.length === 0) w.push('FILES (FRONT) vide — vue Side incomplète sans le devant.')
+      if (look.filesBack.length  === 0) w.push('FILES (BACK) vide — vue Side incomplète sans le dos.')
       break
 
     case 'Front':
-    case 'CloseUpHaut':
-    case 'CloseUpBas':
     default:
       files = look.filesFront
       if (look.filesFront.length === 0) w.push('Aucun fichier dans FILES (FRONT).')
