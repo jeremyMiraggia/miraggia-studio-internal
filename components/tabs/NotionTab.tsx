@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
+import { cropTopPercent, createWhiteBackground } from '@/lib/imageCrop'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
 import { parseInspiExport, buildInspiPrompt } from '@/lib/notion/parseInspiExport'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
@@ -28,6 +29,7 @@ export default function NotionTab() {
   const [mode, setMode]               = useState<Mode>('batch')
   const [concurrency, setConcurrency] = useState<number>(2)
   const [coherenceMode, setCoherenceMode] = useState<boolean>(false)
+  const [twoStepMode, setTwoStepMode]     = useState<boolean>(false)
   const [lookLimit, setLookLimit] = useState<string>('')
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
@@ -243,6 +245,98 @@ export default function NotionTab() {
         const canStructure = !hasOverride && item.task.taskType !== 'inspi'
                              && !!item.task.bodyPhotoFile && !!item.task.backgroundFile
 
+        // ===== MODE 2 ÉTAPES (test) =====
+        // Step 1 : génère le visuel sur fond BLANC.
+        // Step 2 : swap le fond blanc avec le fond réel (croppé si close-up haut).
+        if (twoStepMode && canStructure && item.task.taskType === 'pose') {
+          // ----- STEP 1 : fond blanc -----
+          const body  = await compressImage(item.task.bodyPhotoFile!, { maxSide: 2048, quality: 0.90 })
+          const white = await createWhiteBackground(1024, 1536)
+          const prods = await compressAll(item.task.productFiles ?? [], { maxSide: 2048, quality: 0.85 })
+          const fd1 = new FormData()
+          fd1.append('prompt',  promptToUse + '\n\n⚠ STEP 1/2 : génère sur fond BLANC PUR uni neutre. Pas de décor. Pas de sol visible. Studio backdrop blanc seamless. Le fond sera changé en étape 2.')
+          fd1.append('ratio',   ratio)
+          fd1.append('quality', quality)
+          fd1.append('mannequinBody', body)
+          fd1.append('background',    white)
+          for (const p of prods) fd1.append('products', p)
+          if (item.task.facePhotoFile) {
+            const face = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
+            fd1.append('mannequinFace', face)
+          }
+          fd1.append('framing',        item.task.framingHint ?? 'plein')
+          fd1.append('mannequinLabel', item.task.mannequinName)
+          fd1.append('decorLabel',     'plain white seamless backdrop')
+
+          setProgress(`Step 1/2 (fond blanc) · look ${item.task.numeroLook} · ${done + errors}/${total} traités`)
+          const res1 = await fetch('/api/studio/free', { method: 'POST', body: fd1 })
+          const data1: any = await res1.json().catch(() => null)
+          if (!res1.ok || !data1?.imageUrl) {
+            const msg = (data1 && (data1.error || data1.message)) || `Step 1 HTTP ${res1.status}`
+            updateState(item.task.id, { status: 'error', error: truncate('Step 1 : ' + msg) })
+            errors++
+            return
+          }
+
+          // ----- STEP 2 : swap fond -----
+          const step1File = await dataUrlToFile(data1.imageUrl, `step1_look_${item.task.lookId}.png`)
+          // Si CloseUpHaut, on crop le fond aux 30% du haut (mur seulement, pas de sol)
+          let targetBg = item.task.backgroundFile!
+          if (item.task.framingHint === 'haut') {
+            targetBg = await cropTopPercent(item.task.backgroundFile!, 30)
+          }
+          const bgCompressed = await compressImage(targetBg, { maxSide: 2048, quality: 0.92 })
+          const step1Compressed = await compressImage(step1File, { maxSide: 2048, quality: 0.92 })
+
+          const swapPrompt = [
+            'You are given TWO images :',
+            '- REFERENCE #1 : a fashion photo of a model on a PURE WHITE background.',
+            '- REFERENCE #2 : a target backdrop image.',
+            '',
+            '⚠ TASK : Replace the white background of REFERENCE #1 with the EXACT backdrop of REFERENCE #2.',
+            '',
+            'STRICT REQUIREMENTS :',
+            '- The MODEL must remain 100% IDENTICAL to REFERENCE #1 — same face, same body, same pose, same outfit, same skin texture, same hair, same shadows on the body.',
+            '- Only the background (the white area surrounding the model) is replaced.',
+            '- The new background must be the EXACT pixel content of REFERENCE #2 — same color, same texture, same lighting direction, same gradient.',
+            '- Add a subtle natural shadow under the model\'s feet that is coherent with the new floor (if visible) or with the wall lighting.',
+            '- Do NOT crop the model. Do NOT change the framing. Do NOT regenerate the person.',
+            '',
+            'Generate the composited image now.',
+          ].join('\n')
+
+          const fd2 = new FormData()
+          fd2.append('prompt',  swapPrompt)
+          fd2.append('ratio',   ratio)
+          fd2.append('quality', quality)
+          fd2.append('refs',    step1Compressed)
+          fd2.append('refs',    bgCompressed)
+
+          setProgress(`Step 2/2 (swap fond) · look ${item.task.numeroLook} · ${done + errors}/${total} traités`)
+          const res2 = await fetch('/api/studio/free', { method: 'POST', body: fd2 })
+          const data2: any = await res2.json().catch(() => null)
+          if (!res2.ok || !data2?.imageUrl) {
+            const msg = (data2 && (data2.error || data2.message)) || `Step 2 HTTP ${res2.status}`
+            // On garde quand même la step 1 comme résultat de secours
+            updateState(item.task.id, {
+              status: 'done',
+              imageUrl: data1.imageUrl,
+              error: 'Step 2 échouée : ' + truncate(msg) + ' — image step 1 (fond blanc) conservée.',
+            })
+            done++
+          } else {
+            updateState(item.task.id, {
+              status: 'done',
+              imageUrl: data2.imageUrl,
+              finalAttempt: 2,
+              faceUsed: !!item.task.facePhotoFile,
+              faceWasAvailable: !!item.task.facePhotoFile,
+            })
+            done++
+          }
+          return
+        }
+
         if (canStructure) {
           const body  = await compressImage(item.task.bodyPhotoFile!, { maxSide: 2048, quality: 0.90 })
           const bg    = await compressImage(item.task.backgroundFile!, { maxSide: 2048, quality: 0.92 })
@@ -434,6 +528,16 @@ export default function NotionTab() {
                 <strong>Désactivé par défaut</strong> : chaque pose est générée indépendamment avec le fond + mannequin envoyés fraîchement (fond toujours fidèle à la référence — comme la plateforme principale).
                 <br /><br />
                 Si activé : les poses 2/3/4 utilisent la pose 1 comme base, ce qui améliore la cohérence visuelle entre poses mais peut faire dériver le fond.
+              </p>
+
+              <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer' }}>
+                <input type="checkbox" checked={twoStepMode} onChange={e => setTwoStepMode(e.target.checked)} />
+                🧪 Mode 2 étapes (test)
+              </label>
+              <p style={styles.hintSubtle}>
+                Step 1 : génère le mannequin + tenue + pose sur fond BLANC neutre. Step 2 : applique le fond exact de référence par swap Gemini. <strong>2 appels API par visuel</strong> (double coût + double temps) mais le fond final est garanti fidèle.
+                <br />
+                Pour les close-up haut : le fond est croppé aux 30 % du haut (mur uniquement, pas de sol).
               </p>
 
               <button onClick={handleRunAll} disabled={running || enabledCount === 0} style={{ ...styles.btn, opacity: running || enabledCount === 0 ? 0.6 : 1 }}>
