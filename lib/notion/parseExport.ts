@@ -82,6 +82,15 @@ export type GenerationTask = {
   refs:            File[]
   facePhotoFile?:  File          // séparé pour pouvoir le dropper au retry
   warnings:        string[]
+  // ----- Refs structurées (qualité optimale, mode "structured") -----
+  // Quand ces champs sont remplis, le runner envoie au backend des FormData
+  // structurés (mannequinBody, mannequinFace, background, products) plutôt
+  // qu'un blob `refs`. Le backend construit alors un prompt façon plateforme
+  // principale avec les textes descriptifs collés à chaque image.
+  bodyPhotoFile?:    File         // FRONT-model
+  backgroundFile?:   File         // fond
+  productFiles?:     File[]       // vêtements selon la vue
+  framingHint?:      string       // 'plein' | 'mi-corps' | 'haut' | 'bas' | 'detail'
 }
 
 export type ParsedExport = {
@@ -317,6 +326,11 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
         posePromptWithBase: buildPosePromptWithBase({ ...look, fondName: effectiveFondLabel }, pose),
         refs,
         facePhotoFile: model?.facePhotoFile,
+        // Refs structurées pour qualité optimale
+        bodyPhotoFile:   model?.frontModelFile,
+        backgroundFile:  effectiveFondFile,
+        productFiles:    vueRefs.files,
+        framingHint:     viewToFramingHint(pose.view),
         warnings:  w,
       })
     })
@@ -349,6 +363,10 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
         promptWithBase: buildDetailPromptWithBase(look, detailFile),
         refs,
         facePhotoFile: model?.facePhotoFile,
+        bodyPhotoFile:   model?.frontModelFile,
+        backgroundFile:  effectiveFondFile2,
+        productFiles:    [detailFile],
+        framingHint:     'detail',
         warnings:  w,
       })
     })
@@ -388,6 +406,18 @@ function filesForView(view: PoseView, look: LookRow): { files: File[], warnings:
   }
 
   return { files, warnings: w }
+}
+
+/** Mappe une PoseView vers le framing hint attendu par la route /api/studio/free */
+function viewToFramingHint(view: PoseView): string {
+  switch (view) {
+    case 'CloseUpHaut': return 'haut'
+    case 'CloseUpBas':  return 'bas'
+    case 'Front':
+    case 'Side':
+    case 'Back':
+    default:            return 'plein'
+  }
 }
 
 function modelRefDescription(model?: ModelDef): string {

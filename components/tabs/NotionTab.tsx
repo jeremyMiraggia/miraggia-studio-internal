@@ -228,21 +228,45 @@ export default function NotionTab() {
           }
         }
 
-        const refs = await compressAll(refsToUse, { maxSide: 2048, quality: 0.85 })
-
-        // Face photo séparée : on l'enverra dans un champ dédié pour que
-        // la route puisse la dropper au 2e essai en cas d'IMAGE_SAFETY.
-        let faceCompressed: File | null = null
-        if (item.task.facePhotoFile && item.task.taskType !== 'detail') {
-          faceCompressed = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
-        }
-
         const fd = new FormData()
         fd.append('prompt',  promptToUse)
         fd.append('ratio',   ratio)
         fd.append('quality', quality)
-        refs.forEach(f => fd.append('refs', f))
-        if (faceCompressed) fd.append('face', faceCompressed)
+
+        // Mode "structuré" : si la task a séparé body/background/products,
+        // on les envoie comme champs dédiés pour que le backend construise
+        // un prompt Gemini propre (cf. plateforme principale).
+        // Note : on désactive le mode structuré quand on utilise une base
+        // image (cohérence ou detail avec base) — dans ce cas le runner a
+        // déjà remplacé refsToUse par [baseImage(+detail)].
+        const hasOverride = refsToUse !== item.task.refs
+        const canStructure = !hasOverride && item.task.taskType !== 'inspi'
+                             && !!item.task.bodyPhotoFile && !!item.task.backgroundFile
+
+        if (canStructure) {
+          const body  = await compressImage(item.task.bodyPhotoFile!, { maxSide: 2048, quality: 0.90 })
+          const bg    = await compressImage(item.task.backgroundFile!, { maxSide: 2048, quality: 0.92 })
+          const prods = await compressAll(item.task.productFiles ?? [], { maxSide: 2048, quality: 0.85 })
+          fd.append('mannequinBody',  body)
+          fd.append('background',     bg)
+          for (const p of prods) fd.append('products', p)
+          if (item.task.facePhotoFile) {
+            const face = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
+            fd.append('mannequinFace', face)
+          }
+          fd.append('framing',        item.task.framingHint ?? 'plein')
+          fd.append('mannequinLabel', item.task.mannequinName)
+          fd.append('decorLabel',     item.task.fondName)
+        } else {
+          // Mode legacy : refs en vrac + face séparée
+          const refs = await compressAll(refsToUse, { maxSide: 2048, quality: 0.85 })
+          let faceCompressed: File | null = null
+          if (item.task.facePhotoFile && item.task.taskType !== 'detail') {
+            faceCompressed = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
+          }
+          refs.forEach(f => fd.append('refs', f))
+          if (faceCompressed) fd.append('face', faceCompressed)
+        }
 
         const res = await fetch('/api/studio/free', { method: 'POST', body: fd })
         let data: any = null
