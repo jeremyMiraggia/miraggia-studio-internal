@@ -263,10 +263,11 @@ const FRAMING_BG_PRESERVE =
 // Sol visible (plein pied, bas, parfois mi-corps) : ombre anatomique douce.
 // Mur derrière (close-up haut) : surtout PAS d'ombre projetée sur le mur.
 const SHADOW_FLOOR_NATURAL =
-  'SHADOW ON FLOOR: cast a VERY LIGHT, VERY SOFT shadow on the ground — just enough to ground the model in the scene, nothing more. Keep it discreet, almost subliminal: the eye should not focus on it. The shadow should faintly follow the SILHOUETTE of the body in her current pose (legs, gap between feet, body angle), with a slight elongation in the direction opposite to the existing key light of the BACKGROUND. ABSOLUTELY NO REFLECTION on the floor — even if the floor looks polished, do NOT mirror the model. ABSOLUTELY NO dark uniform oval or disc under the feet — that always looks fake. ABSOLUTELY NO dark patch that competes with the model visually. Think of a soft diffuse penumbra on matte concrete: barely visible, slightly darker only right at the foot contact point, fading to nothing within 30-50 cm. The lighting in the scene is editorial and diffuse — strong harsh shadows do NOT belong.'
+  'SHADOW ON FLOOR: keep it discreet and natural — a soft contact shadow at the feet, adapted to the scene lighting. No projected body silhouette on the floor. No floor reflection of the model. Nothing dramatic.'
 
 const SHADOW_NO_WALL =
-  'SHADOW ON WALL (CRITICAL): do NOT cast any visible projected silhouette of the model on the wall/backdrop behind her. The model is standing IN FRONT OF the wall with normal depth between her body and the wall (~30-60 cm) — she is NOT pressed against it. The wall stays clean and lit by ambient diffuse light from the front. A very subtle soft contact-AO darkening MAY appear only around her hair, shoulders and neck where her body genuinely occludes ambient light, but never a hard projected silhouette of the head/shoulders on the wall. Keep the lighting flattering and editorial — softbox-style frontal fill.'
+  'SHADOW ON WALL: no shadow on the wall behind the model. The model is detached from the wall with normal depth — not pressed against it. The wall stays clean.'
+
 
 function mapFramingToInstructions(cadrage: string): string {
   const c = (cadrage ?? '').toLowerCase()

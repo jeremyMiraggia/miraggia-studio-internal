@@ -300,10 +300,10 @@ export default function NotionTab() {
           const isWallBehind   = framing === 'haut' || framing === 'mi-corps'
 
           const shadowRule = isWallBehind
-            ? 'SHADOW ON WALL: do NOT cast any hard projected silhouette of the model on the new wall/backdrop — the model stands ~30-60 cm in front of the wall, not pressed against it. The wall stays clean. A very subtle soft contact-AO darkening MAY appear only around her hair, shoulders and neck where her body genuinely occludes ambient light, but NEVER a hard projected silhouette.'
+            ? 'SHADOW ON WALL: no shadow on the wall behind the model. The model is detached from the wall with normal depth — not pressed against it. The wall stays clean.'
             : isFloorVisible
-              ? 'SHADOW ON FLOOR: cast a clearly visible but NATURAL soft shadow on the ground at the feet of the model — like a real fashion editorial photograph. The shadow follows the SILHOUETTE of the body in her current pose (gap between the feet, leg angle, body weight distribution). Direction and softness match the existing key light visible in REFERENCE #2. The shadow is darker and slightly more defined right at the contact points (where the feet touch the floor), then softens and fades within ~40-60 cm. ABSOLUTELY NO mirror reflection on the floor, even if the floor looks polished. NO uniform dark oval or disc. NO harsh hard-edged shadow. Just a real, believable photographic ground shadow that anchors the body in the scene — similar to the soft natural shadow you would see in a Vogue editorial.'
-              : 'SHADOW: keep the lighting/ambience natural and coherent with REFERENCE #2 — no hard projected silhouette, no reflection on the floor, no fake dark oval.'
+              ? 'SHADOW ON FLOOR: keep it discreet and natural — a soft contact shadow at the feet, adapted to the scene lighting. No projected body silhouette on the floor. No floor reflection of the model. Nothing dramatic.'
+              : 'SHADOW: keep the lighting natural and coherent with REFERENCE #2 — nothing dramatic.'
 
           const vogueStyle = 'Vogue-style editorial photography. Shot on film, visible grain, subtle blur, slight motion softness. Imperfect focus, organic textures, realistic skin with no heavy retouching. Raw, intimate, spontaneous fashion moment. High-end but not overly polished.'
 
