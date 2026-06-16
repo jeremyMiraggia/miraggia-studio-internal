@@ -137,23 +137,36 @@ export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 /**
  * Prompt pour la passe Gemini "ajoute une ombre naturelle" sur le composite.
  * Utilisé seulement pour plein pied et close-up bas (où le sol est visible).
+ *
+ * Objectif : une ombre EXTRÊMEMENT subtile, à peine visible, comme dans une
+ * vraie photo éditoriale tournée dans un cyclorama avec lumière diffuse douce.
+ * On insiste lourdement sur la subtilité pour contrebalancer la tendance de
+ * Gemini à over-draw les ombres.
  */
 export const SHADOW_ADD_PROMPT = [
-  'You are given a fashion editorial composite where a model has been pasted on a background scene. CURRENTLY THERE IS NO SHADOW under the model\'s feet — she looks like she is floating slightly above the ground, which is not realistic.',
+  'You are given a fashion editorial photograph of a model standing on a floor. The model currently has NO floor shadow under her feet, making her look slightly disconnected from the ground.',
   '',
-  'ABSOLUTE TASK: Add ONE natural soft shadow on the floor directly under the model\'s feet.',
+  '⚠ ABSOLUTE TASK : add ONE VERY SUBTLE, BARELY VISIBLE soft shadow just at the contact points where the feet meet the floor. Think of editorial fashion photography shot in a studio with soft diffuse window light — the shadow is delicate, gentle, almost a whisper.',
   '',
-  'PRESERVATION (CRITICAL — pixel-perfect, do NOT alter):',
-  '- The model herself : face, hair, skin, outfit, pose, all clothing details → 100 % identical to the input.',
-  '- The background : walls, floor texture and color, lighting, all existing scene elements → 100 % identical to the input.',
-  '- The framing, the camera angle, the composition → 100 % identical to the input.',
+  'PRESERVATION (CRITICAL — pixel-perfect, do NOT touch ANYTHING else):',
+  '- Model : face, hair, skin, outfit, pose, all garment details → 100 % identical to input.',
+  '- Background : walls, floor, lighting, ambiance, all existing elements → 100 % identical to input.',
+  '- Framing, crop, camera angle, composition → 100 % identical to input.',
   '',
-  'THE ONLY ADDITION (one soft shadow on the floor):',
-  '- Shape : follows the model\'s silhouette in her current pose (gap between feet, leg angle, body weight distribution).',
-  '- Direction : matches the existing key light visible in the scene.',
-  '- Color : tinted by the floor material (NOT pure black — slightly darker version of the floor color).',
-  '- Intensity : subtle, editorial, ~20-30 % darker than the floor at the contact points, fading to nothing within ~40-50 cm.',
-  '- Style : a real, believable fashion editorial photograph shadow.',
+  'THE SHADOW — STRICT GUIDELINES :',
+  '- INTENSITY : EXTREMELY LIGHT. Just barely darker than the floor — like 5 to 10 % darker at the strongest point. The viewer should almost NOT notice the shadow on first look ; it should feel like it has always been there.',
+  '- EXTENT : VERY LOCAL. Hugs the immediate footprint of the shoes / feet. Fades to invisible within 10 to 20 cm around the feet. Do NOT extend behind, in front, or sideways further than necessary.',
+  '- SHAPE : a small soft contact shadow at the feet (NOT a large oval, NOT a projected silhouette of the body, NOT a dark patch, NOT a halo around the entire base).',
+  '- COLOR : a tinted version of the floor color (slightly darker), NEVER pure black, NEVER gray that contrasts with the floor.',
+  '- DIRECTION : matches the existing scene\'s lighting if visible ; otherwise stays compact under the feet.',
+  '- LIGHTING REFERENCE : soft diffuse light from a large overhead softbox or a north-facing window — gentle, low contrast.',
   '',
-  'The output must be VISUALLY INDISTINGUISHABLE from the input EXCEPT for the added shadow under the feet. Do NOT regenerate or restyle anything else.',
+  'FORBIDDEN PATTERNS (these are what AI typically over-does — DO NOT do them) :',
+  '- ❌ A big dark oval around the model.',
+  '- ❌ A long cast shadow stretching meters away.',
+  '- ❌ A dark patch competing visually with the model.',
+  '- ❌ A pure black or gray shadow that doesn\'t match the floor color.',
+  '- ❌ Any reflection of the model on the floor (even if floor is shiny).',
+  '',
+  'The output should be VISUALLY 99 % identical to the input ; the only difference is a delicate, whisper-soft contact shadow at the feet that grounds the model naturally.',
 ].join('\n')

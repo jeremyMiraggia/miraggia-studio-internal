@@ -15,7 +15,8 @@ type TaskState = {
   enabled: boolean
   imageUrlGemini?:    string   // étape 1 : sortie Gemini brute (mannequin + scène)
   imageUrlSegmented?: string   // étape 2 : mannequin sur fond transparent
-  imageUrl?:          string   // étape 3 : composite final (fond ref + mannequin + ombre)
+  imageUrlComposite?: string   // étape 3 : composite (fond ref + mannequin), AVANT passe ombre
+  imageUrl?:          string   // étape 4 : composite + ombre Gemini (ou étape 3 si pas d'ombre)
   error?: string
   faceUsed?:         boolean
   faceWasAvailable?: boolean
@@ -124,6 +125,7 @@ export default function CompositeTab() {
         imageUrl: undefined,
         imageUrlGemini: undefined,
         imageUrlSegmented: undefined,
+        imageUrlComposite: undefined,
         progressStep: 'gemini',
       })
 
@@ -186,10 +188,13 @@ export default function CompositeTab() {
         const compositeFile = await compositeOnBackground(segmented, item.task.backgroundFile, {
           framingHint: framing,
         })
-        let finalDataUrl = await blobToDataUrl(compositeFile)
+        const compositeDataUrl = await blobToDataUrl(compositeFile)
+        // imageUrlComposite = pré-ombre (toujours conservé pour comparaison)
+        // imageUrl = final (sera écrasé par la passe ombre si elle a lieu)
         updateState(item.task.id, {
-          imageUrl:     finalDataUrl,
-          progressStep: 'composite',
+          imageUrlComposite: compositeDataUrl,
+          imageUrl:          compositeDataUrl,
+          progressStep:      'composite',
         })
 
         // ===== Étape 4 : Passe Gemini "ajoute une ombre" =====
@@ -211,11 +216,10 @@ export default function CompositeTab() {
             const resShadow = await fetch('/api/studio/free', { method: 'POST', body: fdShadow })
             const dataShadow: any = await resShadow.json().catch(() => null)
             if (resShadow.ok && dataShadow?.imageUrl) {
-              finalDataUrl = dataShadow.imageUrl
-              updateState(item.task.id, { imageUrl: finalDataUrl })
+              // Écrase imageUrl (final) avec le résultat post-ombre, mais imageUrlComposite (pré-ombre) reste pour comparaison
+              updateState(item.task.id, { imageUrl: dataShadow.imageUrl })
             } else {
-              // Échec de la passe ombre : on garde le composite sans ombre
-              // (pas d'erreur fatale — l'image est utilisable mais "flottante").
+              // Échec de la passe ombre : imageUrl reste = composite pré-ombre
               console.warn('[composite] passe ombre Gemini échouée :', dataShadow?.error || resShadow.status)
             }
           } catch (err: any) {
@@ -439,7 +443,7 @@ export default function CompositeTab() {
 /* ============================== TaskRow ============================== */
 
 function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }) {
-  const { task, status, imageUrl, imageUrlGemini, imageUrlSegmented, error, enabled } = state
+  const { task, status, imageUrl, imageUrlGemini, imageUrlSegmented, imageUrlComposite, error, enabled } = state
   const color =
     status === 'done'    ? '#1F7A35'
     : status === 'error' ? '#9B1C1C'
@@ -477,8 +481,15 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
         {imageUrlSegmented && (
           <ImgThumb label="2. Segmenté"   url={imageUrlSegmented} />
         )}
+        {imageUrlComposite && imageUrlComposite !== imageUrl && (
+          <ImgThumb label="3. Composite (sans ombre)"  url={imageUrlComposite} />
+        )}
         {imageUrl && (
-          <ImgThumb label="3. Composite"  url={imageUrl} highlight />
+          <ImgThumb
+            label={imageUrlComposite && imageUrlComposite !== imageUrl ? '4. Final + ombre' : '3. Composite'}
+            url={imageUrl}
+            highlight
+          />
         )}
       </div>
     </div>
