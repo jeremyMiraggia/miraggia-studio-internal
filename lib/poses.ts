@@ -66,14 +66,22 @@ const VIEW_ALIASES: Record<string, PoseView> = {
 }
 
 /**
- * Parse une cellule Notion "Vue, pose" en PoseLabel structuré.
+ * Parse une cellule Notion en PoseLabel structuré.
+ *
  * Tolère :
- *   - "Front, simple"           (ordre canonique)
- *   - "simple, Front"           (ordre inversé — détecte la vue où qu'elle soit)
- *   - "3/4 face droite, mode"   (vues composées)
- *   - "Side, regard intense"    (pose libre multi-mots)
- *   - "main poche, Front"       (pose libre + vue en 2e)
- * Retourne null si on ne reconnaît aucune vue dans la cellule.
+ *   - "Front, simple"
+ *   - "simple, Front"                       (ordre inversé)
+ *   - "3/4 face droite, mode"               (vue composée)
+ *   - "Side, regard intense"                (pose multi-mots)
+ *   - "Front, bras croisé side, close up bas"  → CloseUpBas + pose "front bras croisé side"
+ *   - "Back, Close up Haut, relaxed"        → CloseUpHaut + pose "back relaxed"
+ *
+ * ⚠ PRIORITÉ : si la cellule contient à la fois une orientation (Front / Side / Back)
+ * ET un close-up (CloseUpHaut / CloseUpBas), le CLOSE-UP gagne pour le `view` (parce
+ * que c'est lui qui définit le cadrage). L'orientation rejoint le `style` pour
+ * influencer l'orientation du sujet dans le prompt.
+ *
+ * Retourne null si AUCUNE vue n'est reconnue.
  */
 export function parsePoseCell(cell: string | null | undefined): PoseLabel | null {
   if (!cell) return null
@@ -83,16 +91,23 @@ export function parsePoseCell(cell: string | null | undefined): PoseLabel | null
   const parts = trimmed.split(/[,/|·]/).map(s => s.trim()).filter(Boolean)
   if (parts.length < 2) return null
 
-  // On cherche la vue dans n'importe laquelle des parts (ordre flexible)
-  let viewIndex = -1
-  let view: PoseView | null = null
+  // On collecte TOUTES les parts qui sont reconnues comme une vue
+  type Match = { index: number, view: PoseView }
+  const matches: Match[] = []
   for (let i = 0; i < parts.length; i++) {
     const v = VIEW_ALIASES[normalizeKey(parts[i])]
-    if (v) { view = v; viewIndex = i; break }
+    if (v) matches.push({ index: i, view: v })
   }
-  if (!view || viewIndex < 0) return null
+  if (matches.length === 0) return null
 
-  // Toutes les autres parts forment la pose (concaténées)
+  // Priorité : si un close-up est présent, il gagne. Sinon on prend le 1er match.
+  const closeUpMatch = matches.find(m => m.view === 'CloseUpHaut' || m.view === 'CloseUpBas')
+  const chosen = closeUpMatch ?? matches[0]
+  const view = chosen.view
+  const viewIndex = chosen.index
+
+  // Toutes les autres parts forment la pose — y compris d'autres vues détectées
+  // (ex. "Front, ..., close up bas" → view=CloseUpBas, style="front ...")
   const styleParts = parts.filter((_, i) => i !== viewIndex)
   const style = styleParts.join(' ').trim().toLowerCase()
   if (!style) return null
