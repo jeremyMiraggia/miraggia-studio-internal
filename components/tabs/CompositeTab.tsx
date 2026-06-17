@@ -288,28 +288,38 @@ export default function CompositeTab() {
   const updateState = (id: string, patch: Partial<TaskState>) =>
     setStates(prev => prev.map(s => s.task.id === id ? { ...s, ...patch } : s))
 
-  /* ----------- Export ZIP — un dossier par look ----------- */
+  /* ----------- Export ZIP — un dossier par look avec sous-dossiers step 1 / step 4 ----------- */
   const exportZip = async () => {
     const ok = states.filter(s => s.status === 'done' && s.imageUrl)
     if (!ok.length) return
     const zip = new JSZip()
 
-    for (const s of ok) {
-      const blob = await dataUrlToBlob(s.imageUrl!)
-      // Détecte l'extension depuis le data URL
-      const mimeMatch = s.imageUrl!.match(/^data:image\/(\w+)/)
-      const ext = mimeMatch ? mimeMatch[1].replace('jpeg', 'jpg') : 'jpg'
+    // Helper pour extraire l'extension à partir d'un data URL
+    const extFrom = (dataUrl: string) => {
+      const m = dataUrl.match(/^data:image\/(\w+)/)
+      return m ? m[1].replace('jpeg', 'jpg') : 'jpg'
+    }
 
-      // Nom du dossier : "{lookId}_{numeroLook}" (sanitisé)
+    for (const s of ok) {
+      // Nom du dossier look : "{lookId}_{numeroLook}" (sanitisé)
       const folder = sanitizeFilename(`${s.task.lookId}_${s.task.numeroLook}`)
 
-      // Nom du fichier dans le dossier : "vue{N}_{orientation}_{framing}.ext"
+      // Base du nom de fichier : "vue{N}_{orientation}_{framing}"
       const vueNum     = (s.task.vueIndex ?? 0) + 1
       const orientation = (s.task.pose?.orientation ?? 'front').toString().toLowerCase()
       const framing    = (s.task.framingHint ?? 'plein').toString().toLowerCase()
-      const filename = `vue${vueNum}_${orientation}_${framing}.${ext}`
+      const baseName = `vue${vueNum}_${orientation}_${framing}`
 
-      zip.file(`${folder}/${filename}`, blob)
+      // step 1 = sortie Gemini brute (si disponible)
+      if (s.imageUrlGemini) {
+        const blob1 = await dataUrlToBlob(s.imageUrlGemini)
+        zip.file(`${folder}/step 1/${baseName}.${extFrom(s.imageUrlGemini)}`, blob1)
+      }
+
+      // step 4 = visuel final (= imageUrl ; correspond au composite + passe Simple,
+      // ou au composite seul si la passe Simple n'a pas tourné)
+      const blob4 = await dataUrlToBlob(s.imageUrl!)
+      zip.file(`${folder}/step 4/${baseName}.${extFrom(s.imageUrl!)}`, blob4)
     }
 
     const out = await zip.generateAsync({ type: 'blob' })
