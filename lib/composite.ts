@@ -583,9 +583,53 @@ export async function extractByChromaKeyV2(
   const imgData = ctx.getImageData(0, 0, W, H)
   const data = imgData.data
 
-  const [KR, KG, KB] = CHROMA_KEY_RGB
-  let nKey = 0, nFade = 0, nDespill = 0
+  // ===== Phase 0 : auto-détection de la VRAIE couleur de fond chroma =====
+  // Gemini ne respecte pas toujours le vert pur (#00C000) — il génère parfois
+  // une teinte verdâtre/turquoise. On sample les 4 coins de l'image (le
+  // mannequin étant au centre, les coins sont toujours du fond) pour récupérer
+  // la couleur dominante réelle, puis on l'utilise comme clé.
+  // Si la couleur sampled n'est pas verdâtre (g > r ET g > b, marge >= 15),
+  // on fallback sur le vert pur (cas dégénéré : pas de chroma key).
   const N = W * H
+  const sampleSize = Math.min(40, Math.floor(Math.min(W, H) / 16))
+  const samplePoints = [
+    { x: 0, y: 0 },
+    { x: W - sampleSize, y: 0 },
+    { x: 0, y: H - sampleSize },
+    { x: W - sampleSize, y: H - sampleSize },
+  ]
+  let sumR = 0, sumG = 0, sumB = 0, nSampled = 0
+  for (const c of samplePoints) {
+    for (let dy = 0; dy < sampleSize; dy++) {
+      for (let dx = 0; dx < sampleSize; dx++) {
+        const x = c.x + dx
+        const y = c.y + dy
+        if (x < 0 || x >= W || y < 0 || y >= H) continue
+        const i = (y * W + x) * 4
+        sumR += data[i]
+        sumG += data[i + 1]
+        sumB += data[i + 2]
+        nSampled++
+      }
+    }
+  }
+  let KR = CHROMA_KEY_RGB[0], KG = CHROMA_KEY_RGB[1], KB = CHROMA_KEY_RGB[2]
+  if (nSampled > 0) {
+    const avgR = sumR / nSampled
+    const avgG = sumG / nSampled
+    const avgB = sumB / nSampled
+    // Validation : le sample doit être "verdâtre" (g dominant) pour être considéré comme chroma
+    if (avgG > avgR + 15 && avgG > avgB + 15) {
+      KR = avgR
+      KG = avgG
+      KB = avgB
+      console.log(`[chroma key v2] auto-détecté couleur fond : RGB(${Math.round(KR)}, ${Math.round(KG)}, ${Math.round(KB)})`)
+    } else {
+      console.warn(`[chroma key v2] sample des coins PAS verdâtre (RGB ${Math.round(avgR)},${Math.round(avgG)},${Math.round(avgB)}) — utilise vert pur par défaut. Gemini n'a pas généré un fond chroma ?`)
+    }
+  }
+
+  let nKey = 0, nFade = 0, nDespill = 0
 
   // ===== Phase 1 : alpha threshold avec fade + despill ADAPTATIF =====
   // Despill alpha-adaptatif : plus le pixel est au bord (alpha faible),
