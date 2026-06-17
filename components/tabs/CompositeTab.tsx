@@ -5,6 +5,7 @@ import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
 import { segmentForeground, fillSegmentationHoles, compositeOnBackground, resizePng, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { parseExcelSelection, type ExcelSelection } from '@/lib/excelSelection'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -37,6 +38,13 @@ export default function CompositeTab() {
   const [concurrency, setConcurrency]   = useState<number>(2)
   const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)   // active la passe Gemini "ajoute une ombre"
   const [lookLimit, setLookLimit] = useState<string>('')
+
+  // Sélection via Excel
+  const [excelFile, setExcelFile]               = useState<File[]>([])
+  const [excelSelection, setExcelSelection]     = useState<ExcelSelection | null>(null)
+  const [excelError, setExcelError]             = useState<string | null>(null)
+  const [useExcel, setUseExcel]                 = useState<boolean>(false)
+  const [excludePlein, setExcludePlein]         = useState<boolean>(false)
 
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
@@ -89,6 +97,61 @@ export default function CompositeTab() {
   }
 
   useEffect(() => { statesRef.current = states }, [states])
+
+  /* ----------- Excel upload + parsing ----------- */
+  const handleExcelChange = async (files: File[]) => {
+    setExcelFile(files)
+    setExcelError(null)
+    if (files.length === 0) {
+      setExcelSelection(null)
+      return
+    }
+    try {
+      const sel = await parseExcelSelection(files[0])
+      setExcelSelection(sel)
+      if (sel.warnings.length > 0) setExcelError(sel.warnings.join(' '))
+    } catch (e: any) {
+      setExcelError(e?.message ?? 'Impossible de parser l\'Excel.')
+      setExcelSelection(null)
+    }
+  }
+
+  /* ----------- Apply Excel / excludePlein selection ----------- */
+  // Recoche/décoche les tasks en fonction de l'Excel + checkbox "exclure plein pied"
+  // Logique :
+  //   - useExcel=true → seuls les visuels "non verts" sont cochés
+  //   - excludePlein=true → tous les plein pied décochés
+  //   - les deux peuvent se combiner
+  useEffect(() => {
+    if (!useExcel && !excludePlein) return
+    setStates(prev => prev.map(s => {
+      let enabled = s.enabled
+
+      if (useExcel && excelSelection) {
+        const t = s.task
+        if (t.taskType === 'pose') {
+          const regenVues = excelSelection.toRegenerate.get(t.numeroLook)
+          if (regenVues) {
+            enabled = regenVues.has(t.vueIndex ?? 0)
+          } else {
+            // Look pas dans l'Excel → conservateur, on ne le coche pas
+            enabled = false
+          }
+        } else if (t.taskType === 'detail') {
+          // Cochés uniquement si au moins une pose du look est à régénérer
+          const regenVues = excelSelection.toRegenerate.get(t.numeroLook)
+          enabled = regenVues ? regenVues.size > 0 : false
+        }
+      }
+
+      if (excludePlein && s.task.framingHint === 'plein') {
+        enabled = false
+      }
+
+      return { ...s, enabled }
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useExcel, excludePlein, excelSelection, parsed])
 
   /* ----------- Grouping par look ----------- */
   const groupedLooks = useMemo(() => {
@@ -482,6 +545,29 @@ export default function CompositeTab() {
                 <input type="checkbox" checked={shadowEnabled} onChange={e => setShadowEnabled(e.target.checked)} />
                 Fusion finale style &quot;Simple&quot; (sol visible uniquement)
               </label>
+
+              {/* Excel-based selection */}
+              <div style={{ marginTop: 16, padding: 12, background: '#fff', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8 }}>
+                <label style={{ ...styles.label, display: 'block', textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 700, color: '#0D4A5C', marginBottom: 8 }}>
+                  📋 Sélection par fichier Excel (optionnel)
+                </label>
+                <Dropzone files={excelFile} onChange={handleExcelChange} accept=".xlsx" multiple={false}
+                  label="Drop ton Excel (.xlsx)" minHeight={70} />
+                {excelError && <div style={{ ...styles.errorBox, marginTop: 6 }}>⚠ {excelError}</div>}
+                {excelSelection && (
+                  <div style={{ ...styles.info, marginTop: 6, fontSize: 11 }}>
+                    ✓ {excelSelection.looksFound.size} look(s) parsé(s) — {Array.from(excelSelection.toRegenerate.values()).reduce((sum, s) => sum + s.size, 0)} vue(s) à régénérer (non vertes)
+                  </div>
+                )}
+                <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer', marginTop: 10 }}>
+                  <input type="checkbox" checked={useExcel} onChange={e => setUseExcel(e.target.checked)} disabled={!excelSelection} />
+                  Sélectionner en fonction de l&apos;Excel <em style={{ color: '#6B7A8A', fontSize: 10 }}>(décoche les vues vertes = déjà OK)</em>
+                </label>
+                <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer', marginTop: 6 }}>
+                  <input type="checkbox" checked={excludePlein} onChange={e => setExcludePlein(e.target.checked)} />
+                  🚫 Ne pas générer les plein pied
+                </label>
+              </div>
               <p style={{ fontSize: 11, color: '#6B7A8A', marginTop: 4, lineHeight: 1.5 }}>
                 Pour les <strong>plein pied</strong> et <strong>close-up bas</strong>, on envoie le mannequin segmenté + le fond seul
                 à <code>/api/studio/simple</code> qui fusionne via Gemini avec une lumière et une ombre naturelles
