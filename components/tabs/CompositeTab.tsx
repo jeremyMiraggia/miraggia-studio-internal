@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, compositeOnBackground, fillSegmentationHoles, resizePng, verticalBlendTopBottom, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { segmentForeground, compositeOnBackground, fillSegmentationHoles, resizePng, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -251,15 +251,22 @@ export default function CompositeTab() {
               // naturelle du sol (step 4 Gemini Simple, bas) avec une transition
               // douce à la mi-hauteur.
               if (framing === 'plein') {
-                setProgress(`Blend top/bottom · look ${item.task.numeroLook}`)
+                // ===== Step 5 : re-pose le mannequin segmenté sur le fond step 4 =====
+                // Évite le "ghost" (= mannequin step 4 visible autour du mannequin
+                // step 3) en couvrant complètement le mannequin step 4 par celui
+                // segmenté du step 3 (haute qualité, position exacte de Gemini step 1).
+                // Le fond + ombre proviennent de step 4. Le mannequin vient de step 3.
+                setProgress(`Re-composite mannequin + ombre · look ${item.task.numeroLook}`)
                 try {
-                  const step4Blob   = await dataUrlToBlob(dataSimple.imageUrl)
-                  // compositeFile = step 3 (composite Canvas, déjà construit plus haut)
-                  const blended = await verticalBlendTopBottom(compositeFile, step4Blob, 0.50, 0.08)
-                  const blendedDataUrl = await blobToDataUrl(blended)
-                  updateState(item.task.id, { imageUrl: blendedDataUrl })
+                  const step4Blob = await dataUrlToBlob(dataSimple.imageUrl)
+                  const step4File = new File([step4Blob], 'step4_bg.jpg', { type: 'image/jpeg' })
+                  // compositeOnBackground : draw step4 (avec son ombre) + drawImage segmented par-dessus.
+                  // Pas de framingHint='haut' → pas de crop.
+                  const finalComposite = await compositeOnBackground(segmented, step4File, {})
+                  const finalDataUrl = await blobToDataUrl(finalComposite)
+                  updateState(item.task.id, { imageUrl: finalDataUrl })
                 } catch (err: any) {
-                  console.warn('[composite] blend top/bottom failed, fallback à step 4 brut :', err?.message)
+                  console.warn('[composite] re-composite step5 failed, fallback à step 4 brut :', err?.message)
                   updateState(item.task.id, { imageUrl: dataSimple.imageUrl })
                 }
               } else {
