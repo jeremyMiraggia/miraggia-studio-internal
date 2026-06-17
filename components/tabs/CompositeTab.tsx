@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, compositeOnBackground, fillSegmentationHoles, resizePng, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { compositeOnBackground, resizePng, createChromaBackground, extractByChromaKeyV2, verticalBlendTopBottom, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -148,15 +148,20 @@ export default function CompositeTab() {
         }
 
         const body  = await compressImage(item.task.bodyPhotoFile,  { maxSide: 2048, quality: 0.90 })
-        const bg    = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.92 })
         const prods = await compressAll(item.task.productFiles ?? [], { maxSide: 2048, quality: 0.85 })
+
+        // ⚠ Mode CHROMA : on fait générer le mannequin sur fond VERT chroma pur
+        // pour faciliter le détourage à l'étape 2 (zéro ML, déterministe).
+        // Le fond cible sera réintroduit en étape 3 (composite) et la lumière
+        // / l'ombre arrivera à l'étape 4 (fusion Simple).
+        const chromaBg = await createChromaBackground(1024, 1536)
 
         const fd = new FormData()
         fd.append('prompt',  item.task.prompt)
         fd.append('ratio',   ratio)
         fd.append('quality', quality)
         fd.append('mannequinBody', body)
-        fd.append('background',    bg)
+        fd.append('background',    chromaBg)
         for (const p of prods) fd.append('products', p)
         if (item.task.facePhotoFile) {
           const face = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
@@ -164,7 +169,7 @@ export default function CompositeTab() {
         }
         fd.append('framing',        item.task.framingHint ?? 'plein')
         fd.append('mannequinLabel', item.task.mannequinName)
-        fd.append('decorLabel',     item.task.fondName)
+        fd.append('decorLabel',     'PURE GREEN CHROMA KEY background (#00C000) — uniform flat green, NO scene elements, NO floor, NO walls visible. The model must be cleanly isolated against this solid green for later compositing.')
 
         setProgress(`Gemini · look ${item.task.numeroLook} · ${done + errors}/${total}`)
         const res = await fetch('/api/studio/free', { method: 'POST', body: fd })
@@ -183,20 +188,14 @@ export default function CompositeTab() {
           progressStep: 'segment',
         })
 
-        // ===== Étape 2 : Segmentation ML + hole-fill =====
-        setProgress(`Segmentation · look ${item.task.numeroLook} · ${done + errors}/${total}`)
+        // ===== Étape 2 : Extraction CHROMA KEY V2 (déterministe, propre, sans liseret) =====
+        setProgress(`Chroma key extraction · look ${item.task.numeroLook} · ${done + errors}/${total}`)
         const geminiBlob = await dataUrlToBlob(data.imageUrl)
-        const rawSegmented = await segmentForeground(geminiBlob, (msg) =>
-          setProgress(`Segmentation · ${msg} · look ${item.task.numeroLook}`),
-        )
-        setProgress(`Refinement (hole-fill) · look ${item.task.numeroLook}`)
-        let segmented: Blob
-        try {
-          segmented = await fillSegmentationHoles(rawSegmented, geminiBlob)
-        } catch (err: any) {
-          console.warn('[composite] hole-fill failed, using raw segmentation:', err?.message)
-          segmented = rawSegmented
-        }
+        const segmented = await extractByChromaKeyV2(geminiBlob, {
+          innerThreshold:  0.10,
+          outerThreshold:  0.22,
+          despillStrength: 1.0,
+        })
         const segmentedDataUrl = await blobToDataUrl(segmented)
         updateState(item.task.id, { imageUrlSegmented: segmentedDataUrl, progressStep: 'composite' })
 
@@ -251,22 +250,19 @@ export default function CompositeTab() {
               // naturelle du sol (step 4 Gemini Simple, bas) avec une transition
               // douce à la mi-hauteur.
               if (framing === 'plein') {
-                // ===== Step 5 : re-pose le mannequin segmenté sur le fond step 4 =====
-                // Évite le "ghost" (= mannequin step 4 visible autour du mannequin
-                // step 3) en couvrant complètement le mannequin step 4 par celui
-                // segmenté du step 3 (haute qualité, position exacte de Gemini step 1).
-                // Le fond + ombre proviennent de step 4. Le mannequin vient de step 3.
-                setProgress(`Re-composite mannequin + ombre · look ${item.task.numeroLook}`)
+                // ===== Step 5 : vertical blend top/bottom =====
+                // Garde le visage + tenue parfaitement nets du composite step 3
+                // (mannequin segmenté pristine sur fond ref pixel-perfect) sur la
+                // MOITIÉ HAUTE, et l'ombre Gemini naturelle du step 4 sur la
+                // MOITIÉ BASSE. Bande de transition douce à mi-hauteur.
+                setProgress(`Blend top/bottom · look ${item.task.numeroLook}`)
                 try {
                   const step4Blob = await dataUrlToBlob(dataSimple.imageUrl)
-                  const step4File = new File([step4Blob], 'step4_bg.jpg', { type: 'image/jpeg' })
-                  // compositeOnBackground : draw step4 (avec son ombre) + drawImage segmented par-dessus.
-                  // Pas de framingHint='haut' → pas de crop.
-                  const finalComposite = await compositeOnBackground(segmented, step4File, {})
-                  const finalDataUrl = await blobToDataUrl(finalComposite)
-                  updateState(item.task.id, { imageUrl: finalDataUrl })
+                  const blended = await verticalBlendTopBottom(compositeFile, step4Blob, 0.50, 0.08)
+                  const blendedDataUrl = await blobToDataUrl(blended)
+                  updateState(item.task.id, { imageUrl: blendedDataUrl })
                 } catch (err: any) {
-                  console.warn('[composite] re-composite step5 failed, fallback à step 4 brut :', err?.message)
+                  console.warn('[composite] blend top/bottom failed, fallback à step 4 brut :', err?.message)
                   updateState(item.task.id, { imageUrl: dataSimple.imageUrl })
                 }
               } else {

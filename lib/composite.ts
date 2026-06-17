@@ -507,6 +507,167 @@ export async function resizePng(file: File, maxSide = 1536): Promise<File> {
   return new File([blob], file.name, { type: 'image/png' })
 }
 
+/* ============================== Chroma Key V2 ============================== */
+
+const CHROMA_KEY_RGB: [number, number, number] = [0, 192, 0]
+const CHROMA_KEY_HEX = '#00C000'
+
+/**
+ * Crée une image de fond chroma key vert pur (à passer à Gemini comme bg
+ * ref pour qu'il génère le mannequin sur un fond bien isolable).
+ */
+export async function createChromaBackground(width = 1024, height = 1536): Promise<File> {
+  const canvas = document.createElement('canvas')
+  canvas.width  = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas 2D unavailable.')
+  ctx.fillStyle = CHROMA_KEY_HEX
+  ctx.fillRect(0, 0, width, height)
+  return new Promise<File>((resolve, reject) => {
+    canvas.toBlob(
+      (b) => b ? resolve(new File([b], 'chroma_bg.jpg', { type: 'image/jpeg' })) : reject(new Error('toBlob null')),
+      'image/jpeg',
+      0.95,
+    )
+  })
+}
+
+/**
+ * Extraction CHROMA KEY V2 — performante et subtile, sans liseret vert.
+ *
+ * Pipeline :
+ *  1. Pour chaque pixel, distance euclidienne RGB à la couleur chroma key.
+ *  2. Threshold doux avec FADE :
+ *     - dist < innerT → alpha 0 (transparent)
+ *     - innerT < dist < outerT → alpha proportionnel (anti-aliasing naturel)
+ *     - dist > outerT → alpha 255 (sujet plein)
+ *  3. DESPILL : pour tout pixel du sujet où le canal vert est anormalement
+ *     dominant (g > max(r, b)), on clamp g à max(r, b). Ça tue le green
+ *     spill (le liseret vert sur les bords causé par l'AA Gemini autour
+ *     du sujet sur fond chroma).
+ *  4. Connected components : on garde uniquement le plus gros blob de
+ *     pixels opaques (= le mannequin) → élimine les faux positifs dans
+ *     les coins ou poches qui auraient pu être du chroma residual.
+ *
+ * Pas de modèle ML, déterministe, ~50-150 ms.
+ */
+export async function extractByChromaKeyV2(
+  imageBlob: Blob,
+  options: {
+    /** Distance min au key sous laquelle un pixel est 100 % transparent (0..1, default 0.10). */
+    innerThreshold?: number
+    /** Distance max au key au-dessus de laquelle un pixel est 100 % opaque (0..1, default 0.22). */
+    outerThreshold?: number
+    /** Force du despill (0..1, default 1.0 = clamp complet à max(r,b)). */
+    despillStrength?: number
+  } = {},
+): Promise<Blob> {
+  const innerT = (options.innerThreshold ?? 0.10) * 441
+  const outerT = (options.outerThreshold ?? 0.22) * 441
+  const despillStrength = options.despillStrength ?? 1.0
+
+  const bmp = await createImageBitmap(imageBlob)
+  const W = bmp.width
+  const H = bmp.height
+
+  const canvas = document.createElement('canvas')
+  canvas.width  = W
+  canvas.height = H
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas 2D unavailable.')
+  ctx.drawImage(bmp, 0, 0)
+  const imgData = ctx.getImageData(0, 0, W, H)
+  const data = imgData.data
+
+  const [KR, KG, KB] = CHROMA_KEY_RGB
+  let nKey = 0, nFade = 0, nDespill = 0
+
+  // Phase 1 + 2 : alpha threshold avec fade + despill
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2]
+    const dr = r - KR, dg = g - KG, db = b - KB
+    const dist = Math.sqrt(dr * dr + dg * dg + db * db)
+
+    if (dist < innerT) {
+      data[i + 3] = 0
+      nKey++
+      continue
+    } else if (dist < outerT) {
+      const t = (dist - innerT) / (outerT - innerT)
+      data[i + 3] = Math.round(255 * t)
+      nFade++
+    }
+    // else : pixel sujet plein, alpha reste 255
+
+    // DESPILL : si vert anormalement dominant → clamp à max(r, b)
+    // Formule : new_g = g - despillStrength * max(0, g - max(r, b))
+    const maxRb = Math.max(r, b)
+    const greenSpill = g - maxRb
+    if (greenSpill > 4) {
+      data[i + 1] = Math.round(g - despillStrength * greenSpill)
+      nDespill++
+    }
+  }
+
+  // Phase 3 : connected components → garde seulement le plus gros blob
+  // (élimine les petits artefacts résiduels du chroma key dans le fond)
+  const N = W * H
+  const isOpaque = new Uint8Array(N)
+  for (let i = 0; i < N; i++) {
+    isOpaque[i] = data[i * 4 + 3] > 80 ? 1 : 0
+  }
+  const compId = new Int32Array(N).fill(-1)
+  const compSizes: number[] = []
+  let nextId = 0
+  for (let i = 0; i < N; i++) {
+    if (compId[i] !== -1 || !isOpaque[i]) continue
+    const stack: number[] = [i]
+    compId[i] = nextId
+    let size = 0
+    while (stack.length) {
+      const idx = stack.pop()!
+      size++
+      const x = idx % W
+      const y = (idx - x) / W
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
+          const nIdx = ny * W + nx
+          if (isOpaque[nIdx] && compId[nIdx] === -1) {
+            compId[nIdx] = nextId
+            stack.push(nIdx)
+          }
+        }
+      }
+    }
+    compSizes.push(size)
+    nextId++
+  }
+  let largestId = -1, largestSize = 0
+  for (let id = 0; id < compSizes.length; id++) {
+    if (compSizes[id] > largestSize) { largestSize = compSizes[id]; largestId = id }
+  }
+  let nRemoved = 0
+  if (largestId >= 0) {
+    for (let i = 0; i < N; i++) {
+      if (isOpaque[i] && compId[i] !== largestId) {
+        data[i * 4 + 3] = 0
+        nRemoved++
+      }
+    }
+  }
+
+  console.log(`[chroma key v2] ${nKey} key, ${nFade} fade, ${nDespill} despilled, ${nRemoved} px outliers supprimés`)
+
+  ctx.putImageData(imgData, 0, 0)
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob null')), 'image/png')
+  })
+}
+
 /**
  * Blend vertical de deux images : moitié haute de TOP + moitié basse de BOTTOM,
  * avec une bande de transition douce à la jointure pour ne pas voir la coupe.
