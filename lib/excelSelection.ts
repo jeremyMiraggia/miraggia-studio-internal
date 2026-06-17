@@ -130,7 +130,12 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
       if (!aCell) continue
       const aValue = readCellValue(aCell, sharedStrings)
       if (!aValue) continue
-      const numeroLook = String(aValue).trim()
+      let numeroLook = String(aValue).trim()
+      // Normalise "1.0" → "1" (Excel stocke les entiers comme floats)
+      const numVal = Number(numeroLook)
+      if (!isNaN(numVal) && Number.isFinite(numVal) && Number.isInteger(numVal)) {
+        numeroLook = String(numVal)
+      }
       if (!numeroLook) continue
       looksFound.add(numeroLook)
       sheetLooks++
