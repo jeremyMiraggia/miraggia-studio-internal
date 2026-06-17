@@ -171,12 +171,16 @@ export async function readZipIndex(
 
 /**
  * Extrait UNE entrée du ZIP comme Blob. Décompresse à la volée si besoin.
- * Coût : taille compressée lue + taille décompressée allouée.
  *
- * L'offset stocké dans entry est absolu dans le fichier source → pas
- * besoin de passer baseOffset ici.
+ * @param onProgress  Callback optionnel appelé périodiquement avec le %
+ *                    de bytes lus depuis le ZIP source (utile pour les
+ *                    grosses entrées comme un Part-1.zip de 4 GB).
  */
-export async function extractEntry(file: Blob, entry: ZipEntry): Promise<Blob> {
+export async function extractEntry(
+  file: Blob,
+  entry: ZipEntry,
+  onProgress?: (percent: number, bytesRead: number, totalBytes: number) => void,
+): Promise<Blob> {
   // 1. Lit le Local File Header
   const lfhBuf = await file.slice(entry.offset, entry.offset + 30).arrayBuffer()
   const lfh = new DataView(lfhBuf)
@@ -194,15 +198,44 @@ export async function extractEntry(file: Blob, entry: ZipEntry): Promise<Blob> {
   if (entry.method === 0) {
     return dataBlob
   }
-  if (entry.method === 8) {
-    if (typeof DecompressionStream === 'undefined') {
-      throw new Error('DecompressionStream non disponible — utilise un navigateur moderne (Chrome 80+, Firefox 113+, Safari 16.4+).')
-    }
-    const ds = new DecompressionStream('deflate-raw')
-    const decompressed = dataBlob.stream().pipeThrough(ds)
-    return await new Response(decompressed).blob()
+  if (entry.method !== 8) {
+    throw new Error(`Méthode de compression non supportée : ${entry.method} (entrée ${entry.name})`)
   }
-  throw new Error(`Méthode de compression non supportée : ${entry.method} (entrée ${entry.name})`)
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('DecompressionStream non disponible — utilise un navigateur moderne (Chrome 80+, Firefox 113+, Safari 16.4+).')
+  }
+
+  // Stream avec progress : on intercepte chaque chunk pour compter les bytes lus
+  // depuis le ZIP source, avant qu'ils ne soient piped au décompresseur.
+  const total = entry.csize
+  let bytesRead = 0
+  let lastEmit = 0
+
+  const sourceStream = dataBlob.stream()
+  const progressStream = onProgress
+    ? new TransformStream({
+        transform(chunk, controller) {
+          bytesRead += chunk.byteLength
+          const now = performance.now()
+          // Émet au plus toutes les 200 ms pour ne pas spammer
+          if (now - lastEmit > 200) {
+            const pct = total > 0 ? Math.min(100, Math.round(bytesRead / total * 100)) : 0
+            onProgress(pct, bytesRead, total)
+            lastEmit = now
+          }
+          controller.enqueue(chunk)
+        },
+        flush() {
+          if (onProgress) onProgress(100, total, total)
+        },
+      })
+    : null
+
+  const ds = new DecompressionStream('deflate-raw')
+  const decompressed = progressStream
+    ? sourceStream.pipeThrough(progressStream).pipeThrough(ds)
+    : sourceStream.pipeThrough(ds)
+  return await new Response(decompressed).blob()
 }
 
 /**

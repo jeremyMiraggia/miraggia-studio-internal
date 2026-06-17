@@ -132,8 +132,13 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
         const { dataOffset, csize } = await getEntryDataOffset(zipFile, nestedEntry)
         zipIndex = await readZipIndex(zipFile, { baseOffset: dataOffset, virtualSize: csize })
       } else {
-        onProgress?.(`Décompression du ZIP imbriqué (${Math.round(nestedEntry.size / (1024*1024))} MB)… ça peut prendre 30-60 s.`)
-        workingFile = await extractEntry(zipFile, nestedEntry)
+        const sizeMB = Math.round(nestedEntry.size / (1024 * 1024))
+        onProgress?.(`Décompression du ZIP imbriqué (${sizeMB} MB)… 0 %`)
+        // Si le ZIP est sur Google Drive Stream / réseau, la lecture peut
+        // être très lente. On affiche le % en temps réel pour rassurer.
+        workingFile = await extractEntry(zipFile, nestedEntry, (pct, _bytesRead, _total) => {
+          onProgress?.(`Décompression du ZIP imbriqué (${sizeMB} MB)… ${pct} %`)
+        })
         onProgress?.('Lecture de l\'index du ZIP imbriqué…')
         zipIndex = await readZipIndex(workingFile)
       }
