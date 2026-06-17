@@ -250,29 +250,34 @@ function drawCover(ctx: CanvasRenderingContext2D, bmp: ImageBitmap, W: number, H
 }
 
 /**
- * Nettoyage STRICT du mask de segmentation.
+ * Nettoyage STRICT du mask de segmentation + ÉROSION des bords pour
+ * supprimer la contamination du fond original.
  *
- * Règle : **rien ne doit être semi-transparent à l'intérieur du mannequin**.
- * Les modèles ML produisent souvent un mask "bruité" avec des pixels
- * semi-transparents éparpillés dans le sujet (= taches visibles dans le
- * composite final).
+ * Problème résolu :
+ *  1. Les modèles ML produisent un mask "bruité" avec des pixels semi-transparents
+ *     éparpillés dans le sujet (= taches visibles dans le composite final).
+ *  2. Les pixels de bord du mask ont du fond original Gemini "pré-mélangé"
+ *     dedans (alpha 50-200), ce qui crée un halo coloré visible quand on
+ *     compose sur un nouveau fond (= "traces" autour du mannequin).
  *
  * Algorithme :
  *  1. Threshold doux (alpha > 80) → mask binaire "subject vs not subject"
- *  2. Flood fill depuis les 4 bords, à travers les pixels "not subject"
- *     → on identifie les pixels vraiment EXTÉRIEURS au mannequin
- *  3. Tout pixel non atteint par le flood fill = INTÉRIEUR du mannequin
- *     → force alpha = 255, RGB depuis l'image Gemini originale
- *  4. Préservation de l'anti-aliasing aux bords : pour les pixels "inside"
- *     qui touchent un pixel "outside" (bord du sujet), on garde l'alpha
- *     original (clampé à min 50) au lieu de forcer 255 — évite les bords
- *     dentelés.
+ *  2. Flood fill depuis les 4 bords à travers les pixels "not subject"
+ *     → identifie les pixels VRAIMENT extérieurs au mannequin
+ *  3. ÉROSION du mask "subject" : tout pixel intérieur qui touche un pixel
+ *     extérieur dans un rayon de `erodePx` est dégradé en extérieur
+ *     → supprime la zone contaminée par le fond original
+ *  4. Reconstruction :
+ *     - Pixel extérieur (original ou suite à érosion) : alpha = 0
+ *     - Pixel intérieur APRÈS érosion : alpha = 255 + RGB original
+ *     - Ring d'AA 1 pixel autour du nouveau bord : alpha = 128 pour adoucir
  *
- * Coût : ~50-200 ms pour une image 1024×1536.
+ * Coût : ~100-300 ms pour une image 1024×1536 + 2 passes d'érosion.
  */
 export async function fillSegmentationHoles(
   segmentedPng: Blob,
   originalGemini: Blob,
+  erodePx = 2,
 ): Promise<Blob> {
   const [segBmp, origBmp] = await Promise.all([
     createImageBitmap(segmentedPng),
@@ -281,7 +286,7 @@ export async function fillSegmentationHoles(
   const W = segBmp.width
   const H = segBmp.height
 
-  // Canvas du segmenté (avec alpha)
+  // Canvas du segmenté
   const canvas = document.createElement('canvas')
   canvas.width  = W
   canvas.height = H
@@ -301,16 +306,72 @@ export async function fillSegmentationHoles(
   const origData = origCtx.getImageData(0, 0, W, H).data
 
   const N = W * H
-
-  // 1. Mask binaire : subject = alpha > 80, sinon = candidat outside
-  const isSubject = new Uint8Array(N)
   const ALPHA_T = 80
+
+  // ---- Phase 1 : mask binaire "subject" ----
+  const isSubject = new Uint8Array(N)
   for (let i = 0; i < N; i++) {
     isSubject[i] = sData[i * 4 + 3] > ALPHA_T ? 1 : 0
   }
 
-  // 2. Flood fill BFS depuis les 4 bords à travers les pixels "not subject"
-  //    → marque les pixels VRAIMENT extérieurs au mannequin.
+  // ---- Phase 1bis : connected components → on ne garde QUE le plus gros blob ----
+  // La lib de segmentation produit parfois des faux positifs : des petits blobs
+  // de pixels "subject" éparpillés dans le fond (loin du mannequin). On les
+  // élimine en ne gardant que le plus grand composant connecté (8-connectivité).
+  const compId = new Int32Array(N).fill(-1)
+  const compSizes: number[] = []
+  let nextId = 0
+  for (let i = 0; i < N; i++) {
+    if (compId[i] !== -1 || !isSubject[i]) continue
+    // BFS pour explorer le composant
+    const stack: number[] = [i]
+    compId[i] = nextId
+    let size = 0
+    while (stack.length) {
+      const idx = stack.pop()!
+      size++
+      const x = idx % W
+      const y = (idx - x) / W
+      // 8-connectivité (incl. diagonales pour mieux relier les bouts fins)
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const nx = x + dx
+          const ny = y + dy
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
+          const nIdx = ny * W + nx
+          if (isSubject[nIdx] && compId[nIdx] === -1) {
+            compId[nIdx] = nextId
+            stack.push(nIdx)
+          }
+        }
+      }
+    }
+    compSizes.push(size)
+    nextId++
+  }
+  // Trouve le plus grand composant = le mannequin
+  let largestId = -1
+  let largestSize = 0
+  for (let id = 0; id < compSizes.length; id++) {
+    if (compSizes[id] > largestSize) {
+      largestSize = compSizes[id]
+      largestId = id
+    }
+  }
+  // Élimine tous les autres composants (faux positifs dans le fond)
+  let nRemoved = 0
+  if (largestId >= 0) {
+    for (let i = 0; i < N; i++) {
+      if (isSubject[i] && compId[i] !== largestId) {
+        isSubject[i] = 0
+        nRemoved++
+      }
+    }
+  }
+  console.log(`[composite] connected components : ${nextId} blobs, plus gros = ${largestSize} px, ${nRemoved} px supprimés (faux positifs fond)`)
+
+  // ---- Phase 2 : flood fill BFS depuis les bords → identifie le "vrai" extérieur ----
   const isOutside = new Uint8Array(N)
   const queue: number[] = []
   for (let x = 0; x < W; x++) {
@@ -334,47 +395,74 @@ export async function fillSegmentationHoles(
     if (y < H - 1 && !isSubject[idx + W]     && !isOutside[idx + W])     { isOutside[idx + W] = 1; queue.push(idx + W) }
   }
 
-  // 3. Reconstruction du mask final :
-  //    - Pixels marqués extérieurs : alpha = 0 (transparent)
-  //    - Pixels intérieurs (subject ou trou interne) : alpha = 255 (opaque)
-  //      RGB depuis l'image Gemini originale.
-  //    - Pixels intérieurs AU BORD (touchant un pixel extérieur) : garde
-  //      l'alpha original (clampé min 50) pour anti-aliasing soft.
-  let nForced = 0
-  let nEdge = 0
+  // ---- Phase 3 : on reconstruit le mask "intérieur" (subject OU trou interne) ----
+  // isInside[i] = 1 si pixel doit être considéré comme intérieur au mannequin
+  // (= pas marqué outside par le flood fill).
+  const isInside = new Uint8Array(N)
   for (let i = 0; i < N; i++) {
-    const p = i * 4
-    if (isOutside[i]) {
-      sData[p + 3] = 0
-      continue
+    isInside[i] = isOutside[i] ? 0 : 1
+  }
+
+  // ---- Phase 4 : ÉROSION du mask "isInside" par erodePx pixels ----
+  // À chaque pass, tout pixel intérieur qui touche un pixel extérieur (4-conn)
+  // devient extérieur lui-même. Élimine la zone de contamination du fond.
+  let eroded = isInside
+  for (let pass = 0; pass < erodePx; pass++) {
+    const next = new Uint8Array(N)
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x
+        if (!eroded[i]) { next[i] = 0; continue }
+        // Tous les 4 voisins doivent être inside aussi
+        const u = y > 0     ? eroded[i - W] : 0
+        const d = y < H - 1 ? eroded[i + W] : 0
+        const l = x > 0     ? eroded[i - 1] : 0
+        const r = x < W - 1 ? eroded[i + 1] : 0
+        next[i] = (u && d && l && r) ? 1 : 0
+      }
     }
+    eroded = next
+  }
 
-    // Pixel intérieur — détecte si c'est un bord (voisin extérieur)
-    const x = i % W
-    const y = (i - x) / W
-    let atEdge = false
-    if (x > 0     && isOutside[i - 1]) atEdge = true
-    else if (x < W - 1 && isOutside[i + 1]) atEdge = true
-    else if (y > 0     && isOutside[i - W]) atEdge = true
-    else if (y < H - 1 && isOutside[i + W]) atEdge = true
+  // ---- Phase 5 : reconstruction du PNG final ----
+  // - eroded === 1 (intérieur strict) : alpha 255 + RGB original
+  // - eroded === 0 ET voisin avec eroded === 1 : alpha 128 (ring AA 1px)
+  // - sinon : alpha 0
+  let nCore = 0, nAA = 0, nClear = 0
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x
+      const p = i * 4
 
-    // RGB toujours depuis l'original (= pas de RGB modifié par la segmentation)
-    sData[p + 0] = origData[p + 0]
-    sData[p + 1] = origData[p + 1]
-    sData[p + 2] = origData[p + 2]
+      if (eroded[i]) {
+        sData[p + 0] = origData[p + 0]
+        sData[p + 1] = origData[p + 1]
+        sData[p + 2] = origData[p + 2]
+        sData[p + 3] = 255
+        nCore++
+        continue
+      }
 
-    if (atEdge) {
-      // Bord : préserve alpha original pour AA, mais min 50 pour rester visible
-      const origAlpha = sData[p + 3]
-      sData[p + 3] = Math.max(origAlpha, 50)
-      nEdge++
-    } else {
-      // Intérieur ferme : 100 % opaque, aucune chance de tache
-      sData[p + 3] = 255
-      nForced++
+      // Pixel non-eroded : check si on est à 1 pixel d'un pixel eroded (= ring AA)
+      let nearCore = false
+      if (y > 0     && eroded[i - W]) nearCore = true
+      else if (y < H - 1 && eroded[i + W]) nearCore = true
+      else if (x > 0     && eroded[i - 1]) nearCore = true
+      else if (x < W - 1 && eroded[i + 1]) nearCore = true
+
+      if (nearCore) {
+        sData[p + 0] = origData[p + 0]
+        sData[p + 1] = origData[p + 1]
+        sData[p + 2] = origData[p + 2]
+        sData[p + 3] = 128
+        nAA++
+      } else {
+        sData[p + 3] = 0
+        nClear++
+      }
     }
   }
-  console.log(`[composite] cleanup : ${nForced} px forcés opaques (intérieur), ${nEdge} px bord avec AA`)
+  console.log(`[composite] cleanup+erosion(${erodePx}px) : ${nCore} core opaques, ${nAA} ring AA, ${nClear} clear`)
 
   ctx.putImageData(segData, 0, 0)
   return new Promise<Blob>((resolve, reject) => {
