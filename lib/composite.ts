@@ -555,17 +555,20 @@ export async function createChromaBackground(width = 1024, height = 1536): Promi
 export async function extractByChromaKeyV2(
   imageBlob: Blob,
   options: {
-    /** Distance min au key sous laquelle un pixel est 100 % transparent (0..1, default 0.10). */
+    /** Distance min au key sous laquelle un pixel est 100 % transparent (0..1, default 0.12). */
     innerThreshold?: number
-    /** Distance max au key au-dessus de laquelle un pixel est 100 % opaque (0..1, default 0.22). */
+    /** Distance max au key au-dessus de laquelle un pixel est 100 % opaque (0..1, default 0.32). */
     outerThreshold?: number
-    /** Force du despill (0..1, default 1.0 = clamp complet à max(r,b)). */
+    /** Force du despill core (0..1, default 0.8). */
     despillStrength?: number
+    /** Nombre de pixels d'érosion finale pour éliminer la couche contaminée (default 2). */
+    erodePx?: number
   } = {},
 ): Promise<Blob> {
-  const innerT = (options.innerThreshold ?? 0.10) * 441
-  const outerT = (options.outerThreshold ?? 0.22) * 441
-  const despillStrength = options.despillStrength ?? 1.0
+  const innerT = (options.innerThreshold ?? 0.12) * 441
+  const outerT = (options.outerThreshold ?? 0.32) * 441
+  const despillCore = options.despillStrength ?? 0.8
+  const erodePx = options.erodePx ?? 2
 
   const bmp = await createImageBitmap(imageBlob)
   const W = bmp.width
@@ -582,8 +585,11 @@ export async function extractByChromaKeyV2(
 
   const [KR, KG, KB] = CHROMA_KEY_RGB
   let nKey = 0, nFade = 0, nDespill = 0
+  const N = W * H
 
-  // Phase 1 + 2 : alpha threshold avec fade + despill
+  // ===== Phase 1 : alpha threshold avec fade + despill ADAPTATIF =====
+  // Despill alpha-adaptatif : plus le pixel est au bord (alpha faible),
+  // plus on tue le vert agressivement.
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i], g = data[i + 1], b = data[i + 2]
     const dr = r - KR, dg = g - KG, db = b - KB
@@ -600,19 +606,24 @@ export async function extractByChromaKeyV2(
     }
     // else : pixel sujet plein, alpha reste 255
 
-    // DESPILL : si vert anormalement dominant → clamp à max(r, b)
-    // Formule : new_g = g - despillStrength * max(0, g - max(r, b))
-    const maxRb = Math.max(r, b)
-    const greenSpill = g - maxRb
-    if (greenSpill > 4) {
-      data[i + 1] = Math.round(g - despillStrength * greenSpill)
+    // DESPILL agressif basé sur (r+b)/2 (plus violent que max(r,b))
+    const alphaFrac = data[i + 3] / 255
+    const meanRb = (r + b) / 2
+    const spillBound = meanRb  // borne au-dessus de laquelle le vert est suspect
+    const spill = g - spillBound
+    if (spill > 0) {
+      // strength adaptative : 0.5 sur pixel plein → 1.0 sur pixel très transparent
+      const strength = despillCore + (1 - alphaFrac) * (1.0 - despillCore)
+      data[i + 1] = Math.round(g - strength * spill)
       nDespill++
+    }
+    // Sécurité : si après despill, le vert est encore > max(r,b), on re-clamp
+    if (data[i + 1] > Math.max(data[i], data[i + 2])) {
+      data[i + 1] = Math.max(data[i], data[i + 2])
     }
   }
 
-  // Phase 3 : connected components → garde seulement le plus gros blob
-  // (élimine les petits artefacts résiduels du chroma key dans le fond)
-  const N = W * H
+  // ===== Phase 2 : connected components → seul le plus gros blob =====
   const isOpaque = new Uint8Array(N)
   for (let i = 0; i < N; i++) {
     isOpaque[i] = data[i * 4 + 3] > 80 ? 1 : 0
@@ -650,17 +661,61 @@ export async function extractByChromaKeyV2(
   for (let id = 0; id < compSizes.length; id++) {
     if (compSizes[id] > largestSize) { largestSize = compSizes[id]; largestId = id }
   }
-  let nRemoved = 0
+  let nOutliers = 0
   if (largestId >= 0) {
     for (let i = 0; i < N; i++) {
       if (isOpaque[i] && compId[i] !== largestId) {
         data[i * 4 + 3] = 0
-        nRemoved++
+        isOpaque[i] = 0
+        nOutliers++
       }
     }
   }
 
-  console.log(`[chroma key v2] ${nKey} key, ${nFade} fade, ${nDespill} despilled, ${nRemoved} px outliers supprimés`)
+  // ===== Phase 3 : FEATHERING gaussien sur le canal alpha =====
+  // Comme l'option "Feather" de Photoshop : on blur uniquement le canal alpha
+  // pour adoucir les bords. Le liseret vert disparaît parce qu'il est noyé
+  // dans la transparence progressive plutôt que d'avoir un bord net.
+  if (erodePx > 0) {
+    const featherRadius = erodePx
+    try {
+      // 1. Extrait le canal alpha dans un canvas grayscale
+      const alphaSrcCanvas = document.createElement('canvas')
+      alphaSrcCanvas.width = W
+      alphaSrcCanvas.height = H
+      const alphaSrcCtx = alphaSrcCanvas.getContext('2d')
+      if (!alphaSrcCtx) throw new Error('Canvas 2D unavailable.')
+      const alphaImg = alphaSrcCtx.createImageData(W, H)
+      for (let i = 0; i < N; i++) {
+        const a = data[i * 4 + 3]
+        alphaImg.data[i * 4 + 0] = a
+        alphaImg.data[i * 4 + 1] = a
+        alphaImg.data[i * 4 + 2] = a
+        alphaImg.data[i * 4 + 3] = 255
+      }
+      alphaSrcCtx.putImageData(alphaImg, 0, 0)
+
+      // 2. Blur le canal alpha via ctx.filter (Gaussian blur natif)
+      const alphaBlurCanvas = document.createElement('canvas')
+      alphaBlurCanvas.width = W
+      alphaBlurCanvas.height = H
+      const alphaBlurCtx = alphaBlurCanvas.getContext('2d')
+      if (!alphaBlurCtx) throw new Error('Canvas 2D unavailable.')
+      alphaBlurCtx.filter = `blur(${featherRadius}px)`
+      alphaBlurCtx.drawImage(alphaSrcCanvas, 0, 0)
+
+      // 3. Réécrit l'alpha blurré dans l'image data
+      const blurredData = alphaBlurCtx.getImageData(0, 0, W, H)
+      for (let i = 0; i < N; i++) {
+        data[i * 4 + 3] = blurredData.data[i * 4]
+      }
+      console.log(`[chroma key v2] feathering : blur ${featherRadius}px sur alpha`)
+    } catch (err) {
+      console.warn('[chroma key v2] feathering failed, alpha non modifié :', err)
+    }
+  }
+
+  console.log(`[chroma key v2] ${nKey} key, ${nFade} fade, ${nDespill} despilled, ${nOutliers} outliers`)
 
   ctx.putImageData(imgData, 0, 0)
   return new Promise<Blob>((resolve, reject) => {
@@ -668,20 +723,15 @@ export async function extractByChromaKeyV2(
   })
 }
 
+/* ============================== utils ============================== */
+
 /**
  * Blend vertical de deux images : moitié haute de TOP + moitié basse de BOTTOM,
- * avec une bande de transition douce à la jointure pour ne pas voir la coupe.
+ * avec une bande de transition douce à la jointure.
  *
- * Usage : composer un visuel final qui prend
- *   - la moitié HAUTE du composite Canvas (= visage pristine de Gemini step 1
- *     + fond ref pixel-perfect, pas dégradé par re-passe)
- *   - la moitié BASSE de la fusion Simple Gemini step 4 (= ombre naturelle au sol
- *     ajustée par Gemini)
- *
- * @param topImage    Image dont on garde la moitié HAUTE
- * @param bottomImage Image dont on garde la moitié BASSE
- * @param splitRatio  0..1 : position du split depuis le haut (default 0.50)
- * @param blendBand   0..1 : largeur de la zone de transition douce (default 0.08)
+ * Usage step 5 plein pied :
+ *   - top    = composite Canvas (visage pristine + fond ref)
+ *   - bottom = Gemini Simple step 4 (avec ombre naturelle)
  */
 export async function verticalBlendTopBottom(
   topImage: Blob,
@@ -693,11 +743,9 @@ export async function verticalBlendTopBottom(
     createImageBitmap(topImage),
     createImageBitmap(bottomImage),
   ])
-  // On compose à la résolution du TOP (= composite Canvas, généralement la résolution Gemini step 1)
   const W = topBmp.width
   const H = topBmp.height
 
-  // Canvas pour le top
   const topCanvas = document.createElement('canvas')
   topCanvas.width = W
   topCanvas.height = H
@@ -706,7 +754,6 @@ export async function verticalBlendTopBottom(
   topCtx.drawImage(topBmp, 0, 0)
   const topData = topCtx.getImageData(0, 0, W, H)
 
-  // Canvas pour le bottom — scale pour matcher les dims du top
   const botCanvas = document.createElement('canvas')
   botCanvas.width = W
   botCanvas.height = H
@@ -715,30 +762,27 @@ export async function verticalBlendTopBottom(
   botCtx.drawImage(botBmp, 0, 0, W, H)
   const botData = botCtx.getImageData(0, 0, W, H)
 
-  // Calcul des bornes de la zone de blend
   const splitY = Math.round(H * splitRatio)
   const bandHalf = Math.max(1, Math.round(H * blendBand / 2))
-  const yTopBoundary = splitY - bandHalf  // au-dessus : 100 % top
-  const yBotBoundary = splitY + bandHalf  // en-dessous : 100 % bottom
+  const yTopBoundary = splitY - bandHalf
+  const yBotBoundary = splitY + bandHalf
 
   const td = topData.data
   const bd = botData.data
   for (let y = 0; y < H; y++) {
-    // Calcule alpha bottom : 0 au-dessus de la zone, 1 en-dessous, ramp linéaire au milieu
     let alphaBot: number
     if (y <= yTopBoundary) alphaBot = 0
     else if (y >= yBotBoundary) alphaBot = 1
     else alphaBot = (y - yTopBoundary) / (yBotBoundary - yTopBoundary)
     const alphaTop = 1 - alphaBot
 
-    if (alphaBot === 0) continue   // optimisation : skip si on garde 100 % top
+    if (alphaBot === 0) continue
 
     for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4
       td[i + 0] = td[i + 0] * alphaTop + bd[i + 0] * alphaBot
       td[i + 1] = td[i + 1] * alphaTop + bd[i + 1] * alphaBot
       td[i + 2] = td[i + 2] * alphaTop + bd[i + 2] * alphaBot
-      // alpha reste 255 (sortie JPEG)
     }
   }
 
@@ -753,8 +797,6 @@ export async function verticalBlendTopBottom(
     )
   })
 }
-
-/* ============================== utils ============================== */
 
 export function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
