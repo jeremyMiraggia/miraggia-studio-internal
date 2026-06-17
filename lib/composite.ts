@@ -385,6 +385,40 @@ export async function fillSegmentationHoles(
   })
 }
 
+/**
+ * Resize un PNG en gardant le canal alpha (contrairement à compressImage
+ * qui re-encode en JPEG et perd la transparence).
+ *
+ * Utilisé pour le subject segmenté avant envoi à /api/studio/simple :
+ * il faut absolument garder l'alpha pour que Gemini sache où est le sujet
+ * et où est le fond.
+ */
+export async function resizePng(file: File, maxSide = 1536): Promise<File> {
+  const bmp = await createImageBitmap(file)
+  const w = bmp.width
+  const h = bmp.height
+  const longest = Math.max(w, h)
+  if (longest <= maxSide) {
+    // Déjà sous la limite — on renvoie tel quel
+    return file
+  }
+  const scale = maxSide / longest
+  const W = Math.round(w * scale)
+  const H = Math.round(h * scale)
+  const canvas = document.createElement('canvas')
+  canvas.width  = W
+  canvas.height = H
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas 2D unavailable.')
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(bmp, 0, 0, W, H)
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob null')), 'image/png')
+  })
+  return new File([blob], file.name, { type: 'image/png' })
+}
+
 /* ============================== utils ============================== */
 
 export function blobToDataUrl(blob: Blob): Promise<string> {

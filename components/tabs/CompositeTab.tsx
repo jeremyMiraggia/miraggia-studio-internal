@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, compositeOnBackground, fillSegmentationHoles, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { segmentForeground, compositeOnBackground, fillSegmentationHoles, resizePng, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -227,17 +227,21 @@ export default function CompositeTab() {
           updateState(item.task.id, { progressStep: 'shadow' })
 
           try {
-            // Subject = mannequin segmenté (PNG transparent)
+            // ⚠ Subject = mannequin segmenté (PNG TRANSPARENT) → on DOIT garder
+            // l'alpha. compressImage ré-encode en JPEG et perd la transparence,
+            // donc on utilise resizePng (qui resize en restant en PNG).
             const segmentedFile = new File([segmented], 'subject.png', { type: 'image/png' })
-            const subjectCompressed = await compressImage(segmentedFile, { maxSide: 2048, quality: 0.92 })
-            const bgCompressed      = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.92 })
+            const subjectResized = await resizePng(segmentedFile, 1536)
+            // Background : JPEG OK (pas d'alpha), on garde compressImage
+            const bgCompressed = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.95 })
 
             const fdSimple = new FormData()
-            fdSimple.append('subject',    subjectCompressed)
+            fdSimple.append('subject',    subjectResized)
             fdSimple.append('background', bgCompressed)
-            fdSimple.append('brief',      'Photographie de mode professionnelle, ombre naturelle subtile au sol, lumière cohérente entre sujet et fond.')
+            fdSimple.append('brief',      'Photographie de mode professionnelle, ombre naturelle subtile au sol, lumière cohérente entre sujet et fond. ⚠ Préserve les détails fins du visage et des vêtements à l\'identique du sujet fourni.')
             fdSimple.append('ratio',      ratio)
-            fdSimple.append('quality',    quality)
+            // Force 4K sur cette passe pour minimiser la perte de détail (visage notamment)
+            fdSimple.append('quality',    '4K')
 
             const resSimple = await fetch('/api/studio/simple', { method: 'POST', body: fdSimple })
             const dataSimple: any = await resSimple.json().catch(() => null)
