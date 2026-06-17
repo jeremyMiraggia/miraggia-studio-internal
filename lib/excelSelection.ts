@@ -30,45 +30,59 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
   const wb = XLSX.read(buf, { type: 'array', cellStyles: true })
 
   const warnings: string[] = []
-  const sheetName = wb.SheetNames[0]
-  if (!sheetName) {
+  if (!wb.SheetNames || wb.SheetNames.length === 0) {
     throw new Error('Le fichier Excel ne contient aucune feuille.')
   }
-  const sheet = wb.Sheets[sheetName]
-  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
 
   const toRegenerate = new Map<string, Set<number>>()
   const looksFound = new Set<string>()
 
-  // Skip header row (rangée 0). Démarre à row 1.
-  for (let r = range.s.r + 1; r <= range.e.r; r++) {
-    // Colonne A = numeroLook
-    const lookAddr = XLSX.utils.encode_cell({ r, c: 0 })
-    const lookCell = sheet[lookAddr]
-    if (!lookCell || lookCell.v === undefined || lookCell.v === null) continue
+  // On parcourt TOUS les onglets et on fusionne les résultats.
+  // Si un même numeroLook apparaît dans plusieurs onglets, on union les vues
+  // à régénérer (= une vue est verte dans TOUS les onglets pour être considérée
+  // comme OK ; si elle est non-verte dans au moins un onglet, on la régénère).
+  for (const sheetName of wb.SheetNames) {
+    const sheet = wb.Sheets[sheetName]
+    if (!sheet || !sheet['!ref']) continue
+    const range = XLSX.utils.decode_range(sheet['!ref'])
 
-    const numeroLook = String(lookCell.v).trim()
-    if (!numeroLook) continue
-    looksFound.add(numeroLook)
+    let sheetLooks = 0
+    for (let r = range.s.r + 1; r <= range.e.r; r++) {
+      // Colonne A = numeroLook
+      const lookAddr = XLSX.utils.encode_cell({ r, c: 0 })
+      const lookCell = sheet[lookAddr]
+      if (!lookCell || lookCell.v === undefined || lookCell.v === null) continue
 
-    const regenVues = new Set<number>()
+      const numeroLook = String(lookCell.v).trim()
+      if (!numeroLook) continue
+      looksFound.add(numeroLook)
+      sheetLooks++
 
-    // Colonnes B (1), C (2), D (3), E (4) = VUE 1, 2, 3, 4
-    for (let c = 1; c <= 4; c++) {
-      const vueAddr = XLSX.utils.encode_cell({ r, c })
-      const vueCell = sheet[vueAddr]
-      const isGreen = detectGreen(vueCell)
-      if (!isGreen) {
-        // Pas vert (rouge / jaune / vide / autre) → à régénérer
-        regenVues.add(c - 1) // vueIndex 0-based
+      // Récupère le set existant (si le look apparaît dans un onglet précédent)
+      // pour fusionner via union.
+      let regenVues = toRegenerate.get(numeroLook)
+      if (!regenVues) {
+        regenVues = new Set<number>()
+        toRegenerate.set(numeroLook, regenVues)
+      }
+
+      // Colonnes B (1), C (2), D (3), E (4) = VUE 1, 2, 3, 4
+      for (let c = 1; c <= 4; c++) {
+        const vueAddr = XLSX.utils.encode_cell({ r, c })
+        const vueCell = sheet[vueAddr]
+        const isGreen = detectGreen(vueCell)
+        if (!isGreen) {
+          regenVues.add(c - 1)
+        }
       }
     }
-
-    toRegenerate.set(numeroLook, regenVues)
+    if (sheetLooks > 0) {
+      warnings.push(`Onglet "${sheetName}" : ${sheetLooks} look(s) parsé(s).`)
+    }
   }
 
   if (looksFound.size === 0) {
-    warnings.push('Aucun look trouvé dans l\'Excel. Vérifie que la 1re ligne est un header et la colonne A contient les numéros de look.')
+    warnings.push('Aucun look trouvé. Vérifie que chaque onglet a un header en ligne 1 et la colonne A avec les numéros de look.')
   }
 
   return { toRegenerate, looksFound, warnings }
