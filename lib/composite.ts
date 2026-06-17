@@ -250,18 +250,25 @@ function drawCover(ctx: CanvasRenderingContext2D, bmp: ImageBitmap, W: number, H
 }
 
 /**
- * Comble les "trous" internes dans le segmenté en cas d'erreur de la lib RMBG.
+ * Nettoyage STRICT du mask de segmentation.
  *
- * Problème : RMBG confond parfois le t-shirt blanc avec le fond et le rend
- * partiellement transparent. Le résultat : des trous bizarres au milieu du
- * mannequin.
+ * Règle : **rien ne doit être semi-transparent à l'intérieur du mannequin**.
+ * Les modèles ML produisent souvent un mask "bruité" avec des pixels
+ * semi-transparents éparpillés dans le sujet (= taches visibles dans le
+ * composite final).
  *
- * Solution : on identifie les pixels "extérieurs" via un flood fill depuis
- * les bords du canvas (sur le mask alpha thresholdé). Tout pixel transparent
- * qui n'est PAS atteint par le flood fill est un "trou interne" qu'on
- * recomble avec les pixels RGB de l'image Gemini originale + alpha 255.
+ * Algorithme :
+ *  1. Threshold doux (alpha > 80) → mask binaire "subject vs not subject"
+ *  2. Flood fill depuis les 4 bords, à travers les pixels "not subject"
+ *     → on identifie les pixels vraiment EXTÉRIEURS au mannequin
+ *  3. Tout pixel non atteint par le flood fill = INTÉRIEUR du mannequin
+ *     → force alpha = 255, RGB depuis l'image Gemini originale
+ *  4. Préservation de l'anti-aliasing aux bords : pour les pixels "inside"
+ *     qui touchent un pixel "outside" (bord du sujet), on garde l'alpha
+ *     original (clampé à min 50) au lieu de forcer 255 — évite les bords
+ *     dentelés.
  *
- * Coût : ~50-200 ms pour une image 1024x1536.
+ * Coût : ~50-200 ms pour une image 1024×1536.
  */
 export async function fillSegmentationHoles(
   segmentedPng: Blob,
@@ -293,54 +300,81 @@ export async function fillSegmentationHoles(
   origCtx.drawImage(origBmp, 0, 0, W, H)
   const origData = origCtx.getImageData(0, 0, W, H).data
 
-  // Build state map : 0 = transparent (à classifier), 1 = opaque (sujet),
-  // 2 = transparent atteint depuis les bords (= vrai extérieur)
   const N = W * H
-  const state = new Uint8Array(N)
+
+  // 1. Mask binaire : subject = alpha > 80, sinon = candidat outside
+  const isSubject = new Uint8Array(N)
+  const ALPHA_T = 80
   for (let i = 0; i < N; i++) {
-    state[i] = sData[i * 4 + 3] > 128 ? 1 : 0
+    isSubject[i] = sData[i * 4 + 3] > ALPHA_T ? 1 : 0
   }
 
-  // Flood fill BFS depuis les 4 bords sur les pixels transparents
+  // 2. Flood fill BFS depuis les 4 bords à travers les pixels "not subject"
+  //    → marque les pixels VRAIMENT extérieurs au mannequin.
+  const isOutside = new Uint8Array(N)
   const queue: number[] = []
   for (let x = 0; x < W; x++) {
-    if (state[x] === 0) { state[x] = 2; queue.push(x) }
+    if (!isSubject[x]) { isOutside[x] = 1; queue.push(x) }
     const bot = (H - 1) * W + x
-    if (state[bot] === 0) { state[bot] = 2; queue.push(bot) }
+    if (!isSubject[bot]) { isOutside[bot] = 1; queue.push(bot) }
   }
   for (let y = 0; y < H; y++) {
     const left = y * W
-    if (state[left] === 0) { state[left] = 2; queue.push(left) }
+    if (!isSubject[left]) { isOutside[left] = 1; queue.push(left) }
     const right = y * W + W - 1
-    if (state[right] === 0) { state[right] = 2; queue.push(right) }
+    if (!isSubject[right]) { isOutside[right] = 1; queue.push(right) }
   }
   while (queue.length) {
     const idx = queue.pop()!
     const x = idx % W
     const y = (idx - x) / W
-    // 4-connectivité
-    if (x > 0     && state[idx - 1] === 0) { state[idx - 1] = 2; queue.push(idx - 1) }
-    if (x < W - 1 && state[idx + 1] === 0) { state[idx + 1] = 2; queue.push(idx + 1) }
-    if (y > 0     && state[idx - W] === 0) { state[idx - W] = 2; queue.push(idx - W) }
-    if (y < H - 1 && state[idx + W] === 0) { state[idx + W] = 2; queue.push(idx + W) }
+    if (x > 0     && !isSubject[idx - 1]     && !isOutside[idx - 1])     { isOutside[idx - 1] = 1; queue.push(idx - 1) }
+    if (x < W - 1 && !isSubject[idx + 1]     && !isOutside[idx + 1])     { isOutside[idx + 1] = 1; queue.push(idx + 1) }
+    if (y > 0     && !isSubject[idx - W]     && !isOutside[idx - W])     { isOutside[idx - W] = 1; queue.push(idx - W) }
+    if (y < H - 1 && !isSubject[idx + W]     && !isOutside[idx + W])     { isOutside[idx + W] = 1; queue.push(idx + W) }
   }
 
-  // Comble les trous : pour chaque pixel encore à 0 (transparent ET non atteint
-  // depuis les bords → trou interne), on restaure RGB de l'original + alpha 255
-  let filled = 0
+  // 3. Reconstruction du mask final :
+  //    - Pixels marqués extérieurs : alpha = 0 (transparent)
+  //    - Pixels intérieurs (subject ou trou interne) : alpha = 255 (opaque)
+  //      RGB depuis l'image Gemini originale.
+  //    - Pixels intérieurs AU BORD (touchant un pixel extérieur) : garde
+  //      l'alpha original (clampé min 50) pour anti-aliasing soft.
+  let nForced = 0
+  let nEdge = 0
   for (let i = 0; i < N; i++) {
-    if (state[i] === 0) {
-      const p = i * 4
-      sData[p + 0] = origData[p + 0]
-      sData[p + 1] = origData[p + 1]
-      sData[p + 2] = origData[p + 2]
+    const p = i * 4
+    if (isOutside[i]) {
+      sData[p + 3] = 0
+      continue
+    }
+
+    // Pixel intérieur — détecte si c'est un bord (voisin extérieur)
+    const x = i % W
+    const y = (i - x) / W
+    let atEdge = false
+    if (x > 0     && isOutside[i - 1]) atEdge = true
+    else if (x < W - 1 && isOutside[i + 1]) atEdge = true
+    else if (y > 0     && isOutside[i - W]) atEdge = true
+    else if (y < H - 1 && isOutside[i + W]) atEdge = true
+
+    // RGB toujours depuis l'original (= pas de RGB modifié par la segmentation)
+    sData[p + 0] = origData[p + 0]
+    sData[p + 1] = origData[p + 1]
+    sData[p + 2] = origData[p + 2]
+
+    if (atEdge) {
+      // Bord : préserve alpha original pour AA, mais min 50 pour rester visible
+      const origAlpha = sData[p + 3]
+      sData[p + 3] = Math.max(origAlpha, 50)
+      nEdge++
+    } else {
+      // Intérieur ferme : 100 % opaque, aucune chance de tache
       sData[p + 3] = 255
-      filled++
+      nForced++
     }
   }
-  if (filled > 0) {
-    console.log(`[composite] hole-fill : ${filled} pixels comblés (${(filled / N * 100).toFixed(2)}% de l'image)`)
-  }
+  console.log(`[composite] cleanup : ${nForced} px forcés opaques (intérieur), ${nEdge} px bord avec AA`)
 
   ctx.putImageData(segData, 0, 0)
   return new Promise<Blob>((resolve, reject) => {
