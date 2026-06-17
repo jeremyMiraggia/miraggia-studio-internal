@@ -11,6 +11,9 @@
  *  - Cellule VIDE/BLANCHE   → à régénérer (ou n'existe pas, on tente quand même)
  *
  * Lit la couleur via xlsx-js-style (fork SheetJS qui expose les styles de fond).
+ * Gère les couleurs RGB directes ET les couleurs de thème Office (avec tint).
+ *
+ * Parcourt TOUS les onglets et fusionne les sélections par union.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -18,9 +21,9 @@
 export type ExcelSelection = {
   /** Pour chaque numeroLook → indices 0-based des vues à régénérer */
   toRegenerate: Map<string, Set<number>>
-  /** Liste des looks présents dans l'Excel (pour différencier "pas dans l'Excel" de "dans l'Excel mais tout vert") */
+  /** Liste des looks présents dans l'Excel */
   looksFound: Set<string>
-  /** Avertissements éventuels du parser */
+  /** Avertissements / infos du parser */
   warnings: string[]
 }
 
@@ -37,10 +40,10 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
   const toRegenerate = new Map<string, Set<number>>()
   const looksFound = new Set<string>()
 
-  // On parcourt TOUS les onglets et on fusionne les résultats.
-  // Si un même numeroLook apparaît dans plusieurs onglets, on union les vues
-  // à régénérer (= une vue est verte dans TOUS les onglets pour être considérée
-  // comme OK ; si elle est non-verte dans au moins un onglet, on la régénère).
+  let totalGreen = 0
+  let totalCells = 0
+  let firstCellLogged = false
+
   for (const sheetName of wb.SheetNames) {
     const sheet = wb.Sheets[sheetName]
     if (!sheet || !sheet['!ref']) continue
@@ -48,7 +51,6 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
 
     let sheetLooks = 0
     for (let r = range.s.r + 1; r <= range.e.r; r++) {
-      // Colonne A = numeroLook
       const lookAddr = XLSX.utils.encode_cell({ r, c: 0 })
       const lookCell = sheet[lookAddr]
       if (!lookCell || lookCell.v === undefined || lookCell.v === null) continue
@@ -58,20 +60,27 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
       looksFound.add(numeroLook)
       sheetLooks++
 
-      // Récupère le set existant (si le look apparaît dans un onglet précédent)
-      // pour fusionner via union.
       let regenVues = toRegenerate.get(numeroLook)
       if (!regenVues) {
         regenVues = new Set<number>()
         toRegenerate.set(numeroLook, regenVues)
       }
 
-      // Colonnes B (1), C (2), D (3), E (4) = VUE 1, 2, 3, 4
       for (let c = 1; c <= 4; c++) {
         const vueAddr = XLSX.utils.encode_cell({ r, c })
         const vueCell = sheet[vueAddr]
+        totalCells++
+
+        // Log le 1er cellule non-vide pour debug (structure du fill)
+        if (!firstCellLogged && vueCell && vueCell.s && vueCell.s.fill) {
+          console.log(`[excelSelection] DEBUG - 1re cellule analysée (${vueAddr}):`, JSON.stringify(vueCell.s, null, 2))
+          firstCellLogged = true
+        }
+
         const isGreen = detectGreen(vueCell)
-        if (!isGreen) {
+        if (isGreen) {
+          totalGreen++
+        } else {
           regenVues.add(c - 1)
         }
       }
@@ -85,38 +94,83 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
     warnings.push('Aucun look trouvé. Vérifie que chaque onglet a un header en ligne 1 et la colonne A avec les numéros de look.')
   }
 
+  console.log(`[excelSelection] ${totalGreen} cellule(s) vert(es) détectée(s) sur ${totalCells} cellule(s) analysée(s)`)
+  if (totalGreen === 0 && totalCells > 0) {
+    warnings.push(`⚠ Aucun vert détecté ! Ouvre la console développeur (F12) pour voir la structure d'une cellule. Le fichier utilise peut-être des couleurs personnalisées non standard.`)
+  }
+
   return { toRegenerate, looksFound, warnings }
+}
+
+/* ============================== Color helpers ============================== */
+
+/**
+ * Couleurs du thème Office par défaut.
+ *   0: light 1 (white), 1: dark 1 (black)
+ *   2: light 2, 3: dark 2
+ *   4-9: accent 1 à 6 (accent 6 = 70AD47 = VERT)
+ */
+const DEFAULT_THEME_COLORS = [
+  'FFFFFF', '000000', 'E7E6E6', '44546A',
+  '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47',
+]
+
+/** Applique le tint Excel : >0 vers blanc, <0 vers noir. */
+function applyTint(channel: number, tint: number): number {
+  if (!tint) return channel
+  if (tint > 0) return Math.round(channel + (255 - channel) * Math.min(1, tint))
+  return Math.max(0, Math.round(channel * (1 + Math.max(-1, tint))))
+}
+
+/** Critère "vert" : G dominant. */
+function isGreenRGB(r: number, g: number, b: number): boolean {
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return false
+  return g > r + 15 && g > b + 15 && g >= 100
 }
 
 /**
  * Détecte si une cellule a un fond vert.
  *
- * Règle :
- *  - g > r + 15 ET g > b + 15 (vert dominant)
- *  - g >= 100 (pas un noir-verdâtre quasi-noir)
+ * Tente plusieurs sources de couleur dans cet ordre :
+ *  1. RGB direct      : fill.fgColor.rgb / .argb (formats "FFRRGGBB" ou "RRGGBB")
+ *  2. RGB sur bgColor : fill.bgColor.rgb / .argb
+ *  3. Thème + tint    : fill.fgColor.theme = N (0-9) + fill.fgColor.tint = T
+ *  4. Thème sur bg    : fill.bgColor.theme = N + .tint = T
  *
- * Couvre les verts pastel d'Excel (D9EAD3, B6D7A8, 93C47D, 6AA84F...) ainsi
- * que les verts plus saturés (00FF00 etc.).
+ * Si aucune source ne donne du vert → considéré non-vert (= à régénérer).
  */
 function detectGreen(cell: any): boolean {
   if (!cell || !cell.s) return false
   const fill = cell.s.fill
   if (!fill) return false
 
-  // La couleur peut être dans fgColor.rgb ou bgColor.rgb. Format hex : "FFRRGGBB" ou "RRGGBB".
-  const rgbStr: string =
-    (fill.fgColor && (fill.fgColor.rgb || fill.fgColor.argb)) ||
-    (fill.bgColor && (fill.bgColor.rgb || fill.bgColor.argb)) ||
-    ''
-  if (!rgbStr || typeof rgbStr !== 'string') return false
+  const sources = [fill.fgColor, fill.bgColor, fill.color]
 
-  const hex = rgbStr.length === 8 ? rgbStr.slice(2) : rgbStr
-  if (hex.length < 6) return false
+  // Path 1 : RGB direct
+  for (const src of sources) {
+    if (!src) continue
+    const rgbField = src.rgb || src.argb
+    if (typeof rgbField === 'string' && rgbField.length >= 6) {
+      const hex = rgbField.length === 8 ? rgbField.slice(2) : rgbField
+      const r = parseInt(hex.slice(0, 2), 16)
+      const g = parseInt(hex.slice(2, 4), 16)
+      const b = parseInt(hex.slice(4, 6), 16)
+      if (isGreenRGB(r, g, b)) return true
+    }
+  }
 
-  const r = parseInt(hex.slice(0, 2), 16)
-  const g = parseInt(hex.slice(2, 4), 16)
-  const b = parseInt(hex.slice(4, 6), 16)
-  if (isNaN(r) || isNaN(g) || isNaN(b)) return false
+  // Path 2 : Thème Office (avec tint éventuel)
+  for (const src of sources) {
+    if (!src) continue
+    if (typeof src.theme === 'number' && src.theme >= 0 && src.theme < DEFAULT_THEME_COLORS.length) {
+      const baseHex = DEFAULT_THEME_COLORS[src.theme]
+      const tint = typeof src.tint === 'number' ? src.tint : 0
+      const r = applyTint(parseInt(baseHex.slice(0, 2), 16), tint)
+      const g = applyTint(parseInt(baseHex.slice(2, 4), 16), tint)
+      const b = applyTint(parseInt(baseHex.slice(4, 6), 16), tint)
+      if (isGreenRGB(r, g, b)) return true
+    }
+  }
 
-  return g > r + 15 && g > b + 15 && g >= 100
+  return false
 }
