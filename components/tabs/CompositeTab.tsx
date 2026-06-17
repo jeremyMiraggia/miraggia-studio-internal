@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { compositeOnBackground, resizePng, createChromaBackground, extractByChromaKeyV2, verticalBlendTopBottom, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { segmentForeground, fillSegmentationHoles, compositeOnBackground, resizePng, createChromaBackground, extractByChromaKeyV2, verticalBlendTopBottom, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -150,26 +150,36 @@ export default function CompositeTab() {
         const body  = await compressImage(item.task.bodyPhotoFile,  { maxSide: 2048, quality: 0.90 })
         const prods = await compressAll(item.task.productFiles ?? [], { maxSide: 2048, quality: 0.85 })
 
-        // ⚠ Mode CHROMA : on fait générer le mannequin sur fond VERT chroma pur
-        // pour faciliter le détourage à l'étape 2 (zéro ML, déterministe).
-        // Le fond cible sera réintroduit en étape 3 (composite) et la lumière
-        // / l'ombre arrivera à l'étape 4 (fusion Simple).
-        const chromaBg = await createChromaBackground(1024, 1536)
+        // Branche selon le framing :
+        //  - PLEIN PIED  : pipeline CHROMA KEY (Gemini sur fond vert, détourage déterministe)
+        //  - CLOSE-UP & autres : pipeline RMBG normal (Gemini sur vrai bg ref, segmentation ML)
+        const taskFraming = item.task.framingHint ?? 'plein'
+        const useChromaPipeline = taskFraming === 'plein'
+
+        let bgForStep1: File
+        let decorLabelStep1: string
+        if (useChromaPipeline) {
+          bgForStep1 = await createChromaBackground(1024, 1536)
+          decorLabelStep1 = 'PURE GREEN CHROMA KEY background (#00C000) — uniform flat green, NO scene elements, NO floor, NO walls visible. The model must be cleanly isolated against this solid green for later compositing.'
+        } else {
+          bgForStep1 = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.92 })
+          decorLabelStep1 = item.task.fondName
+        }
 
         const fd = new FormData()
         fd.append('prompt',  item.task.prompt)
         fd.append('ratio',   ratio)
         fd.append('quality', quality)
         fd.append('mannequinBody', body)
-        fd.append('background',    chromaBg)
+        fd.append('background',    bgForStep1)
         for (const p of prods) fd.append('products', p)
         if (item.task.facePhotoFile) {
           const face = await compressImage(item.task.facePhotoFile, { maxSide: 2048, quality: 0.92 })
           fd.append('mannequinFace', face)
         }
-        fd.append('framing',        item.task.framingHint ?? 'plein')
+        fd.append('framing',        taskFraming)
         fd.append('mannequinLabel', item.task.mannequinName)
-        fd.append('decorLabel',     'PURE GREEN CHROMA KEY background (#00C000) — uniform flat green, NO scene elements, NO floor, NO walls visible. The model must be cleanly isolated against this solid green for later compositing.')
+        fd.append('decorLabel',     decorLabelStep1)
 
         setProgress(`Gemini · look ${item.task.numeroLook} · ${done + errors}/${total}`)
         const res = await fetch('/api/studio/free', { method: 'POST', body: fd })
@@ -188,22 +198,40 @@ export default function CompositeTab() {
           progressStep: 'segment',
         })
 
-        // ===== Étape 2 : Extraction CHROMA KEY V2 (déterministe, propre, sans liseret) =====
-        setProgress(`Chroma key extraction · look ${item.task.numeroLook} · ${done + errors}/${total}`)
+        // ===== Étape 2 : Extraction du mannequin =====
+        // Branche selon le pipeline :
+        //  - PLEIN PIED  : chroma key V2 (déterministe, ~50 ms)
+        //  - CLOSE-UP    : RMBG ML + hole-fill + érosion (plus lent mais marche sur bg ref direct)
         const geminiBlob = await dataUrlToBlob(data.imageUrl)
-        const segmented = await extractByChromaKeyV2(geminiBlob, {
-          innerThreshold:  0.10,
-          outerThreshold:  0.22,
-          despillStrength: 1.0,
-        })
+        let segmented: Blob
+        if (useChromaPipeline) {
+          setProgress(`Chroma key extraction · look ${item.task.numeroLook} · ${done + errors}/${total}`)
+          segmented = await extractByChromaKeyV2(geminiBlob, {
+            innerThreshold:  0.12,
+            outerThreshold:  0.32,
+            despillStrength: 0.8,
+            erodePx:         2,  // = rayon du feathering gaussien
+          })
+        } else {
+          setProgress(`Segmentation RMBG · look ${item.task.numeroLook} · ${done + errors}/${total}`)
+          const rawSegmented = await segmentForeground(geminiBlob, (msg) =>
+            setProgress(`Segmentation · ${msg} · look ${item.task.numeroLook}`),
+          )
+          setProgress(`Refinement (hole-fill + érosion) · look ${item.task.numeroLook}`)
+          try {
+            segmented = await fillSegmentationHoles(rawSegmented, geminiBlob, 2)
+          } catch (err: any) {
+            console.warn('[composite] hole-fill failed, using raw segmentation:', err?.message)
+            segmented = rawSegmented
+          }
+        }
         const segmentedDataUrl = await blobToDataUrl(segmented)
         updateState(item.task.id, { imageUrlSegmented: segmentedDataUrl, progressStep: 'composite' })
 
         // ===== Étape 3 : Composite =====
         setProgress(`Composite · look ${item.task.numeroLook} · ${done + errors}/${total}`)
-        const framing = item.task.framingHint ?? 'plein'
         const compositeFile = await compositeOnBackground(segmented, item.task.backgroundFile, {
-          framingHint: framing,
+          framingHint: taskFraming,
         })
         const compositeDataUrl = await blobToDataUrl(compositeFile)
         // imageUrlComposite = pré-ombre (toujours conservé pour comparaison)
@@ -220,7 +248,7 @@ export default function CompositeTab() {
         // naturelles (comme dans l'onglet Simple).
         // Seulement quand le sol est visible (plein pied / close-up bas).
         // Pour close-up haut (mur, sol croppé) → on garde le composite Canvas.
-        const needsShadow = shadowEnabled && (framing === 'plein' || framing === 'bas')
+        const needsShadow = shadowEnabled && (taskFraming === 'plein' || taskFraming === 'bas')
         if (needsShadow) {
           setProgress(`Fusion Simple · look ${item.task.numeroLook} · ${done + errors}/${total}`)
           updateState(item.task.id, { progressStep: 'shadow' })
@@ -249,8 +277,8 @@ export default function CompositeTab() {
               // Garde le visage pristine (step 3 composite Canvas, haut) + l'ombre
               // naturelle du sol (step 4 Gemini Simple, bas) avec une transition
               // douce à la mi-hauteur.
-              if (framing === 'plein') {
-                // ===== Step 5 : vertical blend top/bottom =====
+              if (taskFraming === 'plein') {
+                // ===== Step 5 : vertical blend top/bottom (PLEIN PIED uniquement) =====
                 // Garde le visage + tenue parfaitement nets du composite step 3
                 // (mannequin segmenté pristine sur fond ref pixel-perfect) sur la
                 // MOITIÉ HAUTE, et l'ombre Gemini naturelle du step 4 sur la
