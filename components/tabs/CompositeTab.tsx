@@ -23,6 +23,16 @@ type TaskState = {
   progressStep?: 'gemini' | 'segment' | 'composite' | 'shadow' | 'done'
 }
 
+function sanitizeFilename(s: string): string {
+  return s
+    .replace(/[\/\\:*?"<>|]/g, '_')   // caractères interdits Windows
+    .replace(/\s+/g, '_')                 // espaces -> _
+    .replace(/_+/g, '_')                   // _ multiples -> 1 seul
+    .replace(/^_|_$/g, '')                 // pas de _ au début/fin
+    .slice(0, 80)                          // limite à 80 chars
+    || 'unnamed'
+}
+
 export default function CompositeTab() {
   const [concurrency, setConcurrency]   = useState<number>(2)
   const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)   // active la passe Gemini "ajoute une ombre"
@@ -274,16 +284,30 @@ export default function CompositeTab() {
   const updateState = (id: string, patch: Partial<TaskState>) =>
     setStates(prev => prev.map(s => s.task.id === id ? { ...s, ...patch } : s))
 
-  /* ----------- Export ZIP ----------- */
+  /* ----------- Export ZIP — un dossier par look ----------- */
   const exportZip = async () => {
     const ok = states.filter(s => s.status === 'done' && s.imageUrl)
     if (!ok.length) return
     const zip = new JSZip()
+
     for (const s of ok) {
       const blob = await dataUrlToBlob(s.imageUrl!)
-      const name = `look_${s.task.numeroLook}_vue${(s.task.vueIndex ?? 0) + 1}_${(s.task.framingHint ?? 'plein').toLowerCase()}.jpg`
-      zip.file(name, blob)
+      // Détecte l'extension depuis le data URL
+      const mimeMatch = s.imageUrl!.match(/^data:image\/(\w+)/)
+      const ext = mimeMatch ? mimeMatch[1].replace('jpeg', 'jpg') : 'jpg'
+
+      // Nom du dossier : "{lookId}_{numeroLook}" (sanitisé)
+      const folder = sanitizeFilename(`${s.task.lookId}_${s.task.numeroLook}`)
+
+      // Nom du fichier dans le dossier : "vue{N}_{orientation}_{framing}.ext"
+      const vueNum     = (s.task.vueIndex ?? 0) + 1
+      const orientation = (s.task.pose?.orientation ?? 'front').toString().toLowerCase()
+      const framing    = (s.task.framingHint ?? 'plein').toString().toLowerCase()
+      const filename = `vue${vueNum}_${orientation}_${framing}.${ext}`
+
+      zip.file(`${folder}/${filename}`, blob)
     }
+
     const out = await zip.generateAsync({ type: 'blob' })
     const url = URL.createObjectURL(out)
     const a = document.createElement('a')
@@ -293,6 +317,8 @@ export default function CompositeTab() {
     document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
+
+
 
   const hasResults = states.some(s => s.status === 'done')
 
