@@ -109,7 +109,8 @@ export default function CompositeTab() {
     try {
       const sel = await parseExcelSelection(files[0])
       setExcelSelection(sel)
-      if (sel.warnings.length > 0) setExcelError(sel.warnings.join(' '))
+      // Les warnings sont des infos (pas des erreurs)
+      // ex : "Onglet ANAIS : 99 look(s) parsé(s)"
     } catch (e: any) {
       setExcelError(e?.message ?? 'Impossible de parser l\'Excel.')
       setExcelSelection(null)
@@ -124,23 +125,39 @@ export default function CompositeTab() {
   //   - les deux peuvent se combiner
   useEffect(() => {
     if (!useExcel && !excludePlein) return
+    if (!parsed) return
+
+    // Build mapping lookId → index séquentiel 1-based (= ligne Excel)
+    // Pour que l'Excel ligne 2 (= "1" dans col A) → 1er look parsé Notion.
+    const orderedLookIds: string[] = []
+    const seenLookIds = new Set<string>()
+    for (const t of parsed.tasks) {
+      if (!seenLookIds.has(t.lookId)) {
+        seenLookIds.add(t.lookId)
+        orderedLookIds.push(t.lookId)
+      }
+    }
+    const lookIdToSeqIndex = new Map<string, number>()
+    orderedLookIds.forEach((id, idx) => {
+      lookIdToSeqIndex.set(id, idx + 1)
+    })
+
     setStates(prev => prev.map(s => {
       let enabled = s.enabled
 
       if (useExcel && excelSelection) {
         const t = s.task
-        if (t.taskType === 'pose') {
-          const regenVues = excelSelection.toRegenerate.get(t.numeroLook)
-          if (regenVues) {
-            enabled = regenVues.has(t.vueIndex ?? 0)
-          } else {
-            // Look pas dans l'Excel → conservateur, on ne le coche pas
-            enabled = false
+        const seqIdx = lookIdToSeqIndex.get(t.lookId)
+        if (seqIdx === undefined) {
+          enabled = false
+        } else {
+          const key = String(seqIdx)
+          const regenVues = excelSelection.toRegenerate.get(key)
+          if (t.taskType === 'pose') {
+            enabled = regenVues ? regenVues.has(t.vueIndex ?? 0) : false
+          } else if (t.taskType === 'detail') {
+            enabled = regenVues ? regenVues.size > 0 : false
           }
-        } else if (t.taskType === 'detail') {
-          // Cochés uniquement si au moins une pose du look est à régénérer
-          const regenVues = excelSelection.toRegenerate.get(t.numeroLook)
-          enabled = regenVues ? regenVues.size > 0 : false
         }
       }
 
@@ -555,9 +572,18 @@ export default function CompositeTab() {
                   label="Drop ton Excel (.xlsx)" minHeight={70} />
                 {excelError && <div style={{ ...styles.errorBox, marginTop: 6 }}>⚠ {excelError}</div>}
                 {excelSelection && (
-                  <div style={{ ...styles.info, marginTop: 6, fontSize: 11 }}>
-                    ✓ {excelSelection.looksFound.size} look(s) parsé(s) — {Array.from(excelSelection.toRegenerate.values()).reduce((sum, s) => sum + s.size, 0)} vue(s) à régénérer (non vertes)
-                  </div>
+                  <>
+                    {excelSelection.warnings.length > 0 && (
+                      <div style={{ ...styles.info, marginTop: 6, fontSize: 11 }}>
+                        {excelSelection.warnings.map((w, i) => (<div key={i}>📋 {w}</div>))}
+                      </div>
+                    )}
+                    <div style={{ ...styles.info, marginTop: 6, fontSize: 11 }}>
+                      ✓ {excelSelection.looksFound.size} look(s) parsé(s) — {Array.from(excelSelection.toRegenerate.values()).reduce((sum, s) => sum + s.size, 0)} vue(s) à régénérer (non vertes)
+                      <br />
+                      🔗 Matching par <strong>position séquentielle</strong> : ligne 2 Excel = 1er look du ZIP, ligne 3 Excel = 2e look, etc.
+                    </div>
+                  </>
                 )}
                 <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer', marginTop: 10 }}>
                   <input type="checkbox" checked={useExcel} onChange={e => setUseExcel(e.target.checked)} disabled={!excelSelection} />
