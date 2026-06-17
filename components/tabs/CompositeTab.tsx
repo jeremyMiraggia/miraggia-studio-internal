@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, compositeOnBackground, fillSegmentationHoles, resizePng, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { segmentForeground, compositeOnBackground, fillSegmentationHoles, resizePng, verticalBlendTopBottom, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error'
@@ -246,7 +246,25 @@ export default function CompositeTab() {
             const resSimple = await fetch('/api/studio/simple', { method: 'POST', body: fdSimple })
             const dataSimple: any = await resSimple.json().catch(() => null)
             if (resSimple.ok && dataSimple?.imageUrl) {
-              updateState(item.task.id, { imageUrl: dataSimple.imageUrl })
+              // ===== Étape 5 : blend top/bottom pour PLEIN PIED uniquement =====
+              // Garde le visage pristine (step 3 composite Canvas, haut) + l'ombre
+              // naturelle du sol (step 4 Gemini Simple, bas) avec une transition
+              // douce à la mi-hauteur.
+              if (framing === 'plein') {
+                setProgress(`Blend top/bottom · look ${item.task.numeroLook}`)
+                try {
+                  const step4Blob   = await dataUrlToBlob(dataSimple.imageUrl)
+                  // compositeFile = step 3 (composite Canvas, déjà construit plus haut)
+                  const blended = await verticalBlendTopBottom(compositeFile, step4Blob, 0.50, 0.08)
+                  const blendedDataUrl = await blobToDataUrl(blended)
+                  updateState(item.task.id, { imageUrl: blendedDataUrl })
+                } catch (err: any) {
+                  console.warn('[composite] blend top/bottom failed, fallback à step 4 brut :', err?.message)
+                  updateState(item.task.id, { imageUrl: dataSimple.imageUrl })
+                }
+              } else {
+                updateState(item.task.id, { imageUrl: dataSimple.imageUrl })
+              }
             } else {
               console.warn('[composite] fusion Simple échouée :', dataSimple?.error || resSimple.status)
             }

@@ -419,6 +419,92 @@ export async function resizePng(file: File, maxSide = 1536): Promise<File> {
   return new File([blob], file.name, { type: 'image/png' })
 }
 
+/**
+ * Blend vertical de deux images : moitié haute de TOP + moitié basse de BOTTOM,
+ * avec une bande de transition douce à la jointure pour ne pas voir la coupe.
+ *
+ * Usage : composer un visuel final qui prend
+ *   - la moitié HAUTE du composite Canvas (= visage pristine de Gemini step 1
+ *     + fond ref pixel-perfect, pas dégradé par re-passe)
+ *   - la moitié BASSE de la fusion Simple Gemini step 4 (= ombre naturelle au sol
+ *     ajustée par Gemini)
+ *
+ * @param topImage    Image dont on garde la moitié HAUTE
+ * @param bottomImage Image dont on garde la moitié BASSE
+ * @param splitRatio  0..1 : position du split depuis le haut (default 0.50)
+ * @param blendBand   0..1 : largeur de la zone de transition douce (default 0.08)
+ */
+export async function verticalBlendTopBottom(
+  topImage: Blob,
+  bottomImage: Blob,
+  splitRatio = 0.50,
+  blendBand  = 0.08,
+): Promise<File> {
+  const [topBmp, botBmp] = await Promise.all([
+    createImageBitmap(topImage),
+    createImageBitmap(bottomImage),
+  ])
+  // On compose à la résolution du TOP (= composite Canvas, généralement la résolution Gemini step 1)
+  const W = topBmp.width
+  const H = topBmp.height
+
+  // Canvas pour le top
+  const topCanvas = document.createElement('canvas')
+  topCanvas.width = W
+  topCanvas.height = H
+  const topCtx = topCanvas.getContext('2d')
+  if (!topCtx) throw new Error('Canvas 2D unavailable.')
+  topCtx.drawImage(topBmp, 0, 0)
+  const topData = topCtx.getImageData(0, 0, W, H)
+
+  // Canvas pour le bottom — scale pour matcher les dims du top
+  const botCanvas = document.createElement('canvas')
+  botCanvas.width = W
+  botCanvas.height = H
+  const botCtx = botCanvas.getContext('2d')
+  if (!botCtx) throw new Error('Canvas 2D unavailable.')
+  botCtx.drawImage(botBmp, 0, 0, W, H)
+  const botData = botCtx.getImageData(0, 0, W, H)
+
+  // Calcul des bornes de la zone de blend
+  const splitY = Math.round(H * splitRatio)
+  const bandHalf = Math.max(1, Math.round(H * blendBand / 2))
+  const yTopBoundary = splitY - bandHalf  // au-dessus : 100 % top
+  const yBotBoundary = splitY + bandHalf  // en-dessous : 100 % bottom
+
+  const td = topData.data
+  const bd = botData.data
+  for (let y = 0; y < H; y++) {
+    // Calcule alpha bottom : 0 au-dessus de la zone, 1 en-dessous, ramp linéaire au milieu
+    let alphaBot: number
+    if (y <= yTopBoundary) alphaBot = 0
+    else if (y >= yBotBoundary) alphaBot = 1
+    else alphaBot = (y - yTopBoundary) / (yBotBoundary - yTopBoundary)
+    const alphaTop = 1 - alphaBot
+
+    if (alphaBot === 0) continue   // optimisation : skip si on garde 100 % top
+
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4
+      td[i + 0] = td[i + 0] * alphaTop + bd[i + 0] * alphaBot
+      td[i + 1] = td[i + 1] * alphaTop + bd[i + 1] * alphaBot
+      td[i + 2] = td[i + 2] * alphaTop + bd[i + 2] * alphaBot
+      // alpha reste 255 (sortie JPEG)
+    }
+  }
+
+  topCtx.putImageData(topData, 0, 0)
+  console.log(`[composite] verticalBlend : split=${(splitRatio * 100).toFixed(0)}% band=${(blendBand * 100).toFixed(0)}%`)
+
+  return new Promise<File>((resolve, reject) => {
+    topCanvas.toBlob(
+      b => b ? resolve(new File([b], 'blended.jpg', { type: 'image/jpeg' })) : reject(new Error('toBlob null')),
+      'image/jpeg',
+      0.95,
+    )
+  })
+}
+
 /* ============================== utils ============================== */
 
 export function blobToDataUrl(blob: Blob): Promise<string> {
