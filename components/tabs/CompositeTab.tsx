@@ -79,10 +79,8 @@ export default function CompositeTab() {
     try {
       const limit = lookLimit.trim() && Number(lookLimit) > 0 ? Number(lookLimit) : undefined
       const result = await parseNotionExport(files[0], (msg) => setProgress(msg), limit)
-      // On filtre les tâches détail (le composite est principalement pour les poses).
-      const posesOnly = { ...result, tasks: result.tasks.filter(t => t.taskType !== 'detail') }
-      setParsed(posesOnly)
-      setStates(posesOnly.tasks.map(t => ({ task: t, status: 'pending', enabled: true })))
+      setParsed(result)
+      setStates(result.tasks.map(t => ({ task: t, status: 'pending', enabled: true })))
       setProgress('')
     } catch (e: any) {
       setGlobalError(e?.message ?? 'Impossible de parser le zip.')
@@ -113,6 +111,13 @@ export default function CompositeTab() {
   const toggleAllStates = (value: boolean) =>
     setStates(prev => prev.map(s => ({ ...s, enabled: value })))
 
+  // Sélection rapide : ne coche QUE les close-up haut/bas + les détails
+  const selectCloseUpAndDetails = () =>
+    setStates(prev => prev.map(s => ({
+      ...s,
+      enabled: s.task.framingHint === 'haut' || s.task.framingHint === 'bas' || s.task.taskType === 'detail',
+    })))
+
   const setLookExpansion = (lookId: string, open: boolean) =>
     setExpanded(prev => ({ ...prev, [lookId]: open }))
 
@@ -140,7 +145,69 @@ export default function CompositeTab() {
       })
 
       try {
-        // ===== Étape 1 : Gemini =====
+        // ===== BRANCHE DÉTAIL : appel Gemini direct avec base + fichier détail =====
+        if (item.task.taskType === 'detail') {
+          // Attend qu'une pose du même look soit done (max 3 min)
+          setProgress(`Détail · attente d'une pose base du look ${item.task.numeroLook}…`)
+          const waitStart = Date.now()
+          let baseState: TaskState | undefined
+          while (Date.now() - waitStart < 180_000) {
+            baseState = statesRef.current.find(s =>
+              s.task.lookId === item.task.lookId &&
+              s.task.taskType === 'pose' &&
+              s.status === 'done' &&
+              !!s.imageUrl,
+            )
+            if (baseState) break
+            const anyOther = statesRef.current.some(s =>
+              s.task.lookId === item.task.lookId &&
+              s.task.taskType === 'pose' &&
+              (s.status === 'running' || s.status === 'pending'),
+            )
+            if (!anyOther) break
+            await new Promise(r => setTimeout(r, 2000))
+          }
+
+          if (!baseState?.imageUrl || !item.task.detailFile || !item.task.promptWithBase) {
+            updateState(item.task.id, { status: 'error', error: 'Pas de pose base disponible pour ce détail (aucune pose du même look n\'a réussi).' })
+            errors++
+            return
+          }
+
+          setProgress(`Détail · look ${item.task.numeroLook} · ${done + errors}/${total}`)
+          const baseBlob = await dataUrlToBlob(baseState.imageUrl)
+          const baseFile = new File([baseBlob], `base_look_${item.task.lookId}.png`, { type: 'image/png' })
+          const baseCompressed   = await compressImage(baseFile,             { maxSide: 2048, quality: 0.92 })
+          const detailCompressed = await compressImage(item.task.detailFile, { maxSide: 2048, quality: 0.92 })
+
+          const fdDetail = new FormData()
+          fdDetail.append('prompt',  item.task.promptWithBase)
+          fdDetail.append('ratio',   ratio)
+          fdDetail.append('quality', quality)
+          fdDetail.append('refs',    baseCompressed)
+          fdDetail.append('refs',    detailCompressed)
+
+          const resDetail = await fetch('/api/studio/free', { method: 'POST', body: fdDetail })
+          const dataDetail: any = await resDetail.json().catch(() => null)
+          if (!resDetail.ok || !dataDetail?.imageUrl) {
+            const msg = (dataDetail && (dataDetail.error || dataDetail.message)) || `Gemini HTTP ${resDetail.status}`
+            updateState(item.task.id, { status: 'error', error: truncate(msg) })
+            errors++
+            return
+          }
+
+          // Détail : pas de pipeline composite. Le résultat Gemini est directement final.
+          updateState(item.task.id, {
+            imageUrlGemini: dataDetail.imageUrl,
+            imageUrl:       dataDetail.imageUrl,
+            status:         'done',
+            progressStep:   'done',
+          })
+          done++
+          return
+        }
+
+        // ===== Étape 1 : Gemini (poses normales) =====
         if (!item.task.bodyPhotoFile || !item.task.backgroundFile) {
           updateState(item.task.id, { status: 'error', error: 'Pas de bodyPhotoFile ou backgroundFile.' })
           errors++
@@ -310,11 +377,16 @@ export default function CompositeTab() {
       // Nom du dossier look : "{lookId}_{numeroLook}" (sanitisé)
       const folder = sanitizeFilename(`${s.task.lookId}_${s.task.numeroLook}`)
 
-      // Base du nom de fichier : "vue{N}_{orientation}_{framing}"
-      const vueNum     = (s.task.vueIndex ?? 0) + 1
-      const orientation = (s.task.pose?.orientation ?? 'front').toString().toLowerCase()
-      const framing    = (s.task.framingHint ?? 'plein').toString().toLowerCase()
-      const baseName = `vue${vueNum}_${orientation}_${framing}`
+      // Base du nom de fichier
+      let baseName: string
+      if (s.task.taskType === 'detail') {
+        baseName = `detail${(s.task.detailIndex ?? 0) + 1}_${sanitizeFilename(s.task.detailName ?? 'unnamed')}`
+      } else {
+        const vueNum     = (s.task.vueIndex ?? 0) + 1
+        const orientation = (s.task.pose?.orientation ?? 'front').toString().toLowerCase()
+        const framing    = (s.task.framingHint ?? 'plein').toString().toLowerCase()
+        baseName = `vue${vueNum}_${orientation}_${framing}`
+      }
 
       // step 1 = sortie Gemini brute (si disponible)
       if (s.imageUrlGemini) {
@@ -433,6 +505,7 @@ export default function CompositeTab() {
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button onClick={() => toggleAllStates(true)}  style={styles.btnLight}>✓ tout cocher</button>
               <button onClick={() => toggleAllStates(false)} style={styles.btnLight}>✗ tout décocher</button>
+              <button onClick={selectCloseUpAndDetails}      style={styles.btnLight}>📐 close-up + détails uniquement</button>
               <button onClick={handleRunAll} disabled={running || enabledCount === 0} style={styles.btnPrimary}>
                 {running ? '⏳ génération en cours…' : `🚀 lancer le composite (${enabledCount})`}
               </button>
@@ -523,7 +596,11 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
     <div style={taskRowStyle}>
       <input type="checkbox" checked={enabled} onChange={onToggle} disabled={status === 'running'} />
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>{task.vueRaw ?? task.id}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>
+          {task.taskType === 'detail'
+            ? `🔬 Détail ${(task.detailIndex ?? 0) + 1} — ${task.detailName ?? ''}`
+            : task.vueRaw ?? task.id}
+        </div>
         <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
           ID <code>{task.id}</code> · type <strong>{task.taskType}</strong>
           {state.progressStep && status === 'running' && (
