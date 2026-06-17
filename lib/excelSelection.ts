@@ -30,7 +30,9 @@ export type ExcelSelection = {
 export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
   const XLSX: any = (await import('xlsx-js-style')).default ?? (await import('xlsx-js-style'))
   const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array', cellStyles: true })
+  // sheetStubs: true → garde les cellules vides MAIS colorées (sinon SheetJS
+  // les ignore complètement et on perd les fonds verts D9EAD3 sans texte).
+  const wb = XLSX.read(buf, { type: 'array', cellStyles: true, sheetStubs: true })
 
   const warnings: string[] = []
   if (!wb.SheetNames || wb.SheetNames.length === 0) {
