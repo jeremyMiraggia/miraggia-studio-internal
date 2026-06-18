@@ -60,6 +60,9 @@ export default function CompositeTab() {
   const [excludePlein, setExcludePlein]         = useState<boolean>(false)
 
   const [zips, setZips]               = useState<File[]>([])
+  // Fond dédié aux close-up haut (1 fichier optionnel) : utilisé à la place
+  // du fond plein-pied + crop top 50% (qui contenait le sol et donnait des faux fonds).
+  const [closeUpHautBg, setCloseUpHautBg] = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
   const [parsed, setParsed]           = useState<ParsedExport | null>(null)
   const [states, setStates]           = useState<TaskState[]>([])
@@ -109,9 +112,13 @@ export default function CompositeTab() {
     setParsing(false)
   }
 
+  // Ref pour accéder au fond close-up haut depuis le runner async
+  const closeUpHautBgRef = useRef<File | null>(null)
+
   useEffect(() => { statesRef.current = states }, [states])
   useEffect(() => { autoZipEnabledRef.current = autoZipEnabled }, [autoZipEnabled])
   useEffect(() => { autoZipEveryRef.current = autoZipEvery }, [autoZipEvery])
+  useEffect(() => { closeUpHautBgRef.current = closeUpHautBg[0] ?? null }, [closeUpHautBg])
 
   /* ----------- 📁 File System Access : dossier de sortie ----------- */
   const handleChooseOutputDir = async () => {
@@ -180,14 +187,17 @@ export default function CompositeTab() {
         await w.write(blob)
         await w.close()
 
-        // DEBUG : sauve le fond exact donné à Gemini, à côté du visuel
-        if (s.task.backgroundFile) {
+        // DEBUG : sauve le fond effectivement donné à Gemini (= override close-up haut si applicable)
+        const debugBg: File | undefined = (s.task.framingHint === 'haut' && closeUpHautBgRef.current)
+          ? closeUpHautBgRef.current
+          : s.task.backgroundFile
+        if (debugBg) {
           try {
-            const fondExt = (s.task.backgroundFile.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+            const fondExt = (debugBg.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
             const fondName = `_FOND_${baseName}.${fondExt}`
             const fondHandle = await lookDir.getFileHandle(fondName, { create: true })
             const fw = await fondHandle.createWritable()
-            await fw.write(s.task.backgroundFile)
+            await fw.write(debugBg)
             await fw.close()
           } catch (err) { console.warn('[outputDir] failed to write debug fond:', err) }
         }
@@ -433,14 +443,21 @@ export default function CompositeTab() {
 
         const taskFraming = item.task.framingHint ?? 'plein'
 
-        // Pour close-up haut : on crop le fond ref aux 50% du HAUT avant envoi
-        // → Gemini ne voit pas le sol → pas de risque qu'il en génère un.
+        // Pour close-up haut :
+        //   1) si l'utilisateur a fourni un fond dédié close-up haut → on l'utilise tel quel
+        //      (fond pensé pour cadrage buste, sans sol parasite)
+        //   2) sinon fallback : on crop le fond plein-pied aux 50% du HAUT
+        //      → Gemini ne voit pas le sol → pas de risque qu'il en génère un.
         let bgSource: File = item.task.backgroundFile
         if (taskFraming === 'haut') {
-          try {
-            bgSource = await cropTopPercent(item.task.backgroundFile, 50)
-          } catch (err) {
-            console.warn('[runner] cropTopPercent(50) failed, fallback fond entier:', err)
+          if (closeUpHautBgRef.current) {
+            bgSource = closeUpHautBgRef.current
+          } else {
+            try {
+              bgSource = await cropTopPercent(item.task.backgroundFile, 50)
+            } catch (err) {
+              console.warn('[runner] cropTopPercent(50) failed, fallback fond entier:', err)
+            }
           }
         }
         // Background ref en haute résolution (3500 px max) pour max de détails à Gemini.
@@ -584,10 +601,13 @@ export default function CompositeTab() {
 
         const blob = await dataUrlToBlob(s.imageUrl!)
         zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
-        // DEBUG : sauve le fond exact donné à Gemini
-        if (s.task.backgroundFile) {
-          const fondExt = (s.task.backgroundFile.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
-          zip.file(`${folder}/_FOND_${baseName}.${fondExt}`, s.task.backgroundFile)
+        // DEBUG : fond effectivement donné à Gemini (override close-up haut si applicable)
+        const debugBg = (s.task.framingHint === 'haut' && closeUpHautBgRef.current)
+          ? closeUpHautBgRef.current
+          : s.task.backgroundFile
+        if (debugBg) {
+          const fondExt = (debugBg.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+          zip.file(`${folder}/_FOND_${baseName}.${fondExt}`, debugBg)
         }
       }
 
@@ -643,10 +663,13 @@ export default function CompositeTab() {
 
       const blob = await dataUrlToBlob(s.imageUrl!)
       zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
-      // DEBUG : fond exact donné à Gemini
-      if (s.task.backgroundFile) {
-        const fondExt = (s.task.backgroundFile.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
-        zip.file(`${folder}/_FOND_${baseName}.${fondExt}`, s.task.backgroundFile)
+      // DEBUG : fond effectivement donné à Gemini (override close-up haut si applicable)
+      const debugBg = (s.task.framingHint === 'haut' && closeUpHautBgRef.current)
+        ? closeUpHautBgRef.current
+        : s.task.backgroundFile
+      if (debugBg) {
+        const fondExt = (debugBg.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+        zip.file(`${folder}/_FOND_${baseName}.${fondExt}`, debugBg)
       }
     }
 
@@ -686,6 +709,18 @@ export default function CompositeTab() {
           <div style={{ fontSize: 10, color: '#6B7A8A', marginTop: 4 }}>
             Pour tester sur N looks seulement, indispensable pour les gros ZIPs (4-5 GB+).
           </div>
+        </div>
+      </div>
+
+      {/* Fond dédié close-up haut (1 image optionnelle) */}
+      <div style={{ marginTop: 8, marginBottom: 8 }}>
+        <label style={styles.label}>
+          🖼 Fond pour close-up haut (optionnel, 1 image)
+        </label>
+        <Dropzone files={closeUpHautBg} onChange={setCloseUpHautBg} accept="image/*" multiple={false}
+          label="Glisse-dépose le fond à utiliser pour tous les close-up haut (sinon : crop top 50% du fond plein-pied)" />
+        <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 4 }}>
+          Si fourni, ce fond remplacera le fond plein-pied pour TOUTES les tasks framing=haut. Idéal pour éviter que Gemini invente un sol.
         </div>
       </div>
 
