@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { dataUrlToBlob } from '@/lib/composite'
 import { cropTopPercent } from '@/lib/imageCrop'
 import { parseExcelSelection, type ExcelSelection } from '@/lib/excelSelection'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
@@ -33,42 +33,6 @@ function sanitizeFilename(s: string): string {
     .replace(/^_|_$/g, '')                 // pas de _ au début/fin
     .slice(0, 80)                          // limite à 80 chars
     || 'unnamed'
-}
-
-// Déclenche un téléchargement programmatique d'un data URL → fichier
-// (utilisé par l'auto-download). Le 1er appel demande à l'utilisateur
-// d'autoriser les téléchargements multiples (toast Chrome en haut).
-function triggerDownload(dataUrl: string, filename: string) {
-  try {
-    const a = document.createElement('a')
-    a.href = dataUrl
-    a.download = filename
-    a.style.display = 'none'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-  } catch (err) {
-    console.warn('[autoDownload] failed:', err)
-  }
-}
-
-// Calcule le filename pour l'auto-download.
-// Format : "{lookId}_{numeroLook}__vue{N}_{orientation}_{framing}.{ext}"
-// (regroupe par tri alphabétique dans Downloads/)
-function computeAutoFilename(task: GenerationTask, dataUrl: string): string {
-  const folder = sanitizeFilename(`${task.lookId}_${task.numeroLook}`)
-  let baseName: string
-  if (task.taskType === 'detail') {
-    baseName = `detail${(task.detailIndex ?? 0) + 1}_${sanitizeFilename(task.detailName ?? 'unnamed')}`
-  } else {
-    const vueNum = (task.vueIndex ?? 0) + 1
-    const orientation = (task.pose?.orientation ?? 'front').toString().toLowerCase()
-    const framing = (task.framingHint ?? 'plein').toString().toLowerCase()
-    baseName = `vue${vueNum}_${orientation}_${framing}`
-  }
-  const mimeMatch = dataUrl.match(/^data:image\/(\w+)/)
-  const ext = mimeMatch ? mimeMatch[1].replace('jpeg', 'jpg') : 'jpg'
-  return `${folder}__${baseName}.${ext}`
 }
 
 export default function CompositeTab() {
