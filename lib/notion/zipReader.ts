@@ -171,7 +171,13 @@ export async function readZipIndex(
 
 /**
  * Extrait UNE entrée du ZIP comme Blob. Décompresse à la volée si besoin.
- * VERSION SIMPLE — pas de progress callback, juste pipe direct.
+ *
+ * Pour les gros fichiers compressés (>100 MB), on stream les chunks décompressés
+ * DIRECTEMENT vers un fichier OPFS sur disque (Origin Private File System) au
+ * lieu d'essayer de matérialiser la grosse Blob via Response.blob() — qui plante
+ * en "Failed to fetch" pour 4+ GB de données décompressées.
+ *
+ * Pour les petits fichiers, on garde le path standard Response.blob().
  */
 export async function extractEntry(file: Blob, entry: ZipEntry): Promise<Blob> {
   // 1. Lit le Local File Header
@@ -198,23 +204,68 @@ export async function extractEntry(file: Blob, entry: ZipEntry): Promise<Blob> {
     throw new Error('DecompressionStream non disponible — utilise un navigateur moderne (Chrome 80+, Firefox 113+, Safari 16.4+).')
   }
 
-  // Pipe simple direct (= version qui marchait avant tous mes ajouts de progress)
   const ds = new DecompressionStream('deflate-raw')
   const decompressed = dataBlob.stream().pipeThrough(ds)
+
+  // GROS FICHIER : stream vers OPFS (disque) au lieu de matérialiser une grosse Blob.
+  // Threshold = 100 MB compressés (= ~150-500 MB décompressés, taille critique pour Response.blob()).
+  const LARGE_THRESHOLD = 100 * 1024 * 1024
+  if (entry.csize > LARGE_THRESHOLD) {
+    try {
+      return await streamToOpfsFile(decompressed, entry.name)
+    } catch (err) {
+      console.warn('[zipReader] OPFS streaming failed, fallback Response.blob():', err)
+      // Si OPFS plante (quota plein, lib pas supportée), on retombe sur Response.blob()
+      // qui peut quand même réussir dans certains cas.
+      const ds2 = new DecompressionStream('deflate-raw')
+      const decompressed2 = dataBlob.stream().pipeThrough(ds2)
+      return await new Response(decompressed2).blob()
+    }
+  }
+
+  // PETIT FICHIER : path standard
   return await new Response(decompressed).blob()
 }
 
-/**
- * Calcule l'offset du début des DONNÉES (post LFH) d'une entrée donnée
- * dans le fichier source. Utile pour lire un ZIP imbriqué sans le
- * détacher du conteneur — on récupère son baseOffset + virtualSize
- * et on appelle readZipIndex avec ces options.
- */
+
+async function streamToOpfsFile(stream: ReadableStream<Uint8Array>, label: string): Promise<File> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nav: any = navigator
+  if (!nav.storage?.getDirectory) {
+    throw new Error('OPFS non supporte (Chrome 86+, Edge 86+, Firefox 111+, Safari 16.4+ requis).')
+  }
+  const root = await nav.storage.getDirectory()
+  const opfsName = '_zip_extracted_temp.bin'
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fh: any = await root.getFileHandle(opfsName, { create: true })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const writable: any = await fh.createWritable()
+
+  const reader = stream.getReader()
+  try {
+    let bytesWritten = 0
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      if (value) {
+        await writable.write(value)
+        bytesWritten += value.byteLength
+      }
+    }
+    await writable.close()
+    console.log('[zipReader] OPFS ecriture OK pour ' + label + ' : ' + bytesWritten + ' bytes')
+  } catch (err) {
+    try { await writable.abort() } catch { /* */ }
+    throw err
+  }
+  return await fh.getFile() as File
+}
+
 export async function getEntryDataOffset(file: Blob, entry: ZipEntry): Promise<{ dataOffset: number; csize: number }> {
   const lfhBuf = await file.slice(entry.offset, entry.offset + 30).arrayBuffer()
   const lfh = new DataView(lfhBuf)
   if (lfh.getUint32(0, true) !== SIG_LFH) {
-    throw new Error(`LFH signature invalide pour ${entry.name}`)
+    throw new Error('LFH signature invalide pour ' + entry.name)
   }
   const nameLen  = lfh.getUint16(26, true)
   const extraLen = lfh.getUint16(28, true)
@@ -226,7 +277,7 @@ function readBigUint64(view: DataView, offset: number): number {
   const low  = view.getUint32(offset, true) >>> 0
   const high = view.getUint32(offset + 4, true) >>> 0
   if (high > 0x1FFFFF) {
-    throw new Error('Valeur ZIP64 > Number.MAX_SAFE_INTEGER — pas géré.')
+    throw new Error('Valeur ZIP64 > Number.MAX_SAFE_INTEGER, non gere.')
   }
   return high * 0x100000000 + low
 }
