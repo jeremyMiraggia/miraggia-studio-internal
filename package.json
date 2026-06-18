@@ -8,9 +8,10 @@
     "start": "next start"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.105.4",
     "@huggingface/transformers": "^3.3.0",
     "@imgly/background-removal": "^1.5.5",
+    "@supabase/supabase-js": "^2.105.4",
+    "@vercel/blob": "^2.4.1",
     "jszip": "^3.10.1",
     "next": "16.2.6",
     "papaparse": "^5.5.3",
