@@ -76,11 +76,19 @@ export default function CompositeTab() {
   const [autoZipEnabled, setAutoZipEnabled] = useState<boolean>(false) // 💾 auto-export ZIP tous les N looks
   const [autoZipEvery, setAutoZipEvery]     = useState<number>(10)     // N = 10 looks par ZIP par défaut
 
-  // Refs pour suivre l'auto-export
+  // Refs pour suivre l'auto-export ZIP
   const exportedLookIdsRef    = useRef<Set<string>>(new Set())
   const zipExportInFlightRef  = useRef<boolean>(false)
   const autoZipEnabledRef     = useRef<boolean>(false)
   const autoZipEveryRef       = useRef<number>(10)
+
+  // 📁 Dossier de sortie (File System Access API) — alternative au ZIP : écrit
+  // les visuels directement look par look dans un dossier local choisi.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const outputDirHandleRef    = useRef<any | null>(null)
+  const [outputDirName, setOutputDirName] = useState<string | null>(null)
+  const writtenLookIdsRef     = useRef<Set<string>>(new Set())
+  const writeInFlightRef      = useRef<Set<string>>(new Set())
   const [lookLimit, setLookLimit] = useState<string>('')
 
   // Sélection via Excel
@@ -143,6 +151,121 @@ export default function CompositeTab() {
   useEffect(() => { statesRef.current = states }, [states])
   useEffect(() => { autoZipEnabledRef.current = autoZipEnabled }, [autoZipEnabled])
   useEffect(() => { autoZipEveryRef.current = autoZipEvery }, [autoZipEvery])
+
+  /* ----------- 📁 File System Access : dossier de sortie ----------- */
+  const handleChooseOutputDir = async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any
+    if (!w || typeof w.showDirectoryPicker !== 'function') {
+      alert('API File System non supportée par ton navigateur. Utilise Chrome 86+ ou Edge 86+.')
+      return
+    }
+    try {
+      const handle = await w.showDirectoryPicker({ mode: 'readwrite' })
+      outputDirHandleRef.current = handle
+      setOutputDirName(handle.name as string)
+      console.log('[outputDir] dossier choisi :', handle.name)
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        console.warn('[outputDir] échec :', err)
+        alert('Impossible de choisir le dossier : ' + (err?.message ?? err))
+      }
+    }
+  }
+
+  const clearOutputDir = () => {
+    outputDirHandleRef.current = null
+    setOutputDirName(null)
+    writtenLookIdsRef.current = new Set()
+  }
+
+  /**
+   * Écrit les visuels d'un look dans le dossier choisi.
+   * Structure : {lookId}_{numeroLook}/step 1/ + step 4/
+   */
+  const writeLookToOutputDir = async (lookId: string) => {
+    const dir = outputDirHandleRef.current
+    if (!dir) return
+    if (writtenLookIdsRef.current.has(lookId)) return
+    if (writeInFlightRef.current.has(lookId)) return
+
+    writeInFlightRef.current.add(lookId)
+    try {
+      const tasks = statesRef.current.filter(s =>
+        s.task.lookId === lookId && s.status === 'done' && s.imageUrl,
+      )
+      if (tasks.length === 0) return
+
+      const folderName = sanitizeFilename(`${tasks[0].task.lookId}_${tasks[0].task.numeroLook}`)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lookDir: any = await dir.getDirectoryHandle(folderName, { create: true })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const step1Dir: any = await lookDir.getDirectoryHandle('step 1', { create: true })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const step4Dir: any = await lookDir.getDirectoryHandle('step 4', { create: true })
+
+      const extFrom = (dataUrl: string) => {
+        const m = dataUrl.match(/^data:image\/(\w+)/)
+        return m ? m[1].replace('jpeg', 'jpg') : 'jpg'
+      }
+
+      for (const s of tasks) {
+        const vueNum     = (s.task.vueIndex ?? 0) + 1
+        const orientation = (s.task.pose?.orientation ?? 'front').toString().toLowerCase()
+        const framing    = (s.task.framingHint ?? 'plein').toString().toLowerCase()
+        const baseName = s.task.taskType === 'detail'
+          ? `detail${(s.task.detailIndex ?? 0) + 1}_${sanitizeFilename(s.task.detailName ?? 'unnamed')}`
+          : `vue${vueNum}_${orientation}_${framing}`
+
+        if (s.imageUrlGemini) {
+          const fileName1 = `${baseName}.${extFrom(s.imageUrlGemini)}`
+          const blob1 = await dataUrlToBlob(s.imageUrlGemini)
+          const fileHandle1 = await step1Dir.getFileHandle(fileName1, { create: true })
+          const w1 = await fileHandle1.createWritable()
+          await w1.write(blob1)
+          await w1.close()
+        }
+        const fileName4 = `${baseName}.${extFrom(s.imageUrl!)}`
+        const blob4 = await dataUrlToBlob(s.imageUrl!)
+        const fileHandle4 = await step4Dir.getFileHandle(fileName4, { create: true })
+        const w4 = await fileHandle4.createWritable()
+        await w4.write(blob4)
+        await w4.close()
+      }
+      writtenLookIdsRef.current.add(lookId)
+      console.log(`[outputDir] ✓ écrit look ${folderName} (${tasks.length} fichier(s) × 2 steps)`)
+    } catch (err) {
+      console.warn(`[outputDir] échec écriture look ${lookId}:`, err)
+    } finally {
+      writeInFlightRef.current.delete(lookId)
+    }
+  }
+
+  /**
+   * Vérifie si on doit écrire des looks dans le dossier de sortie.
+   * Appelé après chaque task done.
+   */
+  const tryWriteCompletedLooks = async () => {
+    if (!outputDirHandleRef.current) return
+
+    const lookIdToTasks = new Map<string, TaskState[]>()
+    for (const s of statesRef.current) {
+      const arr = lookIdToTasks.get(s.task.lookId) ?? []
+      arr.push(s)
+      lookIdToTasks.set(s.task.lookId, arr)
+    }
+    for (const [lookId, tasks] of lookIdToTasks) {
+      if (writtenLookIdsRef.current.has(lookId)) continue
+      if (writeInFlightRef.current.has(lookId)) continue
+      const enabledTasks = tasks.filter(t => t.enabled)
+      if (enabledTasks.length === 0) continue
+      const allDone = enabledTasks.every(t => t.status === 'done' || t.status === 'error')
+      if (allDone) {
+        // Fire-and-forget : on n'attend pas pour ne pas bloquer le runner
+        void writeLookToOutputDir(lookId)
+      }
+    }
+  }
 
   /* ----------- Excel upload + parsing ----------- */
   const handleExcelChange = async (files: File[]) => {
@@ -253,9 +376,11 @@ export default function CompositeTab() {
     setGlobalError(null)
     setRunning(true)
 
-    // Reset des refs auto-zip pour ce batch
+    // Reset des refs auto-zip + écriture dossier pour ce batch
     exportedLookIdsRef.current = new Set()
     zipExportInFlightRef.current = false
+    writtenLookIdsRef.current = new Set()
+    writeInFlightRef.current = new Set()
 
     const queue = states.filter(s => s.enabled)
     let done = 0
@@ -334,7 +459,8 @@ export default function CompositeTab() {
             progressStep:   'done',
           })
           done++
-          // Vérifie si on doit déclencher un auto-export ZIP partiel
+          // Auto-écriture dossier + auto-zip
+          void tryWriteCompletedLooks()
           void tryAutoZipExport()
           return
         }
@@ -465,7 +591,8 @@ export default function CompositeTab() {
           progressStep: 'done',
         })
         done++
-        // Vérifie si on doit déclencher un auto-export ZIP partiel
+        // Auto-écriture dossier + auto-zip
+        void tryWriteCompletedLooks()
         void tryAutoZipExport()
       } catch (e: any) {
         updateState(item.task.id, { status: 'error', error: truncate(e?.message ?? 'Erreur') })
@@ -488,6 +615,15 @@ export default function CompositeTab() {
     setProgress(`Lancement de ${workerCount} workers en parallèle…`)
     await Promise.all(Array.from({ length: workerCount }, () => worker()))
 
+    // Force flush : écrit les derniers looks dans le dossier
+    if (outputDirHandleRef.current) {
+      setProgress(`Écriture finale dans le dossier…`)
+      await tryWriteCompletedLooks()
+      // Attend que les writes en cours se terminent
+      while (writeInFlightRef.current.size > 0) {
+        await new Promise(r => setTimeout(r, 200))
+      }
+    }
     // Force flush du dernier batch ZIP (les < N looks restants qui n'ont pas
     // atteint le seuil de l'auto-zip)
     if (autoZipEnabledRef.current) {
@@ -710,9 +846,29 @@ export default function CompositeTab() {
                 Fusion finale style &quot;Simple&quot; (sol visible uniquement)
               </label>
 
+              <div style={{ marginTop: 14, padding: 12, background: '#E8F2F5', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8 }}>
+                <label style={{ ...styles.label, display: 'block', textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 700, color: '#0D4A5C', marginBottom: 6 }}>
+                  📁 Sauvegarde directe dans un dossier (recommandé)
+                </label>
+                <p style={{ fontSize: 11, color: '#6B7A8A', margin: '0 0 8px', lineHeight: 1.5 }}>
+                  Au lieu de télécharger des ZIPs, écrit chaque look (step 1/ + step 4/) directement dans un dossier local <strong>au fur et à mesure</strong>.
+                  Pas de manipulation post-batch, structure de dossiers déjà en place. Chrome/Edge 86+ uniquement.
+                </p>
+                {outputDirName ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                    <span style={{ color: '#1F7A35', fontWeight: 600 }}>✓ Dossier : {outputDirName}</span>
+                    <button onClick={clearOutputDir} style={{ ...styles.btnLight, padding: '4px 8px', fontSize: 11 }}>✗ retirer</button>
+                  </div>
+                ) : (
+                  <button onClick={handleChooseOutputDir} style={{ ...styles.btnLight, padding: '6px 10px', fontSize: 12 }}>
+                    📂 Choisir le dossier de sortie
+                  </button>
+                )}
+              </div>
+
               <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 700, color: '#1F7A35', cursor: 'pointer', marginTop: 10 }}>
                 <input type="checkbox" checked={autoZipEnabled} onChange={e => setAutoZipEnabled(e.target.checked)} />
-                💾 Auto-export ZIP tous les N looks <em style={{ color: '#6B7A8A', fontSize: 10, fontWeight: 400 }}>(anti-crash : pas de perte si gros batch)</em>
+                💾 Auto-export ZIP tous les N looks <em style={{ color: '#6B7A8A', fontSize: 10, fontWeight: 400 }}>(fallback : si pas de dossier choisi)</em>
               </label>
               {autoZipEnabled && (
                 <div style={{ marginLeft: 24, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
