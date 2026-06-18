@@ -22,6 +22,33 @@ type TaskState = {
   progressStep?: 'gemini' | 'done'
 }
 
+/**
+ * Récupère le Blob de l'image quel que soit le format de l'URL :
+ *   - data URL (data:image/jpeg;base64,...) → décodage local
+ *   - HTTPS URL (Vercel Blob) → fetch direct sur le CDN Blob (= ZERO Fast Origin Transfer)
+ */
+async function imageUrlToBlob(url: string): Promise<Blob> {
+  if (url.startsWith('data:')) return dataUrlToBlob(url)
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`fetch image ${url.slice(0, 80)} → HTTP ${res.status}`)
+  return await res.blob()
+}
+
+/**
+ * Devine l'extension de fichier (jpg/webp/png) depuis l'URL :
+ *   - data URL → on lit le mime
+ *   - HTTPS URL → on lit l'extension de la querystring/path
+ */
+function extFromUrl(url: string): string {
+  if (url.startsWith('data:')) {
+    const m = url.match(/^data:image\/(\w+)/)
+    return m ? m[1].replace('jpeg', 'jpg') : 'jpg'
+  }
+  const path = url.split('?')[0]
+  const m = path.match(/\.(jpg|jpeg|webp|png)$/i)
+  return m ? m[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg'
+}
+
 function sanitizeFilename(s: string): string {
   return s
     .replace(/[\/\\:*?"<>|]/g, '_')   // caractères interdits Windows
@@ -168,10 +195,6 @@ export default function CompositeTab() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lookDir: any = await dir.getDirectoryHandle(folderName, { create: true })
 
-      const extFrom = (dataUrl: string) => {
-        const m = dataUrl.match(/^data:image\/(\w+)/)
-        return m ? m[1].replace('jpeg', 'jpg') : 'jpg'
-      }
 
       for (const s of tasks) {
         const vueNum     = (s.task.vueIndex ?? 0) + 1
@@ -180,8 +203,8 @@ export default function CompositeTab() {
         const baseName = s.task.taskType === 'detail'
           ? `detail${(s.task.detailIndex ?? 0) + 1}_${sanitizeFilename(s.task.detailName ?? 'unnamed')}`
           : `vue${vueNum}_${orientation}_${framing}`
-        const fileName = `${baseName}.${extFrom(s.imageUrl!)}`
-        const blob = await dataUrlToBlob(s.imageUrl!)
+        const fileName = `${baseName}.${extFromUrl(s.imageUrl!)}`
+        const blob = await imageUrlToBlob(s.imageUrl!)
         const fileHandle = await lookDir.getFileHandle(fileName, { create: true })
         const w = await fileHandle.createWritable()
         await w.write(blob)
@@ -397,7 +420,7 @@ export default function CompositeTab() {
           }
 
           setProgress(`Détail · look ${item.task.numeroLook} · ${done + errors}/${total}`)
-          const baseBlob = await dataUrlToBlob(baseState.imageUrl)
+          const baseBlob = await imageUrlToBlob(baseState.imageUrl)
           const baseFile = new File([baseBlob], `base_look_${item.task.lookId}.png`, { type: 'image/png' })
           const baseCompressed   = await compressImage(baseFile,             { maxSide: 2048, quality: 0.92 })
           const detailCompressed = await compressImage(item.task.detailFile, { maxSide: 2048, quality: 0.92 })
@@ -590,10 +613,6 @@ export default function CompositeTab() {
       }
 
       const zip = new JSZip()
-      const extFrom = (dataUrl: string) => {
-        const m = dataUrl.match(/^data:image\/(\w+)/)
-        return m ? m[1].replace('jpeg', 'jpg') : 'jpg'
-      }
 
       for (const s of ok) {
         const folder = sanitizeFilename(`${s.task.lookId}_${s.task.numeroLook}`)
@@ -604,8 +623,8 @@ export default function CompositeTab() {
           ? `detail${(s.task.detailIndex ?? 0) + 1}_${sanitizeFilename(s.task.detailName ?? 'unnamed')}`
           : `vue${vueNum}_${orientation}_${framing}`
 
-        const blob = await dataUrlToBlob(s.imageUrl!)
-        zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
+        const blob = await imageUrlToBlob(s.imageUrl!)
+        zip.file(`${folder}/${baseName}.${extFromUrl(s.imageUrl!)}`, blob)
         // DEBUG : fond effectivement donné à Gemini (override close-up haut si applicable)
         const debugBg = (s.task.framingHint === 'haut' && closeUpHautBgRef.current)
           ? closeUpHautBgRef.current
@@ -646,10 +665,6 @@ export default function CompositeTab() {
     const zip = new JSZip()
 
     // Helper pour extraire l'extension à partir d'un data URL
-    const extFrom = (dataUrl: string) => {
-      const m = dataUrl.match(/^data:image\/(\w+)/)
-      return m ? m[1].replace('jpeg', 'jpg') : 'jpg'
-    }
 
     for (const s of ok) {
       // Nom du dossier look : "{lookId}_{numeroLook}" (sanitisé)
@@ -666,8 +681,8 @@ export default function CompositeTab() {
         baseName = `vue${vueNum}_${orientation}_${framing}`
       }
 
-      const blob = await dataUrlToBlob(s.imageUrl!)
-      zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
+      const blob = await imageUrlToBlob(s.imageUrl!)
+      zip.file(`${folder}/${baseName}.${extFromUrl(s.imageUrl!)}`, blob)
       // DEBUG : fond effectivement donné à Gemini (override close-up haut si applicable)
       const debugBg = (s.task.framingHint === 'haut' && closeUpHautBgRef.current)
         ? closeUpHautBgRef.current

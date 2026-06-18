@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { compressGeminiImage } from '@/lib/serverImageCompress'
+import { put } from '@vercel/blob'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -228,19 +229,41 @@ async function callGemini(apiKey: string, body: string): Promise<GeminiAttempt> 
   const parts = candidate?.content?.parts ?? []
   for (const part of parts) {
     if (part?.inlineData?.mimeType?.startsWith('image/')) {
-      // Recompression JPEG q90 pour réduire la bande passante Vercel
-      // (Gemini renvoie souvent du PNG ~2-5 MB → JPEG ~300-700 KB).
+      // Recompression JPEG q90 pour réduire la taille (et le storage Blob).
+      // Gemini renvoie souvent du PNG ~2-5 MB → JPEG ~300-700 KB.
       const compressed = await compressGeminiImage(
         part.inlineData.data,
         part.inlineData.mimeType,
         { format: 'jpeg', quality: 90 },
       )
-      return {
-        ok: true, status: res.status,
-        imageUrl: `data:${compressed.mime};base64,${compressed.base64}`,
-        finishReason, blockReason,
-        // Note : on NE renvoie PAS `raw: data` en succès — payload Gemini complet
-        // peut peser plusieurs MB (parts text/usage/etc.) sans utilité pour le client.
+
+      // ⚡ Upload sur Vercel Blob au lieu de renvoyer l'image inline en base64.
+      // Le client recevra juste une URL HTTPS et téléchargera depuis le CDN Blob
+      // (transfer séparé de Vercel Compute → ZERO Fast Origin Transfer sur la réponse).
+      try {
+        const bytes = Buffer.from(compressed.base64, 'base64')
+        const ext   = compressed.mime === 'image/webp' ? 'webp' : 'jpg'
+        const path  = `gemini/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+        const blob  = await put(path, bytes, {
+          access: 'public',
+          contentType: compressed.mime,
+          // Cache court côté CDN : on s'attend à 1 seule lecture client (download dans dossier local),
+          // pas de raison de garder ça en cache CDN longtemps.
+          cacheControlMaxAge: 60,
+        })
+        return {
+          ok: true, status: res.status,
+          imageUrl: blob.url,
+          finishReason, blockReason,
+        }
+      } catch (err: any) {
+        // Si Blob indisponible (token manquant en local dev), fallback data URL
+        console.warn('[blob] upload failed, fallback data URL:', err?.message ?? err)
+        return {
+          ok: true, status: res.status,
+          imageUrl: `data:${compressed.mime};base64,${compressed.base64}`,
+          finishReason, blockReason,
+        }
       }
     }
   }
@@ -307,7 +330,8 @@ function mapFramingToInstructions(cadrage: string): string {
   if (c.includes('mi-corps') || c.includes('mi corps') || c.includes('half')) {
     return 'MID-BODY SHOT (cowboy shot), framing from the top of the head down to mid-thigh / above the knees. Lower body below the knees must be OUT of frame. Hips and waist are visible, the legs from the knees down are NOT visible. VERTICAL EXTENT: the frame covers the area from mid-thigh up to just above the head. Anything below mid-thigh is OUT of frame. ' + BG_PRESERVE_NEUTRAL + ' The camera is positioned at chest level. '  }
   if (c.includes('haut') || c.includes('upper')) {
-    return 'UPPER-BODY CLOSE-UP, head and shoulders down to chest visible. No waist, no legs in frame. Camera close to the subject. Emphasis on neckline, shoulders, top garment, face. VERTICAL EXTENT: the frame covers only from chest level up. Anything below chest level is OUT of frame. ' + BG_PRESERVE_NEUTRAL + ' Do NOT add extra background blur for this close-up unless it is already present in the SETTING. '  }
+    return 'UPPER-BODY CLOSE-UP, head and shoulders down to chest visible. No waist, no legs in frame. Camera close to the subject. Emphasis on neckline, shoulders, top garment, face. VERTICAL EXTENT: the frame covers only from chest level up. Anything below chest level is OUT of frame. ' + BG_PRESERVE_NEUTRAL + ' Do NOT add extra background blur for this close-up unless it is already present in the SETTING.'
+  }
   if (c.includes('bas') || c.includes('lower')) {
     return `LOWER-BODY-ONLY SHOT. STRICT REQUIREMENT: only the legs are shown in frame, from the hips/waist down to the feet. Head, torso, arms, chest must be ENTIRELY OUT of frame (cropped above the hips). The model upper body is invisible. Focus on pants/skirt/shoes only. VERTICAL EXTENT: the frame covers only the area from hip level down to the feet. Anything above hip level is OUT of frame. ${BG_PRESERVE_NEUTRAL} ${SHADOW_FLOOR_NATURAL}`
   }
