@@ -4,7 +4,8 @@ import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { segmentForeground, fillSegmentationHoles, compositeOnBackground, resizePng, blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { blobToDataUrl, dataUrlToBlob } from '@/lib/composite'
+import { cropTopPercent } from '@/lib/imageCrop'
 import { parseExcelSelection, type ExcelSelection } from '@/lib/excelSelection'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
@@ -72,7 +73,6 @@ function computeAutoFilename(task: GenerationTask, dataUrl: string): string {
 
 export default function CompositeTab() {
   const [concurrency, setConcurrency]   = useState<number>(2)
-  const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)   // active la passe Gemini "ajoute une ombre"
   const [autoZipEnabled, setAutoZipEnabled] = useState<boolean>(false) // 💾 auto-export ZIP tous les N looks
   const [autoZipEvery, setAutoZipEvery]     = useState<number>(10)     // N = 10 looks par ZIP par défaut
 
@@ -465,7 +465,7 @@ export default function CompositeTab() {
           return
         }
 
-        // ===== Étape 1 : Gemini (poses normales) =====
+        // ===== Génération unique Gemini (pipeline simplifié) =====
         if (!item.task.bodyPhotoFile || !item.task.backgroundFile) {
           updateState(item.task.id, { status: 'error', error: 'Pas de bodyPhotoFile ou backgroundFile.' })
           errors++
@@ -473,10 +473,22 @@ export default function CompositeTab() {
         }
 
         const body  = await compressImage(item.task.bodyPhotoFile,  { maxSide: 2048, quality: 0.90 })
-        const bg    = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.92 })
         const prods = await compressAll(item.task.productFiles ?? [], { maxSide: 2048, quality: 0.85 })
 
         const taskFraming = item.task.framingHint ?? 'plein'
+
+        // Pour close-up haut : on crop le fond ref aux 50% du HAUT avant envoi
+        // → Gemini ne voit pas le sol → pas de risque qu'il en génère un.
+        let bgSource: File = item.task.backgroundFile
+        if (taskFraming === 'haut') {
+          try {
+            bgSource = await cropTopPercent(item.task.backgroundFile, 50)
+          } catch (err) {
+            console.warn('[runner] cropTopPercent(50) failed, fallback fond entier:', err)
+          }
+        }
+        // Background ref en haute résolution (3500 px max) pour max de détails à Gemini.
+        const bg = await compressImage(bgSource, { maxSide: 3500, quality: 0.88 })
 
         const fd = new FormData()
         fd.append('prompt',  item.task.prompt)
@@ -503,92 +515,14 @@ export default function CompositeTab() {
           return
         }
 
+        // 1 appel Gemini → c'est le visuel final, point.
         updateState(item.task.id, {
+          imageUrl:         data.imageUrl,
           imageUrlGemini:   data.imageUrl,
+          status:           'done',
+          progressStep:     'done',
           faceUsed:         typeof data.faceUsed === 'boolean' ? data.faceUsed : undefined,
           faceWasAvailable: typeof data.faceWasAvailable === 'boolean' ? data.faceWasAvailable : undefined,
-          progressStep: 'segment',
-        })
-
-        // ===== Étape 2 : Segmentation RMBG + hole-fill + érosion =====
-        setProgress(`Segmentation RMBG · look ${item.task.numeroLook} · ${done + errors}/${total}`)
-        const geminiBlob = await dataUrlToBlob(data.imageUrl)
-        const rawSegmented = await segmentForeground(geminiBlob, (msg) =>
-          setProgress(`Segmentation · ${msg} · look ${item.task.numeroLook}`),
-        )
-        setProgress(`Refinement (hole-fill + érosion) · look ${item.task.numeroLook}`)
-        let segmented: Blob
-        try {
-          segmented = await fillSegmentationHoles(rawSegmented, geminiBlob, 2)
-        } catch (err: any) {
-          console.warn('[composite] hole-fill failed, using raw segmentation:', err?.message)
-          segmented = rawSegmented
-        }
-        const segmentedDataUrl = await blobToDataUrl(segmented)
-        updateState(item.task.id, { imageUrlSegmented: segmentedDataUrl, progressStep: 'composite' })
-
-        // ===== Étape 3 : Composite =====
-        setProgress(`Composite · look ${item.task.numeroLook} · ${done + errors}/${total}`)
-        const compositeFile = await compositeOnBackground(segmented, item.task.backgroundFile, {
-          framingHint: taskFraming,
-        })
-        const compositeDataUrl = await blobToDataUrl(compositeFile)
-        // imageUrlComposite = pré-ombre (toujours conservé pour comparaison)
-        // imageUrl = final (sera écrasé par la passe ombre si elle a lieu)
-        updateState(item.task.id, {
-          imageUrlComposite: compositeDataUrl,
-          imageUrl:          compositeDataUrl,
-          progressStep:      'composite',
-        })
-
-        // ===== Étape 4 : Fusion finale style "Simple" =====
-        // On envoie le mannequin segmenté (PNG transparent) + le fond seul à
-        // /api/studio/simple, qui fusionne via Gemini avec une lumière + ombre
-        // naturelles (comme dans l'onglet Simple).
-        // Seulement quand le sol est visible (plein pied / close-up bas).
-        // Pour close-up haut (mur, sol croppé) → on garde le composite Canvas.
-        const needsShadow = shadowEnabled && (taskFraming === 'plein' || taskFraming === 'bas')
-        if (needsShadow) {
-          setProgress(`Fusion Simple · look ${item.task.numeroLook} · ${done + errors}/${total}`)
-          updateState(item.task.id, { progressStep: 'shadow' })
-
-          try {
-            // ⚠ Subject = mannequin segmenté (PNG TRANSPARENT) → on DOIT garder
-            // l'alpha. compressImage ré-encode en JPEG et perd la transparence,
-            // donc on utilise resizePng (qui resize en restant en PNG).
-            const segmentedFile = new File([segmented], 'subject.png', { type: 'image/png' })
-            const subjectResized = await resizePng(segmentedFile, 1536)
-            // Background : JPEG OK (pas d'alpha), on garde compressImage
-            const bgCompressed = await compressImage(item.task.backgroundFile, { maxSide: 2048, quality: 0.95 })
-
-            const fdSimple = new FormData()
-            fdSimple.append('subject',    subjectResized)
-            fdSimple.append('background', bgCompressed)
-            fdSimple.append('brief',      'Photographie de mode professionnelle, ombre naturelle subtile au sol, lumière cohérente entre sujet et fond. ⚠ Préserve les détails fins du visage et des vêtements à l\'identique du sujet fourni.')
-            fdSimple.append('ratio',      ratio)
-            // Force 4K sur cette passe pour minimiser la perte de détail (visage notamment)
-            fdSimple.append('quality',    '4K')
-
-            const resSimple = await fetch('/api/studio/simple', { method: 'POST', body: fdSimple })
-            const dataSimple: any = await resSimple.json().catch(() => null)
-            if (resSimple.ok && dataSimple?.imageUrl) {
-              // ===== Étape 5 : blend top/bottom pour PLEIN PIED uniquement =====
-              // Garde le visage pristine (step 3 composite Canvas, haut) + l'ombre
-              // naturelle du sol (step 4 Gemini Simple, bas) avec une transition
-              // douce à la mi-hauteur.
-              // Step 4 final : on garde le résultat de la fusion Simple
-              updateState(item.task.id, { imageUrl: dataSimple.imageUrl })
-            } else {
-              console.warn('[composite] fusion Simple échouée :', dataSimple?.error || resSimple.status)
-            }
-          } catch (err: any) {
-            console.warn('[composite] fusion Simple exception :', err?.message)
-          }
-        }
-
-        updateState(item.task.id, {
-          status:       'done',
-          progressStep: 'done',
         })
         done++
         // Auto-écriture dossier + auto-zip
@@ -841,12 +775,7 @@ export default function CompositeTab() {
             </div>
 
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(13,74,92,0.08)' }}>
-              <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer' }}>
-                <input type="checkbox" checked={shadowEnabled} onChange={e => setShadowEnabled(e.target.checked)} />
-                Fusion finale style &quot;Simple&quot; (sol visible uniquement)
-              </label>
-
-              <div style={{ marginTop: 14, padding: 12, background: '#E8F2F5', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8 }}>
+              <div style={{ marginTop: 0, padding: 12, background: '#E8F2F5', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8 }}>
                 <label style={{ ...styles.label, display: 'block', textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 700, color: '#0D4A5C', marginBottom: 6 }}>
                   📁 Sauvegarde directe dans un dossier (recommandé)
                 </label>

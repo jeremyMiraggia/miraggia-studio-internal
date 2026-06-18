@@ -366,7 +366,8 @@ export default function NotionTab() {
 
         if (canStructure) {
           const body  = await compressImage(item.task.bodyPhotoFile!, { maxSide: 2048, quality: 0.90 })
-          const bg    = await compressImage(item.task.backgroundFile!, { maxSide: 2048, quality: 0.92 })
+          // Background ref en haute résolution (3500 px max) pour max de détails à Gemini.
+          const bg    = await compressImage(item.task.backgroundFile!, { maxSide: 3500, quality: 0.88 })
           const prods = await compressAll(item.task.productFiles ?? [], { maxSide: 2048, quality: 0.85 })
           fd.append('mannequinBody',  body)
           fd.append('background',     bg)
