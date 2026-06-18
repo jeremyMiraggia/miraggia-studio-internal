@@ -34,9 +34,53 @@ function sanitizeFilename(s: string): string {
     || 'unnamed'
 }
 
+// Déclenche un téléchargement programmatique d'un data URL → fichier
+// (utilisé par l'auto-download). Le 1er appel demande à l'utilisateur
+// d'autoriser les téléchargements multiples (toast Chrome en haut).
+function triggerDownload(dataUrl: string, filename: string) {
+  try {
+    const a = document.createElement('a')
+    a.href = dataUrl
+    a.download = filename
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } catch (err) {
+    console.warn('[autoDownload] failed:', err)
+  }
+}
+
+// Calcule le filename pour l'auto-download.
+// Format : "{lookId}_{numeroLook}__vue{N}_{orientation}_{framing}.{ext}"
+// (regroupe par tri alphabétique dans Downloads/)
+function computeAutoFilename(task: GenerationTask, dataUrl: string): string {
+  const folder = sanitizeFilename(`${task.lookId}_${task.numeroLook}`)
+  let baseName: string
+  if (task.taskType === 'detail') {
+    baseName = `detail${(task.detailIndex ?? 0) + 1}_${sanitizeFilename(task.detailName ?? 'unnamed')}`
+  } else {
+    const vueNum = (task.vueIndex ?? 0) + 1
+    const orientation = (task.pose?.orientation ?? 'front').toString().toLowerCase()
+    const framing = (task.framingHint ?? 'plein').toString().toLowerCase()
+    baseName = `vue${vueNum}_${orientation}_${framing}`
+  }
+  const mimeMatch = dataUrl.match(/^data:image\/(\w+)/)
+  const ext = mimeMatch ? mimeMatch[1].replace('jpeg', 'jpg') : 'jpg'
+  return `${folder}__${baseName}.${ext}`
+}
+
 export default function CompositeTab() {
   const [concurrency, setConcurrency]   = useState<number>(2)
   const [shadowEnabled, setShadowEnabled] = useState<boolean>(true)   // active la passe Gemini "ajoute une ombre"
+  const [autoZipEnabled, setAutoZipEnabled] = useState<boolean>(false) // 💾 auto-export ZIP tous les N looks
+  const [autoZipEvery, setAutoZipEvery]     = useState<number>(10)     // N = 10 looks par ZIP par défaut
+
+  // Refs pour suivre l'auto-export
+  const exportedLookIdsRef    = useRef<Set<string>>(new Set())
+  const zipExportInFlightRef  = useRef<boolean>(false)
+  const autoZipEnabledRef     = useRef<boolean>(false)
+  const autoZipEveryRef       = useRef<number>(10)
   const [lookLimit, setLookLimit] = useState<string>('')
 
   // Sélection via Excel
@@ -97,6 +141,8 @@ export default function CompositeTab() {
   }
 
   useEffect(() => { statesRef.current = states }, [states])
+  useEffect(() => { autoZipEnabledRef.current = autoZipEnabled }, [autoZipEnabled])
+  useEffect(() => { autoZipEveryRef.current = autoZipEvery }, [autoZipEvery])
 
   /* ----------- Excel upload + parsing ----------- */
   const handleExcelChange = async (files: File[]) => {
@@ -207,6 +253,10 @@ export default function CompositeTab() {
     setGlobalError(null)
     setRunning(true)
 
+    // Reset des refs auto-zip pour ce batch
+    exportedLookIdsRef.current = new Set()
+    zipExportInFlightRef.current = false
+
     const queue = states.filter(s => s.enabled)
     let done = 0
     let errors = 0
@@ -284,6 +334,8 @@ export default function CompositeTab() {
             progressStep:   'done',
           })
           done++
+          // Vérifie si on doit déclencher un auto-export ZIP partiel
+          void tryAutoZipExport()
           return
         }
 
@@ -413,6 +465,8 @@ export default function CompositeTab() {
           progressStep: 'done',
         })
         done++
+        // Vérifie si on doit déclencher un auto-export ZIP partiel
+        void tryAutoZipExport()
       } catch (e: any) {
         updateState(item.task.id, { status: 'error', error: truncate(e?.message ?? 'Erreur') })
         errors++
@@ -434,8 +488,101 @@ export default function CompositeTab() {
     setProgress(`Lancement de ${workerCount} workers en parallèle…`)
     await Promise.all(Array.from({ length: workerCount }, () => worker()))
 
+    // Force flush du dernier batch ZIP (les < N looks restants qui n'ont pas
+    // atteint le seuil de l'auto-zip)
+    if (autoZipEnabledRef.current) {
+      setProgress(`Auto-export du dernier ZIP partiel…`)
+      await tryAutoZipExport(true)
+    }
+
     setProgress(`Terminé · ${done}/${total} composite(s) générés` + (errors > 0 ? ` · ${errors} erreur(s)` : ''))
     setRunning(false)
+  }
+
+  /* ----------- Auto-export ZIP partiel tous les N looks ----------- */
+  // Vérifie si on a au moins N looks complets non encore exportés, et si oui
+  // crée un ZIP partiel avec ces looks puis le télécharge.
+  // forceAll = true → exporte aussi si moins de N looks (utilisé à la fin du batch)
+  const tryAutoZipExport = async (forceAll = false) => {
+    if (!autoZipEnabledRef.current) return
+    if (zipExportInFlightRef.current) return
+
+    // Identifie tous les looks complétés (toutes leurs tasks enabled = done ou error)
+    // qui ne sont pas encore exportés
+    const lookIdToTasks = new Map<string, TaskState[]>()
+    for (const s of statesRef.current) {
+      const arr = lookIdToTasks.get(s.task.lookId) ?? []
+      arr.push(s)
+      lookIdToTasks.set(s.task.lookId, arr)
+    }
+    const completedNotExported: string[] = []
+    for (const [lookId, tasks] of lookIdToTasks) {
+      if (exportedLookIdsRef.current.has(lookId)) continue
+      const enabledTasks = tasks.filter(t => t.enabled)
+      if (enabledTasks.length === 0) continue
+      const allDone = enabledTasks.every(t => t.status === 'done' || t.status === 'error')
+      if (allDone) completedNotExported.push(lookId)
+    }
+
+    if (completedNotExported.length === 0) return
+    const threshold = autoZipEveryRef.current
+    if (!forceAll && completedNotExported.length < threshold) return
+
+    // Lock + mark exported AVANT de générer le ZIP (évite double-export)
+    zipExportInFlightRef.current = true
+    const lookIdsToExport = new Set(completedNotExported)
+    lookIdsToExport.forEach(id => exportedLookIdsRef.current.add(id))
+
+    try {
+      const ok = statesRef.current.filter(s =>
+        lookIdsToExport.has(s.task.lookId) && s.status === 'done' && s.imageUrl,
+      )
+      if (ok.length === 0) {
+        console.log('[autoZip] aucun visuel à exporter pour ces looks')
+        return
+      }
+
+      const zip = new JSZip()
+      const extFrom = (dataUrl: string) => {
+        const m = dataUrl.match(/^data:image\/(\w+)/)
+        return m ? m[1].replace('jpeg', 'jpg') : 'jpg'
+      }
+
+      for (const s of ok) {
+        const folder = sanitizeFilename(`${s.task.lookId}_${s.task.numeroLook}`)
+        const vueNum     = (s.task.vueIndex ?? 0) + 1
+        const orientation = (s.task.pose?.orientation ?? 'front').toString().toLowerCase()
+        const framing    = (s.task.framingHint ?? 'plein').toString().toLowerCase()
+        const baseName = s.task.taskType === 'detail'
+          ? `detail${(s.task.detailIndex ?? 0) + 1}_${sanitizeFilename(s.task.detailName ?? 'unnamed')}`
+          : `vue${vueNum}_${orientation}_${framing}`
+
+        if (s.imageUrlGemini) {
+          const blob1 = await dataUrlToBlob(s.imageUrlGemini)
+          zip.file(`${folder}/step 1/${baseName}.${extFrom(s.imageUrlGemini)}`, blob1)
+        }
+        const blob4 = await dataUrlToBlob(s.imageUrl!)
+        zip.file(`${folder}/step 4/${baseName}.${extFrom(s.imageUrl!)}`, blob4)
+      }
+
+      const out = await zip.generateAsync({ type: 'blob' })
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      const filename = `composite_partial_${ts}_${lookIdsToExport.size}looks.zip`
+      const url = URL.createObjectURL(out)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+      console.log(`[autoZip] ✓ exporté ${lookIdsToExport.size} look(s) dans ${filename}`)
+    } catch (err) {
+      console.warn('[autoZip] export failed:', err)
+    } finally {
+      zipExportInFlightRef.current = false
+    }
   }
 
   const updateState = (id: string, patch: Partial<TaskState>) =>
@@ -562,6 +709,27 @@ export default function CompositeTab() {
                 <input type="checkbox" checked={shadowEnabled} onChange={e => setShadowEnabled(e.target.checked)} />
                 Fusion finale style &quot;Simple&quot; (sol visible uniquement)
               </label>
+
+              <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 700, color: '#1F7A35', cursor: 'pointer', marginTop: 10 }}>
+                <input type="checkbox" checked={autoZipEnabled} onChange={e => setAutoZipEnabled(e.target.checked)} />
+                💾 Auto-export ZIP tous les N looks <em style={{ color: '#6B7A8A', fontSize: 10, fontWeight: 400 }}>(anti-crash : pas de perte si gros batch)</em>
+              </label>
+              {autoZipEnabled && (
+                <div style={{ marginLeft: 24, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 11, color: '#6B7A8A' }}>N looks par ZIP :</span>
+                  <input
+                    type="number" min="1" max="100"
+                    value={autoZipEvery}
+                    onChange={e => setAutoZipEvery(Math.max(1, Number(e.target.value) || 10))}
+                    style={{ width: 60, padding: '4px 6px', fontSize: 12, border: '1px solid rgba(13,74,92,0.2)', borderRadius: 4 }}
+                  />
+                </div>
+              )}
+              <p style={{ fontSize: 11, color: '#6B7A8A', marginTop: 4, lineHeight: 1.5, marginLeft: 24 }}>
+                Toutes les {autoZipEvery} look(s) complétés → 1 ZIP téléchargé automatiquement avec sous-dossiers <code>step 1/</code> et <code>step 4/</code>.<br />
+                À la fin du batch, le dernier ZIP partiel (peut être &lt; {autoZipEvery} looks) est aussi téléchargé.<br />
+                ⚠ Au 1er téléchargement, Chrome demande d&apos;autoriser les téléchargements multiples — clique &quot;Autoriser&quot;.
+              </p>
 
               {/* Excel-based selection */}
               <div style={{ marginTop: 16, padding: 12, background: '#fff', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8 }}>
