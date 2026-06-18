@@ -20,10 +20,14 @@ function friendlyZipError(file: File, err: any, nested = false): Error {
   const sizeMB = Math.round(file.size / (1024 * 1024))
   const msg = String(err?.message || err || '')
   let hint = ''
-  if (/permission|could not be read|not readable/i.test(msg)) {
-    hint = ` Le ZIP fait ${sizeMB} MB — c'est probablement la RAM navigateur qui sature. Essaie : (1) fermer les autres onglets, (2) redémarrer le navigateur, (3) découper l'export Notion en plusieurs zips plus petits (par marque ou par campagne).`
+  if (/failed to fetch|networkerror|aborterror/i.test(msg)) {
+    hint = ` Le navigateur n'a pas pu lire les ${sizeMB} MB du fichier. Causes probables : (1) le ZIP est sur Google Drive Stream / OneDrive cloud → copie-le en LOCAL d'abord (Bureau / Downloads), (2) le fichier a été déplacé/renommé pendant la lecture, (3) timeout réseau. Solution la plus rapide : décompresse le Part-1.zip avec 7zip et drop directement Part-1.zip.`
+  } else if (/permission|could not be read|not readable/i.test(msg)) {
+    hint = ` Le ZIP fait ${sizeMB} MB — c'est probablement la RAM navigateur qui sature OU le fichier est sur Drive Stream. Essaie : (1) copier le ZIP en local, (2) fermer les autres onglets, (3) redémarrer le navigateur, (4) découper l'export Notion en plusieurs zips plus petits.`
   } else if (/invalid|corrupted|signature/i.test(msg)) {
     hint = ` Le ZIP semble corrompu — re-télécharge l'export depuis Notion.`
+  } else if (/out of memory|allocation failed/i.test(msg)) {
+    hint = ` Le navigateur a saturé sa RAM. Décompresse le Part-1.zip avec 7zip et drop directement Part-1.zip pour éviter le double-zip à décompresser en mémoire.`
   }
   const where = nested ? "Lecture du ZIP imbriqué (Part-1.zip)" : "Lecture du ZIP"
   return new Error(`${where} : ${msg || 'erreur inconnue'}.${hint}`)
