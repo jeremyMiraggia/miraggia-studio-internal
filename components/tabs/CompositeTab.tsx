@@ -15,14 +15,11 @@ type TaskState = {
   task:    GenerationTask
   status:  TaskStatus
   enabled: boolean
-  imageUrlGemini?:    string   // étape 1 : sortie Gemini brute (mannequin + scène)
-  imageUrlSegmented?: string   // étape 2 : mannequin sur fond transparent
-  imageUrlComposite?: string   // étape 3 : composite (fond ref + mannequin), AVANT passe ombre
-  imageUrl?:          string   // étape 4 : composite + ombre Gemini (ou étape 3 si pas d'ombre)
+  imageUrl?:          string   // visuel final (= sortie Gemini directe)
   error?: string
   faceUsed?:         boolean
   faceWasAvailable?: boolean
-  progressStep?: 'gemini' | 'segment' | 'composite' | 'shadow' | 'done'
+  progressStep?: 'gemini' | 'done'
 }
 
 function sanitizeFilename(s: string): string {
@@ -145,7 +142,7 @@ export default function CompositeTab() {
 
   /**
    * Écrit les visuels d'un look dans le dossier choisi.
-   * Structure : {lookId}_{numeroLook}/step 1/ + step 4/
+   * Structure : {lookId}_{numeroLook}/{filename}.jpg
    */
   const writeLookToOutputDir = async (lookId: string) => {
     const dir = outputDirHandleRef.current
@@ -163,10 +160,6 @@ export default function CompositeTab() {
       const folderName = sanitizeFilename(`${tasks[0].task.lookId}_${tasks[0].task.numeroLook}`)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lookDir: any = await dir.getDirectoryHandle(folderName, { create: true })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const step1Dir: any = await lookDir.getDirectoryHandle('step 1', { create: true })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const step4Dir: any = await lookDir.getDirectoryHandle('step 4', { create: true })
 
       const extFrom = (dataUrl: string) => {
         const m = dataUrl.match(/^data:image\/(\w+)/)
@@ -180,21 +173,12 @@ export default function CompositeTab() {
         const baseName = s.task.taskType === 'detail'
           ? `detail${(s.task.detailIndex ?? 0) + 1}_${sanitizeFilename(s.task.detailName ?? 'unnamed')}`
           : `vue${vueNum}_${orientation}_${framing}`
-
-        if (s.imageUrlGemini) {
-          const fileName1 = `${baseName}.${extFrom(s.imageUrlGemini)}`
-          const blob1 = await dataUrlToBlob(s.imageUrlGemini)
-          const fileHandle1 = await step1Dir.getFileHandle(fileName1, { create: true })
-          const w1 = await fileHandle1.createWritable()
-          await w1.write(blob1)
-          await w1.close()
-        }
-        const fileName4 = `${baseName}.${extFrom(s.imageUrl!)}`
-        const blob4 = await dataUrlToBlob(s.imageUrl!)
-        const fileHandle4 = await step4Dir.getFileHandle(fileName4, { create: true })
-        const w4 = await fileHandle4.createWritable()
-        await w4.write(blob4)
-        await w4.close()
+        const fileName = `${baseName}.${extFrom(s.imageUrl!)}`
+        const blob = await dataUrlToBlob(s.imageUrl!)
+        const fileHandle = await lookDir.getFileHandle(fileName, { create: true })
+        const w = await fileHandle.createWritable()
+        await w.write(blob)
+        await w.close()
       }
       writtenLookIdsRef.current.add(lookId)
       console.log(`[outputDir] ✓ écrit look ${folderName} (${tasks.length} fichier(s) × 2 steps)`)
@@ -357,9 +341,6 @@ export default function CompositeTab() {
         status: 'running',
         error: undefined,
         imageUrl: undefined,
-        imageUrlGemini: undefined,
-        imageUrlSegmented: undefined,
-        imageUrlComposite: undefined,
         progressStep: 'gemini',
       })
 
@@ -417,7 +398,6 @@ export default function CompositeTab() {
 
           // Détail : pas de pipeline composite. Le résultat Gemini est directement final.
           updateState(item.task.id, {
-            imageUrlGemini: dataDetail.imageUrl,
             imageUrl:       dataDetail.imageUrl,
             status:         'done',
             progressStep:   'done',
@@ -482,7 +462,6 @@ export default function CompositeTab() {
         // 1 appel Gemini → c'est le visuel final, point.
         updateState(item.task.id, {
           imageUrl:         data.imageUrl,
-          imageUrlGemini:   data.imageUrl,
           status:           'done',
           progressStep:     'done',
           faceUsed:         typeof data.faceUsed === 'boolean' ? data.faceUsed : undefined,
@@ -591,12 +570,8 @@ export default function CompositeTab() {
           ? `detail${(s.task.detailIndex ?? 0) + 1}_${sanitizeFilename(s.task.detailName ?? 'unnamed')}`
           : `vue${vueNum}_${orientation}_${framing}`
 
-        if (s.imageUrlGemini) {
-          const blob1 = await dataUrlToBlob(s.imageUrlGemini)
-          zip.file(`${folder}/step 1/${baseName}.${extFrom(s.imageUrlGemini)}`, blob1)
-        }
-        const blob4 = await dataUrlToBlob(s.imageUrl!)
-        zip.file(`${folder}/step 4/${baseName}.${extFrom(s.imageUrl!)}`, blob4)
+        const blob = await dataUrlToBlob(s.imageUrl!)
+        zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
       }
 
       const out = await zip.generateAsync({ type: 'blob' })
@@ -622,7 +597,7 @@ export default function CompositeTab() {
   const updateState = (id: string, patch: Partial<TaskState>) =>
     setStates(prev => prev.map(s => s.task.id === id ? { ...s, ...patch } : s))
 
-  /* ----------- Export ZIP — un dossier par look avec sous-dossiers step 1 / step 4 ----------- */
+  /* ----------- Export ZIP — un dossier par look ----------- */
   const exportZip = async () => {
     const ok = states.filter(s => s.status === 'done' && s.imageUrl)
     if (!ok.length) return
@@ -649,16 +624,8 @@ export default function CompositeTab() {
         baseName = `vue${vueNum}_${orientation}_${framing}`
       }
 
-      // step 1 = sortie Gemini brute (si disponible)
-      if (s.imageUrlGemini) {
-        const blob1 = await dataUrlToBlob(s.imageUrlGemini)
-        zip.file(`${folder}/step 1/${baseName}.${extFrom(s.imageUrlGemini)}`, blob1)
-      }
-
-      // step 4 = visuel final (= imageUrl ; correspond au composite + passe Simple,
-      // ou au composite seul si la passe Simple n'a pas tourné)
-      const blob4 = await dataUrlToBlob(s.imageUrl!)
-      zip.file(`${folder}/step 4/${baseName}.${extFrom(s.imageUrl!)}`, blob4)
+      const blob = await dataUrlToBlob(s.imageUrl!)
+      zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
     }
 
     const out = await zip.generateAsync({ type: 'blob' })
@@ -744,7 +711,7 @@ export default function CompositeTab() {
                   📁 Sauvegarde directe dans un dossier (recommandé)
                 </label>
                 <p style={{ fontSize: 11, color: '#6B7A8A', margin: '0 0 8px', lineHeight: 1.5 }}>
-                  Au lieu de télécharger des ZIPs, écrit chaque look (step 1/ + step 4/) directement dans un dossier local <strong>au fur et à mesure</strong>.
+                  Au lieu de télécharger des ZIPs, écrit chaque look directement dans un dossier local <strong>au fur et à mesure</strong>.
                   Pas de manipulation post-batch, structure de dossiers déjà en place. Chrome/Edge 86+ uniquement.
                 </p>
                 {outputDirName ? (
@@ -775,7 +742,7 @@ export default function CompositeTab() {
                 </div>
               )}
               <p style={{ fontSize: 11, color: '#6B7A8A', marginTop: 4, lineHeight: 1.5, marginLeft: 24 }}>
-                Toutes les {autoZipEvery} look(s) complétés → 1 ZIP téléchargé automatiquement avec sous-dossiers <code>step 1/</code> et <code>step 4/</code>.<br />
+                Toutes les {autoZipEvery} look(s) complétés → 1 ZIP téléchargé automatiquement avec 1 sous-dossier par look.<br />
                 À la fin du batch, le dernier ZIP partiel (peut être &lt; {autoZipEvery} looks) est aussi téléchargé.<br />
                 ⚠ Au 1er téléchargement, Chrome demande d&apos;autoriser les téléchargements multiples — clique &quot;Autoriser&quot;.
               </p>
@@ -906,7 +873,7 @@ export default function CompositeTab() {
 /* ============================== TaskRow ============================== */
 
 function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }) {
-  const { task, status, imageUrl, imageUrlGemini, imageUrlSegmented, imageUrlComposite, error, enabled } = state
+  const { task, status, imageUrl, error, enabled } = state
   const color =
     status === 'done'    ? '#1F7A35'
     : status === 'error' ? '#9B1C1C'
@@ -914,10 +881,7 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
     : '#6B7A8A'
 
   const stepLabel: Record<string, string> = {
-    gemini:    '1️⃣ Gemini',
-    segment:   '2️⃣ Segmentation',
-    composite: '3️⃣ Composite',
-    shadow:    '4️⃣ Fusion Simple',
+    gemini:    '⏳ Génération…',
     done:      '✓ Done',
   }
 
@@ -942,21 +906,8 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
       <span style={{ ...statusPill, color, borderColor: color }}>{status}</span>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        {imageUrlGemini && (
-          <ImgThumb label="1. Gemini"     url={imageUrlGemini} />
-        )}
-        {imageUrlSegmented && (
-          <ImgThumb label="2. Segmenté"   url={imageUrlSegmented} />
-        )}
-        {imageUrlComposite && imageUrlComposite !== imageUrl && (
-          <ImgThumb label="3. Composite (sans ombre)"  url={imageUrlComposite} />
-        )}
         {imageUrl && (
-          <ImgThumb
-            label={imageUrlComposite && imageUrlComposite !== imageUrl ? '4. Final (fusion Simple)' : '3. Composite'}
-            url={imageUrl}
-            highlight
-          />
+          <ImgThumb label="Visuel" url={imageUrl} highlight />
         )}
       </div>
     </div>
