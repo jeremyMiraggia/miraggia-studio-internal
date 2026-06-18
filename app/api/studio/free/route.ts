@@ -176,6 +176,7 @@ export async function POST(request: Request) {
           attempt:     i + 1,
           faceUsed:    a.withFace,
           faceWasAvailable: hasFace,
+          blobError:   att.blobError,   // remonté côté client si Blob a fallback
         })
       }
       if (!att.ok) {
@@ -206,6 +207,7 @@ type GeminiAttempt = {
   blockReason?: string
   textResponse?: string
   raw?: any
+  blobError?: string  // si Blob a fallback en data URL, on remonte le pourquoi
 }
 
 async function toInlinePart(file: File) {
@@ -240,6 +242,10 @@ async function callGemini(apiKey: string, body: string): Promise<GeminiAttempt> 
       // ⚡ Upload sur Vercel Blob au lieu de renvoyer l'image inline en base64.
       // Le client recevra juste une URL HTTPS et téléchargera depuis le CDN Blob
       // (transfer séparé de Vercel Compute → ZERO Fast Origin Transfer sur la réponse).
+      // Diagnostic env var
+      const hasToken = !!process.env.BLOB_READ_WRITE_TOKEN
+      console.log('[blob] BLOB_READ_WRITE_TOKEN present=' + hasToken + ' (length=' + (process.env.BLOB_READ_WRITE_TOKEN?.length ?? 0) + ')')
+
       try {
         const bytes = Buffer.from(compressed.base64, 'base64')
         const ext   = compressed.mime === 'image/webp' ? 'webp' : 'jpg'
@@ -247,22 +253,25 @@ async function callGemini(apiKey: string, body: string): Promise<GeminiAttempt> 
         const blob  = await put(path, bytes, {
           access: 'public',
           contentType: compressed.mime,
-          // Cache court côté CDN : on s'attend à 1 seule lecture client (download dans dossier local),
-          // pas de raison de garder ça en cache CDN longtemps.
           cacheControlMaxAge: 60,
+          // Pass explicite du token au cas où l'auto-detect échoue
+          token: process.env.BLOB_READ_WRITE_TOKEN,
         })
+        console.log('[blob] upload OK: ' + blob.url)
         return {
           ok: true, status: res.status,
           imageUrl: blob.url,
           finishReason, blockReason,
         }
       } catch (err: any) {
-        // Si Blob indisponible (token manquant en local dev), fallback data URL
-        console.warn('[blob] upload failed, fallback data URL:', err?.message ?? err)
+        const msg = err?.message ?? String(err)
+        console.warn('[blob] upload failed, fallback data URL: ' + msg)
         return {
           ok: true, status: res.status,
           imageUrl: `data:${compressed.mime};base64,${compressed.base64}`,
           finishReason, blockReason,
+          // Diagnostic visible côté client si on tombe en fallback
+          blobError: 'TOKEN_OK=' + hasToken + ' | ' + msg.slice(0, 200),
         }
       }
     }

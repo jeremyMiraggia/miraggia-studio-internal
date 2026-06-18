@@ -516,6 +516,17 @@ export default function CompositeTab() {
           return
         }
 
+        // Log diagnostic Blob : si blobError présent, on est en fallback data URL → on saura pourquoi
+        if (data.blobError) {
+          console.warn('[blob] Server fell back to data URL. Reason: ' + data.blobError)
+        } else if (typeof data.imageUrl === 'string' && data.imageUrl.startsWith('https://')) {
+          // 1ère fois seulement (= 1 confirmation visible)
+          if (!(window as any).__blobOk) {
+            (window as any).__blobOk = true
+            console.log('[blob] ✓ Blob storage actif (URL HTTPS). Fast Origin Transfer minimisé.')
+          }
+        }
+
         // 1 appel Gemini → c'est le visuel final, point.
         updateState(item.task.id, {
           imageUrl:         data.imageUrl,
