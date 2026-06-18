@@ -205,41 +205,50 @@ export async function extractEntry(
     throw new Error('DecompressionStream non disponible — utilise un navigateur moderne (Chrome 80+, Firefox 113+, Safari 16.4+).')
   }
 
-  // Stream avec progress : on intercepte chaque chunk pour compter les bytes lus
-  // depuis le ZIP source, avant qu'ils ne soient piped au décompresseur.
+  // Pour les gros fichiers (>500 MB compressés), on ZAPPE le TransformStream
+  // de progress qui peut créer du buffering interne et planter le pipe avec
+  // "Failed to fetch" sur Response.blob(). On garde le progress seulement
+  // pour les petits fichiers où c'est sans risque.
   const total = entry.csize
+  const useProgress = onProgress && total < 500 * 1024 * 1024
+
+  if (!useProgress) {
+    // Path simple direct : source → DecompressionStream → blob. Pas de TransformStream.
+    if (onProgress) {
+      try { onProgress(0, 0, total) } catch { /* */ }
+    }
+    const ds = new DecompressionStream('deflate-raw')
+    const decompressed = dataBlob.stream().pipeThrough(ds)
+    const result = await new Response(decompressed).blob()
+    if (onProgress) {
+      try { onProgress(100, total, total) } catch { /* */ }
+    }
+    return result
+  }
+
+  // Path avec progress (petits fichiers seulement)
   let bytesRead = 0
   let lastEmit = 0
-
-  const sourceStream = dataBlob.stream()
-  // Le TransformStream pour le progress peut interrompre le pipe si la
-  // callback onProgress throw (ex : setProgress React mid-render → erreur).
-  // On wrap CHAQUE appel onProgress dans un try/catch silencieux, ET on
-  // garde la possibilité de désactiver le progress (= pipe direct).
-  const progressStream = onProgress
-    ? new TransformStream({
-        transform(chunk, controller) {
-          try {
-            bytesRead += chunk.byteLength
-            const now = performance.now()
-            if (now - lastEmit > 200) {
-              const pct = total > 0 ? Math.min(100, Math.round(bytesRead / total * 100)) : 0
-              try { onProgress(pct, bytesRead, total) } catch { /* ignore React errors */ }
-              lastEmit = now
-            }
-          } catch { /* never break the stream because of progress */ }
-          controller.enqueue(chunk)
-        },
-        flush() {
-          try { if (onProgress) onProgress(100, total, total) } catch { /* ignore */ }
-        },
-      })
-    : null
+  const progressStream = new TransformStream({
+    transform(chunk, controller) {
+      try {
+        bytesRead += chunk.byteLength
+        const now = performance.now()
+        if (now - lastEmit > 200) {
+          const pct = total > 0 ? Math.min(100, Math.round(bytesRead / total * 100)) : 0
+          try { onProgress!(pct, bytesRead, total) } catch { /* ignore React errors */ }
+          lastEmit = now
+        }
+      } catch { /* never break the stream because of progress */ }
+      controller.enqueue(chunk)
+    },
+    flush() {
+      try { onProgress!(100, total, total) } catch { /* */ }
+    },
+  })
 
   const ds = new DecompressionStream('deflate-raw')
-  const decompressed = progressStream
-    ? sourceStream.pipeThrough(progressStream).pipeThrough(ds)
-    : sourceStream.pipeThrough(ds)
+  const decompressed = dataBlob.stream().pipeThrough(progressStream).pipeThrough(ds)
   return await new Response(decompressed).blob()
 }
 
