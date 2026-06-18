@@ -212,21 +212,26 @@ export async function extractEntry(
   let lastEmit = 0
 
   const sourceStream = dataBlob.stream()
+  // Le TransformStream pour le progress peut interrompre le pipe si la
+  // callback onProgress throw (ex : setProgress React mid-render → erreur).
+  // On wrap CHAQUE appel onProgress dans un try/catch silencieux, ET on
+  // garde la possibilité de désactiver le progress (= pipe direct).
   const progressStream = onProgress
     ? new TransformStream({
         transform(chunk, controller) {
-          bytesRead += chunk.byteLength
-          const now = performance.now()
-          // Émet au plus toutes les 200 ms pour ne pas spammer
-          if (now - lastEmit > 200) {
-            const pct = total > 0 ? Math.min(100, Math.round(bytesRead / total * 100)) : 0
-            onProgress(pct, bytesRead, total)
-            lastEmit = now
-          }
+          try {
+            bytesRead += chunk.byteLength
+            const now = performance.now()
+            if (now - lastEmit > 200) {
+              const pct = total > 0 ? Math.min(100, Math.round(bytesRead / total * 100)) : 0
+              try { onProgress(pct, bytesRead, total) } catch { /* ignore React errors */ }
+              lastEmit = now
+            }
+          } catch { /* never break the stream because of progress */ }
           controller.enqueue(chunk)
         },
         flush() {
-          if (onProgress) onProgress(100, total, total)
+          try { if (onProgress) onProgress(100, total, total) } catch { /* ignore */ }
         },
       })
     : null
@@ -256,13 +261,15 @@ export async function getEntryDataOffset(file: Blob, entry: ZipEntry): Promise<{
   return { dataOffset, csize: entry.csize }
 }
 
-/* ============================== utils ============================== */
-
 function readBigUint64(view: DataView, offset: number): number {
   const low  = view.getUint32(offset, true) >>> 0
   const high = view.getUint32(offset + 4, true) >>> 0
   if (high > 0x1FFFFF) {
     throw new Error('Valeur ZIP64 > Number.MAX_SAFE_INTEGER — pas géré.')
+  }
+  return high * 0x100000000 + low
+}
+MAX_SAFE_INTEGER — pas géré.')
   }
   return high * 0x100000000 + low
 }
