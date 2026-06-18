@@ -8,7 +8,6 @@ import {
   viewCropInstruction,
   orientationToPrompt,
   framingToHint,
-  BACKGROUND_PRESERVATION_INSTRUCTION,
   NOTION_BOILERPLATE_HEADER,
   NOTION_BOILERPLATE_STYLE,
   type PoseLabel,
@@ -457,12 +456,14 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
-    `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence, devant le fond "${look.fondName}" (référence en image fournie).`,
+    `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence. Le fond est fourni en image de référence — utilise-le tel quel.`,
   )
   parts.push(`⚠ ORIENTATION DU SUJET : ${orientationToPrompt(pose.orientation)}. C'est l'orientation du corps par rapport à la caméra — distincte du cadrage.`)
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
   parts.push(viewCropInstruction(pose.view))
-  parts.push(BACKGROUND_PRESERVATION_INSTRUCTION)
+  // ⚠ Volontairement PAS de BACKGROUND_PRESERVATION_INSTRUCTION ici :
+  // le bloc BACKGROUND du route.ts s'en charge déjà (et la phrase d'intro
+  // ci-dessus suffit côté prompt utilisateur). Évite la répétition x3.
   if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
   if (look.description)   parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
@@ -507,12 +508,12 @@ function buildDetailPrompt(look: LookRow, detailFile: File, model?: ModelDef): s
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
   parts.push(
-    `Photographie de mode professionnelle en PLAN RAPPROCHÉ / GROS PLAN sur un détail de vêtement (broderie, matière, fermeture, finition, accessoire) — détail montré en référence (fichier "${detailFile.name}"), porté par le mannequin "${look.mannequinName}" (${modelRefDescription(model)}), devant le fond "${look.fondName}" (référence en image fournie).`,
+    `Photographie de mode professionnelle en PLAN RAPPROCHÉ / GROS PLAN sur un détail de vêtement (broderie, matière, fermeture, finition, accessoire) — détail montré en référence (fichier "${detailFile.name}"), porté par le mannequin "${look.mannequinName}" (${modelRefDescription(model)}). Le fond est fourni en image de référence — utilise-le tel quel.`,
   )
   parts.push(
     'Cadrage serré sur le détail, mise au point très précise sur la matière et le tombé, lumière qui révèle la texture, profondeur de champ très courte (f/2.0 ressenti), composition éditoriale.',
   )
-  parts.push(BACKGROUND_PRESERVATION_INSTRUCTION)
+  // ⚠ Pas de BACKGROUND_PRESERVATION_INSTRUCTION : géré par route.ts
   if (model?.promptModel) parts.push(`Note mannequin : ${model.promptModel}.`)
   if (look.description)   parts.push(`Direction artistique : ${look.description}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)

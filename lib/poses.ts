@@ -385,7 +385,7 @@ export function viewCropInstruction(view: PoseView): string {
  * avec le sujet. On le force à respecter EXACTEMENT le fond de référence.
  */
 export const BACKGROUND_PRESERVATION_INSTRUCTION =
-  '⚠ FOND STRICT (priorité absolue) : utilise EXACTEMENT le fond montré en image de référence. Conserve à l\'identique la couleur du fond, sa teinte, sa luminosité, sa température (chaud/froid), sa texture, ses zones d\'ombre et de lumière, et toute marque visible (transitions sol/mur, props, plinthes, etc.). N\'ajuste PAS la colorimétrie du fond pour l\'harmoniser avec la tenue. Le fond doit être visuellement IDENTIQUE au fichier de référence fourni.'
+  '⚠ FOND STRICT (priorité absolue) : utilise EXACTEMENT le fond montré en image de référence. Conserve à l\'identique sa couleur, sa teinte, sa luminosité, sa température, sa texture, ses zones d\'ombre et de lumière. N\'invente AUCUN élément qui ne soit pas déjà présent dans le fond de référence (pas de sol, de mur, de plinthe, de meuble, de prop ajouté). N\'ajuste PAS la colorimétrie pour l\'harmoniser avec la tenue. Le fond doit être visuellement IDENTIQUE au fichier de référence fourni.'
 
 /* ============================== BOILERPLATE ============================== */
 
@@ -393,4 +393,4 @@ export const NOTION_BOILERPLATE_HEADER =
   'Create a 4K HD fashion shooting lifestyle image'
 
 export const NOTION_BOILERPLATE_STYLE =
-  'Vogue-style editorial photography. Shot on film, visible grain, subtle blur, slight motion softness. Imperfect focus, organic textures, realistic skin with no heavy retouching. Raw, intimate, spontaneous fashion moment. High-end but not overly polished.'
+  'Vogue-style editorial photography. Realistic skin with no heavy retouching. Raw, intimate, spontaneous fashion moment. High-end but not overly polished. ⚠ Apply the editorial style ONLY to the model and the garments — do NOT add grain, blur or imperfections to the background, which must stay identical to the reference image.'

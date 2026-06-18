@@ -476,7 +476,12 @@ export default function CompositeTab() {
         }
         fd.append('framing',        taskFraming)
         fd.append('mannequinLabel', item.task.mannequinName)
-        fd.append('decorLabel',     item.task.fondName)
+        // Si on a remplacé le fond plein-pied par le fond close-up dédié,
+        // on aligne aussi le label pour éviter le mismatch "label parle de X, image montre Y"
+        const effectiveDecorLabel = (taskFraming === 'haut' && closeUpHautBgRef.current)
+          ? `${item.task.fondName} (fond close-up haut dédié)`
+          : item.task.fondName
+        fd.append('decorLabel',     effectiveDecorLabel)
 
         setProgress(`Gemini · look ${item.task.numeroLook} · ${done + errors}/${total}`)
         const res = await fetch('/api/studio/free', { method: 'POST', body: fd })
@@ -752,7 +757,7 @@ export default function CompositeTab() {
               <div>
                 <label style={styles.label}>Parallélisme</label>
                 <select value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} style={styles.select}>
-                  {[1, 2, 3, 5].map(n => <option key={n} value={n}>{n}</option>)}
+                  {[1, 2, 3, 5, 7, 10].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
               </div>
               <div>

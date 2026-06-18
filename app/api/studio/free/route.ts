@@ -284,17 +284,16 @@ function trimRaw(raw: unknown): unknown {
 
 /* ============================== framing ============================== */
 
-const FRAMING_BG_PRESERVE =
-  'BACKGROUND (preserve exactly, never alter): keep the SAME background as a full-body shot of this SETTING — same color, same texture, same lighting, same ambience. Reproduce the setting AS-IS: if it is a continuous seamless backdrop, keep it continuous and uniform and do NOT invent a floor line, wall edge, horizon or ceiling that is not already there; if it already contains a floor, wall, ceiling, horizon or furniture, keep them exactly where they are. Only the framing/crop changes — never add, move, recolor, relight or remove any background element.'
+// ⚠ Plus court, plus neutre : on ne suppose JAMAIS l'existence d'un mur, d'un sol,
+// d'une plinthe ou d'une transition particulière — c'est l'image fond qui décide.
+// On ne mentionne plus "full-body shot" non plus, car ça crée de la confusion
+// pour les close-up (où le fond fourni est cadré différemment).
+const BG_PRESERVE_NEUTRAL =
+  'BACKGROUND (preserve exactly, never alter): keep the EXACT same background as the reference photograph — same color, same texture, same lighting, same ambience. Only the framing/crop changes. Never add, move, recolor, relight or remove any element. Never invent any element that is not already in the reference (e.g. floor line, wall, horizon, furniture, props).'
 
-// ----- SHADOWS : règles différenciées selon le cadrage -----
-// Sol visible (plein pied, bas, parfois mi-corps) : ombre anatomique douce.
-// Mur derrière (close-up haut) : surtout PAS d'ombre projetée sur le mur.
+// Ombre au sol pour les plans qui montrent le sol (plein-pied, plan bas)
 const SHADOW_FLOOR_NATURAL =
-  'SHADOW ON FLOOR: keep it discreet and natural — a soft contact shadow at the feet, adapted to the scene lighting. No projected body silhouette on the floor. No floor reflection of the model. Nothing dramatic.'
-
-const SHADOW_NO_WALL =
-  'SHADOW ON WALL: no shadow on the wall behind the model. The model is detached from the wall with normal depth — not pressed against it. The wall stays clean.'
+  'SHADOW: keep it discreet and natural — a soft contact shadow at the feet adapted to the scene lighting. No projected body silhouette on the floor. No floor reflection of the model. Nothing dramatic.'
 
 
 function mapFramingToInstructions(cadrage: string): string {
@@ -306,13 +305,11 @@ function mapFramingToInstructions(cadrage: string): string {
     return 'FULL-BODY SHOT, head to feet entirely visible in frame. The model must be shown from head to toe with some margin around. Do NOT crop any part of the body. VERTICAL EXTENT: the frame extends from ground level (the model\'s feet at the bottom edge) up to just above the model\'s head. If the chosen setting naturally contains architectural elements (floor, wall, ceiling, furniture), they appear as they would in reality; if the background is a neutral seamless backdrop, KEEP IT PURE — do NOT invent a floor line, a wall edge, a horizon or a ceiling that don\'t belong. ' + SHADOW_FLOOR_NATURAL
   }
   if (c.includes('mi-corps') || c.includes('mi corps') || c.includes('half')) {
-    return 'MID-BODY SHOT (cowboy shot), framing from the top of the head down to mid-thigh / above the knees. Lower body below the knees must be OUT of frame. Hips and waist are visible, the legs from the knees down are NOT visible. VERTICAL EXTENT: the frame covers the area from mid-thigh up to just above the head. Anything below mid-thigh is OUT of frame. ' + FRAMING_BG_PRESERVE + ' The camera is positioned at chest level. ' + SHADOW_NO_WALL
-  }
+    return 'MID-BODY SHOT (cowboy shot), framing from the top of the head down to mid-thigh / above the knees. Lower body below the knees must be OUT of frame. Hips and waist are visible, the legs from the knees down are NOT visible. VERTICAL EXTENT: the frame covers the area from mid-thigh up to just above the head. Anything below mid-thigh is OUT of frame. ' + BG_PRESERVE_NEUTRAL + ' The camera is positioned at chest level. '  }
   if (c.includes('haut') || c.includes('upper')) {
-    return 'UPPER-BODY CLOSE-UP, head and shoulders down to chest visible. No waist, no legs in frame. Camera close to the subject. Emphasis on neckline, shoulders, top garment, face. VERTICAL EXTENT: the frame covers only from chest level up. Anything below chest level is OUT of frame. ' + FRAMING_BG_PRESERVE + ' Do NOT add extra background blur for this close-up unless it is already present in the SETTING. ' + SHADOW_NO_WALL
-  }
+    return 'UPPER-BODY CLOSE-UP, head and shoulders down to chest visible. No waist, no legs in frame. Camera close to the subject. Emphasis on neckline, shoulders, top garment, face. VERTICAL EXTENT: the frame covers only from chest level up. Anything below chest level is OUT of frame. ' + BG_PRESERVE_NEUTRAL + ' Do NOT add extra background blur for this close-up unless it is already present in the SETTING. '  }
   if (c.includes('bas') || c.includes('lower')) {
-    return `LOWER-BODY-ONLY SHOT. STRICT REQUIREMENT: only the legs are shown in frame, from the hips/waist down to the feet. Head, torso, arms, chest must be ENTIRELY OUT of frame (cropped above the hips). The model upper body is invisible. Focus on pants/skirt/shoes only. VERTICAL EXTENT: the frame covers only the area from hip level down to the feet. Anything above hip level is OUT of frame. ${FRAMING_BG_PRESERVE} ${SHADOW_FLOOR_NATURAL}`
+    return `LOWER-BODY-ONLY SHOT. STRICT REQUIREMENT: only the legs are shown in frame, from the hips/waist down to the feet. Head, torso, arms, chest must be ENTIRELY OUT of frame (cropped above the hips). The model upper body is invisible. Focus on pants/skirt/shoes only. VERTICAL EXTENT: the frame covers only the area from hip level down to the feet. Anything above hip level is OUT of frame. ${BG_PRESERVE_NEUTRAL} ${SHADOW_FLOOR_NATURAL}`
   }
   if (c.includes('detail') || c.includes('matiere') || c.includes('texture')) {
     return `EXTREME MACRO CLOSE-UP on a garment detail (fabric texture, stitching, button, collar, cuff, sleeve edge, embroidery, logo, zipper, accessory). Tight zoom, NO full body, NO head, NO model context. Just a textile/material detail filling the frame. Studio macro photography aesthetic, shallow depth of field. BACKGROUND: completely out of focus, but the COLOR and AMBIENT TONE must match the SETTING.`
