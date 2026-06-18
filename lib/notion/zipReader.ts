@@ -37,6 +37,34 @@ const SIG_EOCD64L  = 0x07064b50
 const SIG_CDH      = 0x02014b50
 const SIG_LFH      = 0x04034b50
 
+/**
+ * Lit un range d'un Blob/File en ArrayBuffer avec fallback FileReader.
+ *
+ * Sur les gros File OPFS (>2 GB), blob.slice(...).arrayBuffer() peut throw
+ * "Failed to fetch" car Chrome utilise un fetch loopback en interne pour
+ * matérialiser le buffer. Le fallback FileReader (API legacy) lit en
+ * mode stream sans fetch et marche bien sur OPFS.
+ */
+async function sliceToArrayBufferSafe(
+  file: Blob,
+  start: number,
+  end: number,
+  label: string,
+): Promise<ArrayBuffer> {
+  const slice = file.slice(start, end)
+  try {
+    return await slice.arrayBuffer()
+  } catch (e) {
+    console.warn('[zipReader] arrayBuffer() failed for ' + label + ' (' + start + '..' + end + '), trying FileReader fallback:', e)
+    return await new Promise<ArrayBuffer>((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(fr.result as ArrayBuffer)
+      fr.onerror = () => reject(fr.error ?? new Error('FileReader failed for ' + label))
+      fr.readAsArrayBuffer(slice)
+    })
+  }
+}
+
 export interface ReadZipIndexOptions {
   /**
    * Offset du début du ZIP dans le fichier source.
@@ -69,11 +97,14 @@ export async function readZipIndex(
   const baseOffset  = options.baseOffset  ?? 0
   const virtualSize = options.virtualSize ?? (file.size - baseOffset)
 
+  console.log('[zipReader] readZipIndex start: file.size=' + file.size + ' baseOffset=' + baseOffset + ' virtualSize=' + virtualSize)
+
   // 1. Trouve l'EOCD dans les 64 derniers KB
   const tailLen   = Math.min(65557, virtualSize)
   const tailStart = baseOffset + virtualSize - tailLen
   const tailEnd   = baseOffset + virtualSize
-  const tail = await file.slice(tailStart, tailEnd).arrayBuffer()
+  console.log('[zipReader] reading EOCD tail: ' + tailStart + '..' + tailEnd)
+  const tail = await sliceToArrayBufferSafe(file, tailStart, tailEnd, 'EOCD tail')
   const tailView = new DataView(tail)
 
   let eocdPos = -1
@@ -105,7 +136,8 @@ export async function readZipIndex(
     }
     const eocd64RelOffset = readBigUint64(tailView, locatorPos + 8)
     const eocd64AbsOffset = baseOffset + eocd64RelOffset
-    const eocd64Buf = await file.slice(eocd64AbsOffset, eocd64AbsOffset + 56).arrayBuffer()
+    console.log('[zipReader] reading EOCD64 at ' + eocd64AbsOffset)
+    const eocd64Buf = await sliceToArrayBufferSafe(file, eocd64AbsOffset, eocd64AbsOffset + 56, 'EOCD64')
     const eocd64View = new DataView(eocd64Buf)
     if (eocd64View.getUint32(0, true) !== SIG_EOCD64) {
       throw new Error('Signature EOCD64 invalide à l\'offset attendu.')
@@ -117,8 +149,10 @@ export async function readZipIndex(
 
   // 3. Lit la central directory (offset absolu = baseOffset + relatif)
   const cdAbsOffset = baseOffset + cdOffset
-  const cdBuf = await file.slice(cdAbsOffset, cdAbsOffset + cdSize).arrayBuffer()
+  console.log('[zipReader] reading CD at ' + cdAbsOffset + ' size=' + cdSize + ' entries=' + cdEntries)
+  const cdBuf = await sliceToArrayBufferSafe(file, cdAbsOffset, cdAbsOffset + cdSize, 'Central directory')
   const cd = new DataView(cdBuf)
+  console.log('[zipReader] CD loaded, parsing ' + cdEntries + ' entries')
 
   // 4. Parse les entrées
   const entries = new Map<string, ZipEntry>()
@@ -181,7 +215,7 @@ export async function readZipIndex(
  */
 export async function extractEntry(file: Blob, entry: ZipEntry): Promise<Blob> {
   // 1. Lit le Local File Header
-  const lfhBuf = await file.slice(entry.offset, entry.offset + 30).arrayBuffer()
+  const lfhBuf = await sliceToArrayBufferSafe(file, entry.offset, entry.offset + 30, 'LFH ' + entry.name)
   const lfh = new DataView(lfhBuf)
   if (lfh.getUint32(0, true) !== SIG_LFH) {
     throw new Error(`LFH signature invalide pour ${entry.name}`)
@@ -249,10 +283,10 @@ async function streamToOpfsFile(stream: ReadableStream<Uint8Array>, label: strin
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fh: any = await root.getFileHandle(opfsName, { create: true })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const writable: any = await fh.createWritable()
-  // Vide le fichier (au cas où) pour s'assurer qu'on écrit depuis 0
   try { await writable.truncate(0) } catch { /* */ }
 
   const reader = stream.getReader()
@@ -276,7 +310,7 @@ async function streamToOpfsFile(stream: ReadableStream<Uint8Array>, label: strin
 }
 
 export async function getEntryDataOffset(file: Blob, entry: ZipEntry): Promise<{ dataOffset: number; csize: number }> {
-  const lfhBuf = await file.slice(entry.offset, entry.offset + 30).arrayBuffer()
+  const lfhBuf = await sliceToArrayBufferSafe(file, entry.offset, entry.offset + 30, 'LFH offset ' + entry.name)
   const lfh = new DataView(lfhBuf)
   if (lfh.getUint32(0, true) !== SIG_LFH) {
     throw new Error('LFH signature invalide pour ' + entry.name)

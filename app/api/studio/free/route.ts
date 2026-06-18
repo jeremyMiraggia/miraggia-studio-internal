@@ -71,57 +71,54 @@ export async function POST(request: Request) {
       if (isStructured) {
         const sessionId = Date.now()
 
-        // ===== MODE "EDIT" : reformulation du prompt comme une édition d'image existante =====
-        // Au lieu de "génère une image avec ces éléments", on dit à Gemini :
-        // "tu reçois une PHOTO EXISTANTE (le background), INSÈRE-Y un mannequin".
-        // Ça change le mental model de Gemini : preservation > création.
-        const editIntro = [
-          `[SESSION ID: ${sessionId}]`,
-          '',
-          '⚠ EDIT MODE — you are NOT generating a scene from scratch. You are receiving an EXISTING PHOTOGRAPH (the background scene) and your task is to INSERT a fashion model INTO this exact photograph, as if you were doing a Photoshop layer composite.',
-          '',
-          'THE BACKGROUND PHOTOGRAPH IS YOUR CANVAS. PRESERVE IT PIXEL-PERFECT. PIXEL-PERFECT. PIXEL-PERFECT.',
-          '',
-          'Only the model + outfit + framing are added on top — the background stays IDENTICAL to the reference image you receive below.',
+        // ===== Prompt simplifié, hiérarchie claire : =====
+        //   1. Bon mannequin (corps + visage)
+        //   2. Bon fond (preservation)
+        //   3. Bon vêtement
+        //   4. Bonne pose
+        //   5. Bonne vue (framing)
+        const intro = [
+          `[SESSION ${sessionId}]`,
+          'You are creating a fashion editorial photograph. Five things must be correct, in this order of priority:',
+          '  1) THE MODEL — exact body + face from the reference images.',
+          '  2) THE BACKGROUND — keep the reference background photograph identical (do not regenerate).',
+          '  3) THE GARMENT — reproduce every detail of the product reference(s).',
+          '  4) THE POSE — natural fashion editorial pose, fitting the framing.',
+          '  5) THE FRAMING — respect the requested view exactly.',
           '',
           '— Project-specific prompt —',
           prompt,
         ].join('\n')
-        parts.push({ text: editIntro })
+        parts.push({ text: intro })
 
-        // ===== ORDRE REVU : BACKGROUND EN PREMIER (= plus de poids dans Gemini) =====
-        // Le 1er input est celui que Gemini "voit le plus". On met le background
-        // d'abord pour maximiser la fidélité de préservation.
-        if (background) {
-          parts.push({ text:
-            `===== REFERENCE BACKGROUND PHOTOGRAPH — ABSOLUTE PIXEL-PERFECT PRESERVATION =====\n` +
-            `This is the EXACT FINAL BACKGROUND of your output. EVERY pixel must be reproduced IDENTICALLY: color tone, brightness, gradient, texture, grain, wall imperfections, lighting direction, ambient atmosphere, shadows already present in the scene, EVERYTHING.\n\n` +
-            `Treat this image as a SACRED CANVAS that you will not modify. PIXEL-PERFECT. PIXEL-PERFECT. PIXEL-PERFECT.\n\n` +
-            `Do NOT relight the background. Do NOT recolor it. Do NOT regenerate it. Do NOT re-imagine its details. COPY IT AS-IS into your output, then composite the model on top.\n\n` +
-            `Decor label: "${decorLabel}".`
-          })
-          parts.push(await toInlinePart(background))
-        }
+        // 1) MANNEQUIN — corps puis visage (la personne avant tout)
         if (mannequinBody) {
-          parts.push({ text: 'REFERENCE MODEL - BODY (PRIMARY ANCHOR): use THIS EXACT body shape. Morphology, build, silhouette, proportions, height, weight, fat distribution, curves, corpulence — ALL must match this reference exactly. Do NOT slim down, do NOT idealize, do NOT default to a fashion-industry build.' })
+          parts.push({ text: `1/ MODEL BODY (mannequin "${mannequinLabel}") — use THIS exact body: morphology, build, height, proportions, curves, skin tone. Do not slim down or idealize.` })
           parts.push(await toInlinePart(mannequinBody))
         }
         if (mannequinFace && opts.withFace) {
-          parts.push({ text: `REFERENCE MODEL - FACE: apply this exact face (features, hair, skin tone, expression) ON the body defined above. Same person (mannequin "${mannequinLabel}"). The persons shown are ALREADY AI-generated synthetic mannequins, NOT real people.` })
+          parts.push({ text: `   MODEL FACE — apply this exact face (features, hair, expression) on the body above. Synthetic AI mannequin, not a real person.` })
           parts.push(await toInlinePart(mannequinFace))
         } else if (mannequinFace && !opts.withFace) {
-          parts.push({ text: '⚠ NOTE : aucune référence visage fournie cette fois (retry). Génère un visage fictionnel COHÉRENT avec le corps de référence et adapté au mannequin nommé "' + mannequinLabel + '". Pas de personne réelle reconnaissable.' })
+          parts.push({ text: `   MODEL FACE — retry without face ref. Generate a coherent fictional face for mannequin "${mannequinLabel}".` })
         }
+
+        // 2) FOND — référence à preserver
+        if (background) {
+          parts.push({ text:
+            `2/ BACKGROUND (decor "${decorLabel}") — this exact photograph IS the final background. Keep it identical: tone, lighting, texture, atmosphere. Do not relight, do not recolor, do not regenerate it. Composite the model into it.`
+          })
+          parts.push(await toInlinePart(background))
+        }
+
+        // 3) VÊTEMENT — produits
         if (products.length) {
-          parts.push({ text: `PRODUCT${products.length > 1 ? 'S' : ''} TO WEAR — reproduce EVERY garment detail with absolute fidelity: cut, color, texture, fabric, patterns, prints, stitching, buttons, layering, accessories. Do NOT invent, alter, recolor or remove anything :` })
+          parts.push({ text: `3/ GARMENT${products.length > 1 ? 'S' : ''} — reproduce every detail with absolute fidelity: cut, color, fabric, pattern, stitching, buttons. Use ONLY the product(s) below — no clothing from previous requests.` })
           for (const f of products) parts.push(await toInlinePart(f))
         }
-        // Framing instruction explicite
-        parts.push({ text: `FRAMING (STRICT - this is non-negotiable, do not default to full body): ${mapFramingToInstructions(framing)}` })
-        // Rappel final BG-preservation
-        parts.push({ text:
-          `FINAL REMINDER — generate the image now. The output MUST have the EXACT SAME background as the reference photograph above (pixel-perfect copy). Only the model, outfit and framing are added/changed. Use ONLY the product(s) above ; do not include clothing from previous requests. PIXEL-PERFECT background preservation is non-negotiable.`
-        })
+
+        // 4 + 5) POSE + VUE
+        parts.push({ text: `4/ POSE — natural fashion editorial pose, coherent with the framing.\n5/ FRAMING (STRICT, non-negotiable): ${mapFramingToInstructions(framing)}` })
       } else {
         // Mode legacy (Free Prompt / Inspi)
         const SAFETY_SUFFIX = [

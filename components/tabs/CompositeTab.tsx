@@ -179,6 +179,18 @@ export default function CompositeTab() {
         const w = await fileHandle.createWritable()
         await w.write(blob)
         await w.close()
+
+        // DEBUG : sauve le fond exact donné à Gemini, à côté du visuel
+        if (s.task.backgroundFile) {
+          try {
+            const fondExt = (s.task.backgroundFile.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+            const fondName = `_FOND_${baseName}.${fondExt}`
+            const fondHandle = await lookDir.getFileHandle(fondName, { create: true })
+            const fw = await fondHandle.createWritable()
+            await fw.write(s.task.backgroundFile)
+            await fw.close()
+          } catch (err) { console.warn('[outputDir] failed to write debug fond:', err) }
+        }
       }
       writtenLookIdsRef.current.add(lookId)
       console.log(`[outputDir] ✓ écrit look ${folderName} (${tasks.length} fichier(s) × 2 steps)`)
@@ -572,6 +584,11 @@ export default function CompositeTab() {
 
         const blob = await dataUrlToBlob(s.imageUrl!)
         zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
+        // DEBUG : sauve le fond exact donné à Gemini
+        if (s.task.backgroundFile) {
+          const fondExt = (s.task.backgroundFile.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+          zip.file(`${folder}/_FOND_${baseName}.${fondExt}`, s.task.backgroundFile)
+        }
       }
 
       const out = await zip.generateAsync({ type: 'blob' })
@@ -626,6 +643,11 @@ export default function CompositeTab() {
 
       const blob = await dataUrlToBlob(s.imageUrl!)
       zip.file(`${folder}/${baseName}.${extFrom(s.imageUrl!)}`, blob)
+      // DEBUG : fond exact donné à Gemini
+      if (s.task.backgroundFile) {
+        const fondExt = (s.task.backgroundFile.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+        zip.file(`${folder}/_FOND_${baseName}.${fondExt}`, s.task.backgroundFile)
+      }
     }
 
     const out = await zip.generateAsync({ type: 'blob' })
