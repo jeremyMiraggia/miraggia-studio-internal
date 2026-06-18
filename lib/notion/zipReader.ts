@@ -236,10 +236,24 @@ async function streamToOpfsFile(stream: ReadableStream<Uint8Array>, label: strin
   }
   const root = await nav.storage.getDirectory()
   const opfsName = '_zip_extracted_temp.bin'
+
+  // Si un fichier de test précédent occupe l'espace OPFS, on le supprime
+  // d'abord pour libérer le quota AVANT de tenter une nouvelle écriture.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (root as any).removeEntry(opfsName)
+    console.log('[zipReader] OPFS : ancien fichier supprimé pour libérer le quota')
+  } catch (e) {
+    // Pas de fichier précédent → OK
+    void e
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fh: any = await root.getFileHandle(opfsName, { create: true })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const writable: any = await fh.createWritable()
+  // Vide le fichier (au cas où) pour s'assurer qu'on écrit depuis 0
+  try { await writable.truncate(0) } catch { /* */ }
 
   const reader = stream.getReader()
   try {
