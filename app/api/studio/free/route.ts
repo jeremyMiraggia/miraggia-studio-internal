@@ -91,29 +91,34 @@ export async function POST(request: Request) {
         ].join('\n')
         parts.push({ text: intro })
 
-        // 1) MANNEQUIN — corps puis visage (la personne avant tout)
-        if (mannequinBody) {
-          parts.push({ text: `1/ MODEL BODY (mannequin "${mannequinLabel}") — use THIS exact body: morphology, build, height, proportions, curves, skin tone. Do not slim down or idealize.` })
-          parts.push(await toInlinePart(mannequinBody))
-        }
-        if (mannequinFace && opts.withFace) {
-          parts.push({ text: `   MODEL FACE — apply this exact face (features, hair, expression) on the body above. Synthetic AI mannequin, not a real person.` })
-          parts.push(await toInlinePart(mannequinFace))
-        } else if (mannequinFace && !opts.withFace) {
-          parts.push({ text: `   MODEL FACE — retry without face ref. Generate a coherent fictional face for mannequin "${mannequinLabel}".` })
-        }
+        // ⚠ ORDRE DES IMAGES : BACKGROUND EN PREMIER (= plus de poids visuel dans Gemini).
+        // La hiérarchie des PRIORITÉS texte (1.mannequin → 2.fond → 3.vêtement) reste,
+        // mais la 1ère image vue par le modèle = celle qu'il "ancre" le plus → on lui
+        // sert le fond en 1er pour maximiser la fidélité de préservation.
 
-        // 2) FOND — référence à preserver
+        // FOND — référence à preserver pixel-perfect
         if (background) {
           parts.push({ text:
-            `2/ BACKGROUND (decor "${decorLabel}") — this exact photograph IS the final background. Keep it identical: tone, lighting, texture, atmosphere. Do not relight, do not recolor, do not regenerate it. Composite the model into it.`
+            `BACKGROUND (decor "${decorLabel}") — this exact photograph IS the final background. Keep it identical: tone, lighting, texture, atmosphere. Do not relight, do not recolor, do not regenerate it. Composite the model into it.`
           })
           parts.push(await toInlinePart(background))
         }
 
-        // 3) VÊTEMENT — produits
+        // MANNEQUIN — corps puis visage
+        if (mannequinBody) {
+          parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use THIS exact body: morphology, build, height, proportions, curves, skin tone. Do not slim down or idealize.` })
+          parts.push(await toInlinePart(mannequinBody))
+        }
+        if (mannequinFace && opts.withFace) {
+          parts.push({ text: `MODEL FACE — apply this exact face (features, hair, expression) on the body above. Synthetic AI mannequin, not a real person.` })
+          parts.push(await toInlinePart(mannequinFace))
+        } else if (mannequinFace && !opts.withFace) {
+          parts.push({ text: `MODEL FACE — retry without face ref. Generate a coherent fictional face for mannequin "${mannequinLabel}".` })
+        }
+
+        // VÊTEMENT — produits
         if (products.length) {
-          parts.push({ text: `3/ GARMENT${products.length > 1 ? 'S' : ''} — reproduce every detail with absolute fidelity: cut, color, fabric, pattern, stitching, buttons. Use ONLY the product(s) below — no clothing from previous requests.` })
+          parts.push({ text: `GARMENT${products.length > 1 ? 'S' : ''} — reproduce every detail with absolute fidelity: cut, color, fabric, pattern, stitching, buttons. Use ONLY the product(s) below — no clothing from previous requests.` })
           for (const f of products) parts.push(await toInlinePart(f))
         }
 
