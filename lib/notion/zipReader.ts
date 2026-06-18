@@ -269,7 +269,3 @@ function readBigUint64(view: DataView, offset: number): number {
   }
   return high * 0x100000000 + low
 }
-MAX_SAFE_INTEGER — pas géré.')
-  }
-  return high * 0x100000000 + low
-}
