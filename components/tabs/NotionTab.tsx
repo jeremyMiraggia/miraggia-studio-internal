@@ -26,6 +26,27 @@ type TaskState = {
 
 type Mode = 'batch' | 'inspi'
 
+/**
+ * Parse le champ "Limite looks" en une plage [start, end] (1-indexée, inclusive).
+ *   - "10"       → { start: 1, end: 10 }
+ *   - "100-150"  → { start: 100, end: 150 }
+ *   - ""/"abc"   → null
+ */
+function parseLookRange(input: string): { start: number; end: number } | null {
+  const s = (input ?? '').trim()
+  if (!s) return null
+  const rangeMatch = s.match(/^(\d+)\s*-\s*(\d+)$/)
+  if (rangeMatch) {
+    const start = parseInt(rangeMatch[1], 10)
+    const end   = parseInt(rangeMatch[2], 10)
+    if (start > 0 && end >= start) return { start, end }
+    return null
+  }
+  const n = parseInt(s, 10)
+  if (!Number.isNaN(n) && n > 0) return { start: 1, end: n }
+  return null
+}
+
 export default function NotionTab() {
   const [mode, setMode]               = useState<Mode>('batch')
   const [concurrency, setConcurrency] = useState<number>(2)
@@ -76,15 +97,22 @@ export default function NotionTab() {
       return
     }
     if (sizeGB > 3.0) {
-      setProgress(`ZIP volumineux (${sizeGB.toFixed(1)} GB) — utilise "Limiter aux N premiers looks" pour un premier essai rapide.`)
+      const range = parseLookRange(lookLimit)
+      const rangeLabel = range
+        ? (range.start === 1 ? `aux ${range.end} premiers looks` : `aux looks ${range.start}-${range.end}`)
+        : null
+      setProgress(
+        `ZIP volumineux (${sizeGB.toFixed(1)} GB)` +
+        (rangeLabel ? ` — limité ${rangeLabel} ✓` : ' — pense à remplir "Limite looks" pour un premier essai rapide (ex : 3 ou 100-150)'),
+      )
     }
 
     setParsing(true)
     try {
-      const limit = lookLimit.trim() && Number(lookLimit) > 0 ? Number(lookLimit) : undefined
+      const range = parseLookRange(lookLimit) ?? undefined
       const result = await (mode === 'inspi'
-        ? parseInspiExport(files[0], (msg) => setProgress(msg), limit)
-        : parseNotionExport(files[0], (msg) => setProgress(msg), limit))
+        ? parseInspiExport(files[0], (msg) => setProgress(msg), range)
+        : parseNotionExport(files[0], (msg) => setProgress(msg), range))
       setParsed(result)
       setStates(result.tasks.map(t => ({
         task: t,
@@ -492,17 +520,17 @@ export default function NotionTab() {
           />
 
           <div>
-            <label style={styles.label}>Limiter aux N premiers looks (optionnel)</label>
+            <label style={styles.label}>Limite looks (optionnel)</label>
             <input
-              type="number"
-              min={1}
+              type="text"
+              inputMode="text"
               value={lookLimit}
               onChange={e => setLookLimit(e.target.value)}
-              placeholder="ex. 10 (vide = tout traiter)"
+              placeholder="ex : 3 ou 100-150 (vide = tout)"
               style={{ ...styles.select, padding: '8px 10px' }}
             />
             <p style={{ ...styles.hintSubtle, marginTop: 4 }}>
-              Pratique pour tester un gros ZIP : ne traite que les N premiers looks. Re-dépose le ZIP après avoir changé cette valeur.
+              "N" = les N premiers looks · "M-N" = du M<sup>e</sup> au N<sup>e</sup> (inclus). Re-dépose le ZIP après avoir changé cette valeur.
             </p>
           </div>
 
@@ -832,8 +860,8 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
           )}
           {state.faceWasAvailable && (
             state.faceUsed
-              ? <span style={facePreservedBadge} title="La face photo du mannequin a bien été envoyée à Gemini (1re tentative).">✓ visage préservé</span>
-              : <span style={faceDroppedBadge} title={`La face photo a été droppée au ${state.finalAttempt ?? '?'}e essai pour passer le filtre IMAGE_SAFETY de Gemini. Le visage généré est cohérent mais peut différer de la référence portrait.`}>⚠ visage régénéré (essai {state.finalAttempt ?? '?'})</span>
+              ? <span style={faceUsedBadge} title="La face photo du mannequin a bien été envoyée à Gemini (1re tentative).">✓ visage préservé</span>
+              : <span style={faceNoneBadge} title={`La face photo a été droppée au ${state.finalAttempt ?? '?'}e essai pour passer le filtre IMAGE_SAFETY de Gemini. Le visage généré est cohérent mais peut différer de la référence portrait.`}>⚠ visage régénéré (essai {state.finalAttempt ?? '?'})</span>
           )}
           {state.faceWasAvailable === false && state.imageUrl && (
             <span style={faceNoneBadge} title="Aucune face photo n'était fournie dans le Models Definition pour ce mannequin.">— pas de face photo</span>
@@ -1033,19 +1061,13 @@ const styles: Record<string, React.CSSProperties> = {
   catalogItem:    { background: '#F5F7F9', border: '1px solid rgba(13,74,92,0.06)', borderRadius: 8, padding: 10 },
   catalogKey:     { display: 'inline-block', background: '#0D4A5C', color: '#C8F07D', padding: '2px 7px', borderRadius: 4, fontSize: 12, fontWeight: 700, marginBottom: 5, fontFamily: 'monospace' },
   catalogDesc:    { fontSize: 12, color: '#0D4A5C', lineHeight: 1.45 },
-  catalogFooter:  { fontSize: 12, color: '#6B7A8A', marginTop: 16, marginBottom: 0, lineHeight: 1.5, padding: '10px 12px', background: '#E8F2F5', borderRadius: 6 },
-  kbd:            { background: '#E8F2F5', padding: '1px 6px', borderRadius: 4, fontFamily: 'monospace', fontSize: 12, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.1)' },
+  kbd: { padding: '1px 5px', fontSize: 11, fontFamily: 'monospace', background: '#F5F7F9', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 3 },
 }
 
-const facePreservedBadge: React.CSSProperties = {
+const faceUsedBadge: React.CSSProperties = {
   display: 'inline-block', padding: '3px 7px',
-  background: '#DCF3E2', color: '#1F7A35', border: '1px solid #B7E4C3',
-  borderRadius: 4, fontSize: 10, fontWeight: 700, textAlign: 'center', cursor: 'help',
-}
-const faceDroppedBadge: React.CSSProperties = {
-  display: 'inline-block', padding: '3px 7px',
-  background: '#FFF8E1', color: '#7A4F00', border: '1px solid #F1D78A',
-  borderRadius: 4, fontSize: 10, fontWeight: 700, textAlign: 'center', cursor: 'help',
+  background: '#E8F2EC', color: '#1F7A35', border: '1px solid #B7DBC2',
+  borderRadius: 4, fontSize: 10, fontWeight: 600, textAlign: 'center', cursor: 'help',
 }
 const faceNoneBadge: React.CSSProperties = {
   display: 'inline-block', padding: '3px 7px',

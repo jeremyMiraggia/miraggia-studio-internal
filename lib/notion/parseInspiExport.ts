@@ -1,10 +1,10 @@
-import JSZip from 'jszip'
 import Papa from 'papaparse'
 import { compressImage } from '@/lib/compressImage'
 import {
   NOTION_BOILERPLATE_HEADER,
   NOTION_BOILERPLATE_STYLE,
 } from '@/lib/poses'
+import { readZipIndex, extractEntry, getEntryDataOffset, type ZipEntry } from './zipReader'
 import type { ParsedExport, GenerationTask, ModelDef, LookRow } from './parseExport'
 
 /**
@@ -19,107 +19,220 @@ import type { ParsedExport, GenerationTask, ModelDef, LookRow } from './parseExp
  *   - pas de CSV "Fonds" — le fond vient de l'image d'inspiration extraite
  *
  * Pour chaque ligne, on crée UNE seule task de type 'inspi'.
+ *
+ * IMPLÉMENTATION : utilise readZipIndex + extractEntry (OPFS streaming) pour
+ * supporter les ZIPs de plusieurs GB sans saturer la RAM. Lazy extraction :
+ * on ne lit que les CSVs au début + les fichiers des looks retenus.
  */
-export async function parseInspiExport(zipFile: File, onProgress?: (msg: string) => void, lookLimit?: number): Promise<ParsedExport> {
-  let zip: JSZip
+export async function parseInspiExport(
+  zipFile: File,
+  onProgress?: (msg: string) => void,
+  lookRange?: { start: number; end: number } | number,
+): Promise<ParsedExport> {
+  onProgress?.('Lecture de l\'index du ZIP…')
+  let zipIndex: Map<string, ZipEntry>
   try {
-    zip = await JSZip.loadAsync(zipFile)
+    zipIndex = await readZipIndex(zipFile)
   } catch (e: any) {
     throw friendlyZipError(zipFile, e)
   }
 
-  // Double-zip Notion ?
-  const nestedZip = Object.keys(zip.files).find(
-    name => /Part-\d+\.zip$/i.test(name) && !zip.files[name].dir,
-  )
-  if (nestedZip) {
+  // Notion exporte un ZIP qui contient parfois un Part-1.zip (double-zip)
+  let workingFile: Blob = zipFile
+  const nestedKey = [...zipIndex.keys()].find(k => /Part-\d+\.zip$/i.test(k))
+  if (nestedKey) {
     try {
-      const inner = await zip.files[nestedZip].async('blob')
-      zip = await JSZip.loadAsync(inner)
+      const nestedEntry = zipIndex.get(nestedKey)!
+      if (nestedEntry.method === 0) {
+        onProgress?.('Lecture du ZIP imbriqué (Part-1.zip) en mode offset…')
+        const { dataOffset, csize } = await getEntryDataOffset(zipFile, nestedEntry)
+        zipIndex = await readZipIndex(zipFile, { baseOffset: dataOffset, virtualSize: csize })
+      } else {
+        const sizeMB = Math.round(nestedEntry.size / (1024 * 1024))
+        onProgress?.(`Décompression du ZIP imbriqué (${sizeMB} MB)… (peut prendre 30-90s sans progress)`)
+        workingFile = await extractEntry(zipFile, nestedEntry)
+        onProgress?.('Lecture de l\'index du ZIP imbriqué…')
+        zipIndex = await readZipIndex(workingFile)
+      }
     } catch (e: any) {
       throw friendlyZipError(zipFile, e, true)
     }
   }
 
-  const fileIndex = new Map<string, File>()
-  const entries = Object.keys(zip.files).filter(p => !zip.files[p].dir)
-  let processed = 0
-  const total = entries.length
-  for (const path of entries) {
-    const entry = zip.files[path]
-    const base = baseName(path)
+  // Helpers d'extraction lazy
+  const extractAsFile = async (key: string): Promise<File | undefined> => {
+    const entry = zipIndex.get(key)
+    if (!entry) return undefined
+    const blob = await extractEntry(workingFile, entry)
+    const base = baseName(key)
     const mime = guessMime(base)
-    const blob = await entry.async('blob')
     let file = new File([blob], base, { type: mime })
     if (mime.startsWith('image/') && file.size > 1_500_000) {
-      try { file = await compressImage(file, { maxSide: 2048, quality: 0.85 }) }
-      catch { /* */ }
+      try { file = await compressImage(file, { maxSide: 2048, quality: 0.85 }) } catch { /* */ }
     }
-    fileIndex.set(base, file)
-    processed++
-    if (onProgress && (processed % 5 === 0 || processed === total)) {
-      onProgress(`Extraction ${processed}/${total} (${Math.round(processed * 100 / total)}%)…`)
-    }
+    return file
   }
+  const readCsvText = async (key: string): Promise<string | undefined> => {
+    const entry = zipIndex.get(key)
+    if (!entry) return undefined
+    const blob = await extractEntry(workingFile, entry)
+    return await blob.text()
+  }
+
+  // Index des basenames de fichiers (pour résoudre les références CSV)
+  const baseToKey = new Map<string, string>()
+  for (const key of zipIndex.keys()) {
+    baseToKey.set(baseName(key), key)
+  }
+
+  // Cherche les CSVs LOOK LIFESTYLE et Models Definition
+  const csvLookKey   = findCsvKeyByPrefix(zipIndex, ['LOOK (LIFESTYLE)', 'LOOK (Lifestyle)', 'LOOK LIFESTYLE'])
+  const csvModelsKey = findCsvKeyByPrefix(zipIndex, ['Models Definition', 'Models', 'Modeles'])
 
   const warnings: string[] = []
+  if (!csvLookKey)   warnings.push('CSV "LOOK (LIFESTYLE) …" introuvable.')
+  if (!csvModelsKey) warnings.push('CSV "Models Definition" introuvable.')
 
-  const csvLook   = findCsvByPrefix(fileIndex, ['LOOK (LIFESTYLE)', 'LOOK (Lifestyle)', 'LOOK LIFESTYLE'])
-  const csvModels = findCsvByPrefix(fileIndex, ['Models Definition', 'Models', 'Modeles'])
+  onProgress?.('Lecture des CSVs…')
+  const csvLookText   = csvLookKey   ? await readCsvText(csvLookKey)   : undefined
+  const csvModelsText = csvModelsKey ? await readCsvText(csvModelsKey) : undefined
 
-  if (!csvLook)   warnings.push('CSV "LOOK (LIFESTYLE) …" introuvable.')
-  if (!csvModels) warnings.push('CSV "Models Definition" introuvable.')
+  // Parse les CSVs
+  const looksRowsAll = csvLookText
+    ? (Papa.parse(csvLookText.replace(/^﻿/, ''), { header: true, skipEmptyLines: true }).data as any[])
+    : []
 
-  const models = csvModels ? await parseModels(csvModels, fileIndex) : new Map<string, ModelDef>()
-  let looks  = csvLook   ? await parseLooks(csvLook,    fileIndex) : []
-
-  if (typeof lookLimit === 'number' && lookLimit > 0 && looks.length > lookLimit) {
-    warnings.push(`Limité aux ${lookLimit} premiers looks (sur ${looks.length}).`)
-    looks = looks.slice(0, lookLimit)
+  // Normalise la sélection range
+  let rangeStart: number | null = null
+  let rangeEnd:   number | null = null
+  if (typeof lookRange === 'number' && lookRange > 0) {
+    rangeStart = 1
+    rangeEnd   = lookRange
+  } else if (lookRange && typeof lookRange === 'object' && lookRange.start > 0 && lookRange.end >= lookRange.start) {
+    rangeStart = lookRange.start
+    rangeEnd   = lookRange.end
   }
 
-  // Construction des tasks 'inspi' (1 par look)
-  const tasks: GenerationTask[] = []
-  for (const look of looks) {
-    if (!look.mannequinName) continue
+  // Eligible = lignes qui ont au moins un ID (filtrage de base)
+  const eligibleLooks = looksRowsAll.filter((r: any) => String(r['ID'] ?? '').trim())
+  warnings.push(`📊 CSV LOOK : ${looksRowsAll.length} lignes au total, ${eligibleLooks.length} avec ID.`)
 
-    const model = models.get(normName(look.mannequinName))
+  // Applique la range
+  const looksRowsToUse = (rangeStart !== null && rangeEnd !== null)
+    ? eligibleLooks.slice(rangeStart - 1, rangeEnd)
+    : eligibleLooks
+  if (rangeStart !== null && rangeEnd !== null && eligibleLooks.length > 0) {
+    if (rangeStart === 1) {
+      warnings.push(`Limité aux ${rangeEnd} premiers looks (sur ${eligibleLooks.length} eligible).`)
+    } else {
+      warnings.push(`Limité aux looks ${rangeStart}-${rangeEnd} (sur ${eligibleLooks.length} eligible, ${looksRowsToUse.length} retenus).`)
+    }
+  }
+
+  // ----- Parse models (uniquement ceux utilisés par les looks retenus) -----
+  // Pour économiser l'extraction, on collecte d'abord les noms utilisés
+  const usedModelNames = new Set<string>()
+  for (const r of looksRowsToUse) {
+    const name = stripRef(String(r['Model'] ?? r['Mannequin'] ?? '').trim())
+    if (name) usedModelNames.add(normName(name))
+  }
+
+  const modelsRowsAll = csvModelsText
+    ? (Papa.parse(csvModelsText.replace(/^﻿/, ''), { header: true, skipEmptyLines: true }).data as any[])
+    : []
+
+  const models = new Map<string, ModelDef>()
+  for (const r of modelsRowsAll) {
+    const name = String(r['Name your Model'] ?? r['Name'] ?? '').trim()
+    if (!name) continue
+    const key = normName(name)
+    if (!usedModelNames.has(key)) continue
+    const promptModel  = String(r['Prompt Model'] ?? '').trim() || undefined
+    const frontFileRef = decodeRef(String(r['FRONT-model'] ?? '').trim())
+    const facePhotoRef = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim())
+    const frontModelFile = frontFileRef ? await extractAsFile(baseToKey.get(frontFileRef) ?? '') : undefined
+    const facePhotoFile  = facePhotoRef ? await extractAsFile(baseToKey.get(facePhotoRef) ?? '') : undefined
+    models.set(key, { name, promptModel, frontModelFile, facePhotoFile })
+  }
+
+  // ----- Construire les looks (avec extraction lazy des fichiers refs) -----
+  onProgress?.(`Extraction des fichiers pour ${looksRowsToUse.length} looks…`)
+  const looks: LookRow[] = []
+  const tasks: GenerationTask[] = []
+  let lookIdx = 0
+  for (const r of looksRowsToUse) {
+    lookIdx++
+    if (onProgress && lookIdx % 3 === 0) {
+      onProgress(`Extraction des fichiers ${lookIdx}/${looksRowsToUse.length}…`)
+    }
+
+    const id = String(r['ID'] ?? '').trim()
+    if (!id) continue
+    const numLook = String(r['NumLook'] ?? r['SKU'] ?? r['Numero Look'] ?? '').trim()
+    const mannequinName = stripRef(String(r['Model'] ?? r['Mannequin'] ?? '').trim()) || undefined
+
+    const filesFrontRaw = String(r['FILES (FRONT)']   ?? '').trim()
+    const filesBackRaw  = String(r['FILES (BACK)']    ?? r['FILES (BACK) (1)']?? '').trim()
+    const referenceRaw  = String(r['IMAGE DE REFERENCE'] ?? r['Image de référence'] ?? r['REFERENCE'] ?? '').trim()
+
+    const bgOverride   = String(r['Background Description'] ?? r['Background description'] ?? '').trim() || undefined
+    const viewOverride = String(r['View Details'] ?? r['View details'] ?? r['Vue Details'] ?? '').trim() || undefined
+
+    const filesFront = await resolveFileListLazy(filesFrontRaw, baseToKey, extractAsFile)
+    const filesBack  = await resolveFileListLazy(filesBackRaw,  baseToKey, extractAsFile)
+    const refFiles   = await resolveFileListLazy(referenceRaw,  baseToKey, extractAsFile)
+
+    const isFilled = !!mannequinName || filesFront.length > 0 || refFiles.length > 0
+    if (!isFilled) continue
+
+    const lookRow: LookRow = {
+      id,
+      numeroLook:    numLook || id,
+      mannequinName,
+      fondName:      undefined,
+      filesFront,
+      filesBack,
+      detailsFiles:  refFiles,
+      description:   undefined,
+      vues:          [],
+      ...({ bgOverride, viewOverride } as any),
+    }
+    looks.push(lookRow)
+
+    if (!mannequinName) continue
+
+    const model = models.get(normName(mannequinName))
     const w: string[] = []
     const refs: File[] = []
 
     if (model?.frontModelFile) refs.push(model.frontModelFile)
-    else                       w.push(`Image du mannequin "${look.mannequinName}" introuvable.`)
-    // face photo gérée séparément via facePhotoFile (droppée au retry)
+    else                       w.push(`Image du mannequin "${mannequinName}" introuvable.`)
 
-    for (const f of look.filesFront) refs.push(f)
-    if (look.filesFront.length === 0) w.push('Aucun vêtement dans FILES (FRONT).')
+    for (const f of filesFront) refs.push(f)
+    if (filesFront.length === 0) w.push('Aucun vêtement dans FILES (FRONT).')
 
-    // REFERENCE[0] = inspi pour l'extracteur.
-    // REFERENCE[1..N] = détails à intégrer dans le visuel final (envoyés à l'image gen).
-    const inspirationFile   = look.detailsFiles[0]
-    const extraInspiDetails = look.detailsFiles.slice(1)
+    const inspirationFile   = refFiles[0]
+    const extraInspiDetails = refFiles.slice(1)
     if (!inspirationFile) w.push('Aucune image d\'inspiration dans la colonne REFERENCE.')
 
-    // Les détails supplémentaires sont ajoutés aux refs envoyées à l'image gen
     for (const f of extraInspiDetails) refs.push(f)
 
-    const lookAny = look as any
     tasks.push({
-      id:                `${look.id}-inspi`,
-      lookId:            look.id,
-      numeroLook:        look.numeroLook,
+      id:                `${id}-inspi`,
+      lookId:            id,
+      numeroLook:        numLook || id,
       taskType:          'inspi',
-      mannequinName:     look.mannequinName!,
-      fondName:          look.fondName ?? '',
+      mannequinName,
+      fondName:          '',
       prompt:            '',
       refs,
       facePhotoFile:     model?.facePhotoFile,
       inspirationFile,
       extraInspiDetails,
-      outfitFiles:       look.filesFront,
+      outfitFiles:       filesFront,
       modelDescription:  model?.promptModel,
-      bgOverride:        lookAny.bgOverride,
-      viewOverride:      lookAny.viewOverride,
+      bgOverride,
+      viewOverride,
       warnings:          w,
     })
   }
@@ -131,10 +244,14 @@ function friendlyZipError(file: File, err: any, nested = false): Error {
   const sizeMB = Math.round(file.size / (1024 * 1024))
   const msg = String(err?.message || err || '')
   let hint = ''
-  if (/permission|could not be read|not readable/i.test(msg)) {
-    hint = ` Le ZIP fait ${sizeMB} MB — c'est probablement la RAM navigateur qui sature. Essaie : (1) fermer les autres onglets, (2) redémarrer le navigateur, (3) découper l'export Notion en plusieurs zips plus petits (par marque ou par campagne).`
+  if (/failed to fetch|networkerror|aborterror/i.test(msg)) {
+    hint = ` Le navigateur n'a pas pu lire les ${sizeMB} MB du fichier. Causes probables : (1) le ZIP est sur Google Drive Stream / OneDrive cloud → copie-le en LOCAL d'abord, (2) le fichier a été déplacé/renommé pendant la lecture, (3) timeout réseau.`
+  } else if (/permission|could not be read|not readable/i.test(msg)) {
+    hint = ` Le ZIP fait ${sizeMB} MB — probablement la RAM navigateur qui sature. Découpe l'export Notion en plusieurs zips plus petits.`
   } else if (/invalid|corrupted|signature/i.test(msg)) {
     hint = ` Le ZIP semble corrompu — re-télécharge l'export depuis Notion.`
+  } else if (/out of memory|allocation failed/i.test(msg)) {
+    hint = ` RAM saturée. Décompresse le Part-1.zip avec 7zip et drop directement Part-1.zip.`
   }
   const where = nested ? "Lecture du ZIP imbriqué (Part-1.zip)" : "Lecture du ZIP"
   return new Error(`${where} : ${msg || 'erreur inconnue'}.${hint}`)
@@ -142,20 +259,15 @@ function friendlyZipError(file: File, err: any, nested = false): Error {
 
 /* ============================== Inspi prompt builder ============================== */
 
-/**
- * Construit le prompt final d'un visuel inspi, après extraction de
- * l'environnement et de la pose depuis l'image d'inspiration.
- * Exporté pour être utilisé côté UI (au moment où l'extraction termine).
- */
 export function buildInspiPrompt(args: {
   mannequinName:    string
   modelDescription?:string
   outfitCount:      number
   extractedEnv:     string
   extractedPose:    string
-  extraDetailCount?:number    // nombre de photos détail supplémentaires
-  bgOverride?:      string    // override colonne "Background Description"
-  viewOverride?:    string    // override colonne "View Details"
+  extraDetailCount?:number
+  bgOverride?:      string
+  viewOverride?:    string
   notes?:           string
 }): string {
   const {
@@ -191,84 +303,33 @@ export function buildInspiPrompt(args: {
   return parts.join('\n\n')
 }
 
-/* ============================== CSV helpers (locaux) ============================== */
+/* ============================== CSV helpers ============================== */
 
-function findCsvByPrefix(index: Map<string, File>, prefixes: string[]): File | undefined {
-  for (const [name, file] of index.entries()) {
-    if (!name.toLowerCase().endsWith('.csv')) continue
-    if (name.toLowerCase().includes('_all.csv')) continue
+function findCsvKeyByPrefix(zipIndex: Map<string, ZipEntry>, prefixes: string[]): string | undefined {
+  for (const key of zipIndex.keys()) {
+    const base = baseName(key)
+    if (!base.toLowerCase().endsWith('.csv')) continue
+    if (base.toLowerCase().includes('_all.csv')) continue
     for (const p of prefixes) {
-      if (name.toLowerCase().startsWith(p.toLowerCase())) return file
+      if (base.toLowerCase().startsWith(p.toLowerCase())) return key
     }
   }
   return undefined
 }
 
-async function readCsv(file: File): Promise<any[]> {
-  const text = await file.text()
-  const cleaned = text.replace(/^﻿/, '')
-  const parsed = Papa.parse(cleaned, { header: true, skipEmptyLines: true })
-  return parsed.data as any[]
-}
-
-async function parseModels(csv: File, index: Map<string, File>): Promise<Map<string, ModelDef>> {
-  const rows = await readCsv(csv)
-  const m = new Map<string, ModelDef>()
-  for (const r of rows) {
-    const name = String(r['Name your Model'] ?? r['Name'] ?? '').trim()
-    if (!name) continue
-    const promptModel  = String(r['Prompt Model'] ?? '').trim() || undefined
-    const frontFileRef = decodeRef(String(r['FRONT-model'] ?? '').trim())
-    const frontModelFile = frontFileRef ? index.get(frontFileRef) : undefined
-    const facePhotoRef = decodeRef(String(r['FACE PHOTO'] ?? r['Face Photo'] ?? '').trim())
-    const facePhotoFile = facePhotoRef ? index.get(facePhotoRef) : undefined
-    m.set(normName(name), { name, promptModel, frontModelFile, facePhotoFile })
-  }
-  return m
-}
-
-async function parseLooks(csv: File, index: Map<string, File>): Promise<LookRow[]> {
-  const rows = await readCsv(csv)
-  const out: LookRow[] = []
-  for (const r of rows) {
-    const id          = String(r['ID'] ?? '').trim()
-    // Identifiant lisible — accepte NumLook, SKU, ou Numero Look
-    const numLook     = String(r['NumLook'] ?? r['SKU'] ?? r['Numero Look'] ?? '').trim()
-    if (!id) continue
-
-    const mannequinName = stripRef(String(r['Model'] ?? r['Mannequin'] ?? '').trim()) || undefined
-
-    const filesFrontRaw = String(r['FILES (FRONT)']   ?? '').trim()
-    // FILES (BACK) ou FILES (BACK) (1) selon l'export Notion
-    const filesBackRaw  = String(r['FILES (BACK)']    ?? r['FILES (BACK) (1)']?? '').trim()
-    // IMAGE DE REFERENCE ou REFERENCE selon l'export
-    const referenceRaw  = String(r['IMAGE DE REFERENCE'] ?? r['Image de référence'] ?? r['REFERENCE'] ?? '').trim()
-
-    // Overrides optionnels
-    const bgOverride   = String(r['Background Description'] ?? r['Background description'] ?? '').trim() || undefined
-    const viewOverride = String(r['View Details'] ?? r['View details'] ?? r['Vue Details'] ?? '').trim() || undefined
-
-    const filesFront = resolveFileList(filesFrontRaw, index)
-    const filesBack  = resolveFileList(filesBackRaw,  index)
-    const refFiles   = resolveFileList(referenceRaw,  index)
-
-    const isFilled = !!mannequinName || filesFront.length > 0 || refFiles.length > 0
-    if (!isFilled) continue
-
-    out.push({
-      id,
-      numeroLook:    numLook || id,
-      mannequinName,
-      fondName:      undefined,
-      filesFront,
-      filesBack,
-      detailsFiles:  refFiles,
-      description:   undefined,
-      vues:          [],
-      // On glisse les overrides dans des champs custom non typés — on les
-      // récupère dans le builder de task ci-dessous via cast.
-      ...({ bgOverride, viewOverride } as any),
-    })
+async function resolveFileListLazy(
+  raw: string,
+  baseToKey: Map<string, string>,
+  extractAsFile: (key: string) => Promise<File | undefined>,
+): Promise<File[]> {
+  if (!raw) return []
+  const names = raw.split(',').map(s => decodeRef(s.trim())).filter(Boolean)
+  const out: File[] = []
+  for (const name of names) {
+    const key = baseToKey.get(name)
+    if (!key) continue
+    const file = await extractAsFile(key)
+    if (file) out.push(file)
   }
   return out
 }
@@ -309,14 +370,4 @@ function decodeRef(raw: string): string {
   if (!raw) return ''
   try { return decodeURIComponent(raw.replace(/\+/g, '%20')) }
   catch { return raw }
-}
-
-function resolveFileList(raw: string, index: Map<string, File>): File[] {
-  if (!raw) return []
-  return raw
-    .split(',')
-    .map(s => decodeRef(s.trim()))
-    .filter(Boolean)
-    .map(name => index.get(name))
-    .filter((f): f is File => !!f)
 }
