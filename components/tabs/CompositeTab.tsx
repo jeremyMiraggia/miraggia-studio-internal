@@ -342,7 +342,8 @@ export default function CompositeTab() {
           if (t.taskType === 'pose') {
             enabled = regenVues ? regenVues.has(t.vueIndex ?? 0) : false
           } else if (t.taskType === 'detail') {
-            enabled = regenVues ? regenVues.size > 0 : false
+            // Détail : on regarde la colonne F de l'Excel. Vert = skip, sinon = regen.
+            enabled = excelSelection.detailsToRegenerate.has(key)
           }
         }
       }

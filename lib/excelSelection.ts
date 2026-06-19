@@ -14,8 +14,10 @@
  */
 
 export type ExcelSelection = {
-  /** Pour chaque numeroLook → indices 0-based des vues à régénérer */
+  /** Pour chaque numeroLook → indices 0-based des vues à régénérer (B/C/D/E = vue 1..4) */
   toRegenerate: Map<string, Set<number>>
+  /** Pour chaque numeroLook → si le détail (colonne F) doit être régénéré */
+  detailsToRegenerate: Set<string>
   /** Liste des looks présents dans l'Excel */
   looksFound: Set<string>
   /** Avertissements / infos du parser */
@@ -94,10 +96,13 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
 
   // ===== 3. Pour chaque sheet, parser les cellules =====
   const toRegenerate = new Map<string, Set<number>>()
+  const detailsToRegenerate = new Set<string>()
   const looksFound = new Set<string>()
 
   let totalGreen = 0
   let totalCells = 0
+  let totalDetailsGreen = 0
+  let totalDetailsCells = 0
 
   for (const sheetNode of sheetNodes) {
     const sheetName = sheetNode.getAttribute('name') ?? 'Sheet'
@@ -146,7 +151,7 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
         toRegenerate.set(numeroLook, regenVues)
       }
 
-      // Colonnes B, C, D, E
+      // Colonnes B, C, D, E (vues 1..4)
       const cols = ['B', 'C', 'D', 'E']
       cols.forEach((col, idx) => {
         const cell = cellsByCol.get(col)
@@ -158,18 +163,36 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
           regenVues.add(idx)
         }
       })
+
+      // Colonne F : DETAILS (1 par look)
+      const fCell = cellsByCol.get('F')
+      if (fCell) {
+        totalDetailsCells++
+        const isGreen = isCellGreen(fCell, cellXfFillIdByIdx, fillRgbById)
+        if (isGreen) {
+          totalDetailsGreen++
+        } else {
+          detailsToRegenerate.add(numeroLook)
+        }
+      } else {
+        // Pas de cellule F → détail à régénérer (par défaut)
+        detailsToRegenerate.add(numeroLook)
+      }
     }
     if (sheetLooks > 0) {
       warnings.push(`Onglet "${sheetName}" : ${sheetLooks} look(s) parsé(s).`)
     }
   }
 
-  console.log(`[excelSelection] ${totalGreen}/${totalCells} cellules vertes détectées`)
+  console.log(`[excelSelection] vues : ${totalGreen}/${totalCells} vertes · details : ${totalDetailsGreen}/${totalDetailsCells} verts`)
   if (totalGreen === 0 && totalCells > 0) {
     warnings.push('⚠ Aucun vert détecté. Le format des couleurs est inconnu — partage le fichier pour debug.')
   }
+  if (totalDetailsCells > 0) {
+    warnings.push(`📐 Colonne F (DETAILS) : ${totalDetailsGreen} verts (skip) · ${totalDetailsCells - totalDetailsGreen} à régénérer.`)
+  }
 
-  return { toRegenerate, looksFound, warnings }
+  return { toRegenerate, detailsToRegenerate, looksFound, warnings }
 }
 
 /** Lit la valeur d'une cellule (string ou numeric, gère les sharedStrings). */
