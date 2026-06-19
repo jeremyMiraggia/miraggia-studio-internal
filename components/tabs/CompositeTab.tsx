@@ -313,37 +313,31 @@ export default function CompositeTab() {
     if (!useExcel && !excludePlein) return
     if (!parsed) return
 
-    // Build mapping lookId → index séquentiel 1-based (= ligne Excel)
-    // Pour que l'Excel ligne 2 (= "1" dans col A) → 1er look parsé Notion.
-    const orderedLookIds: string[] = []
-    const seenLookIds = new Set<string>()
-    for (const t of parsed.tasks) {
-      if (!seenLookIds.has(t.lookId)) {
-        seenLookIds.add(t.lookId)
-        orderedLookIds.push(t.lookId)
-      }
-    }
-    const lookIdToSeqIndex = new Map<string, number>()
-    orderedLookIds.forEach((id, idx) => {
-      lookIdToSeqIndex.set(id, idx + 1)
-    })
-
     setStates(prev => prev.map(s => {
       let enabled = s.enabled
 
       if (useExcel && excelSelection) {
         const t = s.task
-        const seqIdx = lookIdToSeqIndex.get(t.lookId)
-        if (seqIdx === undefined) {
+        // Matching direct par lookId : la colonne A "NUMERO DU LOOK" de l'Excel
+        // = ID du CSV Notion = t.lookId. Pas d'index séquentiel pour éviter
+        // les décalages si le Notion a un saut.
+        const key = String(t.lookId).trim()
+        // Normalise "1.0" → "1" au cas où le Notion stocke en float
+        const numVal = Number(key)
+        const normalizedKey = (!isNaN(numVal) && Number.isInteger(numVal))
+          ? String(numVal)
+          : key
+
+        if (!excelSelection.looksFound.has(normalizedKey)) {
+          // Look pas listé dans l'Excel → skip (non demandé)
           enabled = false
         } else {
-          const key = String(seqIdx)
-          const regenVues = excelSelection.toRegenerate.get(key)
+          const regenVues = excelSelection.toRegenerate.get(normalizedKey)
           if (t.taskType === 'pose') {
             enabled = regenVues ? regenVues.has(t.vueIndex ?? 0) : false
           } else if (t.taskType === 'detail') {
-            // Détail : on regarde la colonne F de l'Excel. Vert = skip, sinon = regen.
-            enabled = excelSelection.detailsToRegenerate.has(key)
+            // Détail : colonne F de l'Excel. Vert = skip, sinon = regen.
+            enabled = excelSelection.detailsToRegenerate.has(normalizedKey)
           }
         }
       }
