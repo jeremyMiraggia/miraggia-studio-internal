@@ -455,6 +455,7 @@ export default function PipelineTab() {
           fdDetail.append('prompt',  item.task.promptWithBase)
           fdDetail.append('ratio',   ratio)
           fdDetail.append('quality', quality)
+          fdDetail.append('framing', 'detail')   // ⚠ indispensable pour que le server tolère l'absence de background
           fdDetail.append('refs',    baseCompressed)
           fdDetail.append('refs',    detailCompressed)
 
@@ -1148,7 +1149,6 @@ const linkBtnDark: React.CSSProperties = {
   borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center',
 }
 const linkBtnLight: React.CSSProperties = {
-  padding: '3px 7px', fontSize: 10, color: '#0D4A5C',
   border: '1px solid rgba(13,74,92,0.2)', borderRadius: 4,
   textDecoration: 'none', fontWeight: 600, textAlign: 'center',
 }
