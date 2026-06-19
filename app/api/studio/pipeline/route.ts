@@ -42,8 +42,11 @@ export async function POST(request: Request) {
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt requis.' }, { status: 400 })
     }
-    if (!background) {
-      return NextResponse.json({ error: 'background requis pour le paste-back.' }, { status: 400 })
+    // Pour les details (close-up macro), le fond est souvent flou/invisible → on tolère son absence
+    const fLowEarly = (framing ?? '').toLowerCase()
+    const isDetail = fLowEarly.includes('detail') || fLowEarly.includes('macro')
+    if (!background && !isDetail) {
+      return NextResponse.json({ error: 'background requis pour le paste-back (sauf detail).' }, { status: 400 })
     }
 
     const apiKey = process.env.GEMINI_API_KEY
@@ -60,12 +63,13 @@ export async function POST(request: Request) {
       const sessionId = Date.now()
       const intro = [
         `[SESSION ${sessionId}]`,
-        'Generate a fashion editorial photograph. Priority order:',
+        'Generate a fashion editorial photograph. The output will be post-processed: the background will be replaced and a shadow will be added automatically. So focus 100% on these 4 things, in order of priority:',
         '  1) THE MODEL — exact body + face from the reference images.',
-        '  2) THE GARMENT — reproduce every detail of the product reference(s).',
+        '  2) THE GARMENT — reproduce every detail of the product reference(s) with absolute fidelity.',
         '  3) THE POSE — natural fashion editorial pose, fitting the framing.',
-        '  4) THE FRAMING — respect the requested view exactly.',
-        '  5) THE BACKGROUND — match the lighting & color tone of the reference background (the background will be replaced post-generation, but the model lighting must look natural in it).',
+        '  4) THE FRAMING — respect the requested view exactly (full body / mid / upper / lower / detail).',
+        '',
+        'Background : just provide a neutral coherent scene matching the lighting tone. We do not need it to be perfect, it will be replaced.',
         '',
         '— Project-specific prompt —',
         prompt,
@@ -136,8 +140,10 @@ export async function POST(request: Request) {
 
     const geminiRawBuf = Buffer.from(geminiImageB64, 'base64')
 
-    // Récupère le background (utilisé soit en composite Photoroom, soit en fallback)
-    const backgroundBuf = Buffer.from(new Uint8Array(await background.arrayBuffer()))
+    // Récupère le background (peut être absent pour detail/macro)
+    const backgroundBuf = background
+      ? Buffer.from(new Uint8Array(await background.arrayBuffer()))
+      : null
 
     const fLow = (framing ?? '').toLowerCase()
     const hasFloor = !(fLow.includes('haut') || fLow.includes('upper') || fLow.includes('detail') || fLow.includes('macro'))
@@ -166,11 +172,13 @@ export async function POST(request: Request) {
         // Photoroom détoure le sujet, ignore le faux fond
         const geminiBlob = new Blob([new Uint8Array(geminiRawBuf)], { type: geminiMime })
         form.append('imageFile', geminiBlob, 'gemini.' + (geminiMime === 'image/png' ? 'png' : 'jpg'))
-        // Background Notion (pixel-perfect)
-        const bgBlob = new Blob([new Uint8Array(backgroundBuf)], { type: 'image/jpeg' })
-        form.append('background.imageFile', bgBlob, 'background.jpg')
-        // Shadow AI mode (toujours activé ici, on n'arrive ici que si hasFloor)
-        form.append('shadow.mode', 'ai.soft')
+        // Background Notion (pixel-perfect) — toujours présent ici car hasFloor=true
+        if (backgroundBuf) {
+          const bgBlob = new Blob([new Uint8Array(backgroundBuf)], { type: 'image/jpeg' })
+          form.append('background.imageFile', bgBlob, 'background.jpg')
+        }
+        // Shadow AI mode renforcé : ai.hard donne une ombre plus marquée que ai.soft
+        form.append('shadow.mode', 'ai.hard')
         // Pas de padding (sujet à sa taille naturelle)
         form.append('padding', '0')
         // Output JPEG quality
@@ -236,20 +244,26 @@ export async function POST(request: Request) {
           const subjectArrBuf = await fetch(subjectRgbaUrl).then(r => r.arrayBuffer())
           const subjectBuf = Buffer.from(new Uint8Array(subjectArrBuf))
 
-          // 3. Resize au format du fond + composite pixel-perfect
-          const bgMeta = await sharp(backgroundBuf).metadata()
-          const bgW = bgMeta.width ?? 1024
-          const bgH = bgMeta.height ?? 1536
-          const subjectFit = await sharp(subjectBuf)
-            .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false, kernel: 'lanczos3' })
-            .png()
-            .toBuffer()
-
-          finalJpegBuf = await sharp(backgroundBuf)
-            .composite([{ input: subjectFit, blend: 'over' }])
-            .jpeg({ quality: 90, progressive: false, mozjpeg: true })
-            .jpeg({ quality: 90, progressive: false, mozjpeg: true })
-            .toBuffer()
+          // 3. Composite : si on a un fond → paste-back. Sinon (detail sans fond) → sujet sur fond blanc.
+          if (backgroundBuf) {
+            const bgMeta = await sharp(backgroundBuf).metadata()
+            const bgW = bgMeta.width ?? 1024
+            const bgH = bgMeta.height ?? 1536
+            const subjectFit = await sharp(subjectBuf)
+              .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false, kernel: 'lanczos3' })
+              .png()
+              .toBuffer()
+            finalJpegBuf = await sharp(backgroundBuf)
+              .composite([{ input: subjectFit, blend: 'over' }])
+              .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+              .toBuffer()
+          } else {
+            // Detail sans fond → on garde le sujet détouré sur fond Gemini original
+            // (puisqu'on n'a pas de fond à imposer)
+            finalJpegBuf = await sharp(geminiRawBuf)
+              .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+              .toBuffer()
+          }
           shadowAiError = `framing=${framing} : ancien pipeline (BiRefNet + paste-back fond Notion)`
         } catch (err: any) {
           shadowAiError = `BiRefNet/paste-back failed pour framing=${framing}: ${err?.message ?? err}`
@@ -308,6 +322,7 @@ function describeFraming(framing: string): string {
   const f = (framing ?? '').toLowerCase()
   if (f.includes('haut') || f.includes('upper')) return 'upper body / bust shot'
   if (f.includes('bas')  || f.includes('lower')) return 'lower body / legs only'
+  if (f.includes('mi'))                          return 'mid body / cowboy shot'
   if (f.includes('detail') || f.includes('macro')) return 'extreme macro on garment detail'
   return 'full body, head to feet'
 }
