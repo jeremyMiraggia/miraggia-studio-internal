@@ -35,6 +35,8 @@ export async function POST(request: Request) {
     const mannequinFace  = formData.get('mannequinFace') as File | null
     const background     = formData.get('background')    as File | null
     const products       = formData.getAll('products').filter((v): v is File => v instanceof File)
+    // 'refs' = mode legacy utilisé pour les details (base du look + image détail)
+    const refsLegacy     = formData.getAll('refs').filter((v): v is File => v instanceof File)
     const framing        = (formData.get('framing')        as string | null) ?? 'plein'
     const mannequinLabel = (formData.get('mannequinLabel') as string | null) ?? 'fashion model'
     const decorLabel     = (formData.get('decorLabel')     as string | null) ?? 'background'
@@ -61,6 +63,25 @@ export async function POST(request: Request) {
     const buildParts = async (): Promise<any[]> => {
       const parts: any[] = []
       const sessionId = Date.now()
+
+      // === MODE LEGACY (utilisé pour les details) ===
+      // Quand `refs` est rempli, on est en mode "détail" : le client envoie 1) une
+      // image base du look déjà shooté, 2) une image du détail à zoomer.
+      // Pas de mannequinBody/products structurés, juste le prompt + les 2 refs.
+      if (refsLegacy.length > 0) {
+        parts.push({ text: `[SESSION ${sessionId}]\n${prompt}` })
+        // Les refs : 1ère = base du look, 2ème (si présente) = détail
+        for (let i = 0; i < refsLegacy.length; i++) {
+          const label = i === 0
+            ? 'REFERENCE #1 — base of the full look already shot (model + outfit + scene).'
+            : `REFERENCE #${i + 1} — detail to zoom on / highlight in the close-up.`
+          parts.push({ text: label })
+          parts.push(await toInlinePart(refsLegacy[i]))
+        }
+        return parts
+      }
+
+      // === MODE STRUCTURÉ (poses : plein, mi-corps, haut, bas) ===
       const intro = [
         `[SESSION ${sessionId}]`,
         'Generate a fashion editorial photograph. The output will be post-processed: the background will be replaced and a shadow will be added automatically. So focus 100% on these 4 things, in order of priority:',
