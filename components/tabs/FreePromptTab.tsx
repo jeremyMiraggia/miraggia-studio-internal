@@ -137,7 +137,32 @@ export default function FreePromptTab() {
             {results.map((url, i) => (
               <div key={i} style={styles.resultCard}>
                 <img src={url} alt={`résultat ${i + 1}`} style={{ width: '100%', borderRadius: 8, display: 'block' }} />
-                <a href={url} download={`free_prompt_${i + 1}.png`} style={styles.downloadBtn}>⬇ Télécharger</a>
+                <div style={{ display: 'flex', borderTop: '1px solid rgba(13,74,92,0.08)' }}>
+                  <a href={url}
+                     onClick={async (e) => {
+                       e.preventDefault()
+                       try {
+                         const res = await fetch(url)
+                         const blob = await res.blob()
+                         const blobUrl = URL.createObjectURL(blob)
+                         const a = document.createElement('a')
+                         a.href = blobUrl
+                         a.download = `free_prompt_${i + 1}.jpg`
+                         document.body.appendChild(a)
+                         a.click()
+                         document.body.removeChild(a)
+                         setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+                       } catch (err) {
+                         console.warn('[download] failed, fallback open in new tab:', err)
+                         window.open(url, '_blank')
+                       }
+                     }}
+                     style={{ ...styles.downloadBtn, flex: 1, borderRight: '1px solid rgba(13,74,92,0.08)' }}
+                     title="Télécharger l'image">⬇ Télécharger</a>
+                  <a href={url} target="_blank" rel="noreferrer"
+                     style={{ ...styles.downloadBtn, flex: 1 }}
+                     title="Ouvrir dans un nouvel onglet">↗ Ouvrir</a>
+                </div>
               </div>
             ))}
             {loading && results.length > 0 && (
@@ -161,13 +186,12 @@ const styles: Record<string, React.CSSProperties> = {
   title:        { fontFamily: 'system-ui', fontSize: 22, fontWeight: 700, color: '#0D4A5C', marginBottom: 4 },
   sub:          { fontSize: 13, color: '#6B7A8A', marginBottom: 24 },
   card:         { background: '#fff', borderRadius: 12, padding: 20, border: '1px solid rgba(13,74,92,0.1)', display: 'flex', flexDirection: 'column', gap: 12 },
-  label:        { fontSize: 11, fontWeight: 700, color: '#6B7A8A', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 4 },
   textareaLarge:{ width: '100%', padding: '10px 12px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', resize: 'vertical', minHeight: 160, boxSizing: 'border-box' as const, lineHeight: 1.45 },
   select:       { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', background: '#fff' },
   btn:          { padding: '12px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
   emptyState:   { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff' },
   resultCard:   { background: '#fff', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
-  downloadBtn:  { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600, borderTop: '1px solid rgba(13,74,92,0.08)' },
+  downloadBtn:  { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600 },
   hintSubtle:   { fontSize: 11, color: '#6B7A8A', margin: 0, lineHeight: 1.5 },
   errorBox:     { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
 }
