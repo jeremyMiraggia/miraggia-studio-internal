@@ -81,11 +81,11 @@ export async function POST(request: Request) {
         parts.push(await toInlinePart(background))
       }
       if (mannequinBody) {
-        parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use THIS exact body: morphology, build, height, proportions, curves, skin tone.` })
+        parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use THIS exact body: morphology, build, height, proportions, curves, skin tone. ⚠ The HEAD MUST BE FULLY VISIBLE in the output (never cropped). Show the entire face, hair, neck.` })
         parts.push(await toInlinePart(mannequinBody))
       }
       if (mannequinFace) {
-        parts.push({ text: `MODEL FACE — apply this exact face on the body above. Synthetic AI mannequin.` })
+        parts.push({ text: `MODEL FACE — apply this exact face (eyes, nose, mouth, hair) on the body above. The face MUST be fully visible, never blurred, never cropped. Synthetic AI mannequin.` })
         parts.push(await toInlinePart(mannequinFace))
       }
       if (products.length) {
@@ -194,8 +194,63 @@ export async function POST(request: Request) {
     const left = Math.max(0, Math.round((bgW - subjW) / 2))
     const top  = Math.max(0, bgH - subjH)
 
+    // ============= OMBRE DE CONTACT =============
+    // Génère une ombre douce sous le sujet à partir de sa silhouette.
+    // Principe : extract la bottom slice du sujet (pieds), squash perspective sol,
+    // floutter, composite en mode multiply pour assombrir le fond localement.
+    let shadowOverlay: { input: Buffer; left: number; top: number; blend: 'multiply' } | null = null
+    // Skip l'ombre pour les framings sans sol visible (haut, upper, detail)
+    const fLow = (framing ?? '').toLowerCase()
+    const hasFloor = !(fLow.includes('haut') || fLow.includes('upper') || fLow.includes('detail') || fLow.includes('macro'))
+    if (hasFloor) {
+      try {
+        // 1. Extrait le canal alpha du sujet = silhouette blanche
+        const alphaMask = await sharp(subjectFeathered)
+          .ensureAlpha()
+          .extractChannel('alpha')
+          .toBuffer()
+
+        // 2. Prend le bas 30% du masque (les pieds + bas du corps)
+        const sliceTop = Math.round(subjH * 0.7)
+        const sliceH   = subjH - sliceTop
+        const bottomSlice = await sharp(alphaMask, { raw: undefined })
+          .extract({ left: 0, top: sliceTop, width: subjW, height: sliceH })
+          .toBuffer()
+
+        // 3. Squash perspective sol : on l'écrase verticalement (devient un ovale aplati)
+        const shadowH = Math.max(8, Math.round(subjH * 0.04))   // 4% hauteur du sujet
+        const blurR   = Math.max(6, Math.round(shadowH * 1.2))
+        const shadowMaskSquashed = await sharp(bottomSlice)
+          .resize({ width: subjW, height: shadowH, fit: 'fill' })
+          .blur(blurR)
+          .linear(0.55, 0)   // ramène l'intensité max à ~55% → ombre douce, pas noire
+          .toBuffer()
+
+        // 4. Crée une image noire RGBA avec cet alpha
+        const shadowRGBA = await sharp({
+          create: { width: subjW, height: shadowH, channels: 3, background: { r: 0, g: 0, b: 0 } },
+        })
+          .joinChannel(shadowMaskSquashed)
+          .png()
+          .toBuffer()
+
+        // 5. Position : juste sous les pieds du sujet
+        const shadowLeft = left
+        const shadowTop  = Math.min(bgH - shadowH, top + subjH - Math.round(shadowH / 2))
+
+        shadowOverlay = { input: shadowRGBA, left: shadowLeft, top: shadowTop, blend: 'multiply' }
+      } catch (err) {
+        console.warn('[pipeline] shadow generation failed, skipping:', err)
+      }
+    }
+
+    // Composite final : fond → (ombre si dispo) → sujet
+    const composites: any[] = []
+    if (shadowOverlay) composites.push(shadowOverlay)
+    composites.push({ input: subjectFeathered, left, top, blend: 'over' })
+
     const finalJpegBuf = await sharp(backgroundBuf)
-      .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
+      .composite(composites)
       .jpeg({ quality: 90, progressive: false, mozjpeg: true })
       .toBuffer()
 
@@ -220,7 +275,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       imageUrl,
       attempt: 1,
-      debug: { geminiUrl, subjectRgbaUrl, mannequinLabel, decorLabel, bgW, bgH, subjW, subjH },
+      debug: { geminiUrl, subjectRgbaUrl, mannequinLabel, decorLabel, bgW, bgH, subjW, subjH, hasShadow: !!shadowOverlay },
       blobError,
     })
 
@@ -234,30 +289,6 @@ export async function POST(request: Request) {
 async function toInlinePart(file: File) {
   const buf = Buffer.from(await file.arrayBuffer()).toString('base64')
   return { inlineData: { mimeType: file.type || 'image/jpeg', data: buf } }
-}
-
-async function featherAlpha(rgbaBuf: Buffer, radius: number): Promise<Buffer> {
-  const { data, info } = await sharp(rgbaBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
-  const { width, height, channels } = info
-  if (channels !== 4) return rgbaBuf
-
-  const alphaBuf = Buffer.alloc(width * height)
-  for (let i = 0; i < width * height; i++) {
-    alphaBuf[i] = data[i * 4 + 3]
-  }
-  const alphaBlurred = await sharp(alphaBuf, { raw: { width, height, channels: 1 } })
-    .blur(radius)
-    .raw()
-    .toBuffer()
-
-  const out = Buffer.alloc(width * height * 4)
-  for (let i = 0; i < width * height; i++) {
-    out[i * 4]     = data[i * 4]
-    out[i * 4 + 1] = data[i * 4 + 1]
-    out[i * 4 + 2] = data[i * 4 + 2]
-    out[i * 4 + 3] = alphaBlurred[i]
-  }
-  return await sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer()
 }
 
 function describeFraming(framing: string): string {
