@@ -199,64 +199,79 @@ export async function POST(request: Request) {
     const left = Math.max(0, Math.round((bgW - subjW) / 2))
     const top  = Math.max(0, bgH - subjH)
 
-    // ============= OMBRE DE CONTACT =============
-    // Génère une ombre douce sous le sujet à partir de sa silhouette.
-    // Principe : extract la bottom slice du sujet (pieds), squash perspective sol,
-    // floutter, composite en mode multiply pour assombrir le fond localement.
-    let shadowOverlay: { input: Buffer; left: number; top: number; blend: 'multiply' } | null = null
-    // Skip l'ombre pour les framings sans sol visible (haut, upper, detail)
+    // ============= OMBRE : déléguée à Flux Fill plus bas =============
+    // L'ellipse SVG géométrique a été retirée — on délègue maintenant à un vrai
+    // modèle de diffusion (Flux Fill) qui génère une ombre photoréaliste cohérente
+    // avec la lumière de la scène.
     const fLow = (framing ?? '').toLowerCase()
     const hasFloor = !(fLow.includes('haut') || fLow.includes('upper') || fLow.includes('detail') || fLow.includes('macro'))
+
+    // Composite intermédiaire : fond + sujet (sans ombre encore)
+    let finalJpegBuf = await sharp(backgroundBuf)
+      .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
+      .jpeg({ quality: 92, progressive: false, mozjpeg: true })
+      .toBuffer()
+
+    // ============= ÉTAPE 3.5 — OMBRE AI via Flux Fill =============
+    // Au lieu d'une ellipse géométrique simple, on demande à un vrai modèle
+    // de diffusion (Flux Fill) de générer une ombre photoréaliste dans une
+    // zone limitée aux pieds + sol immédiat.
+    // Le masque limite la modification → tout le reste reste intact.
+    let shadowAiUsed = false
+    let shadowAiError: string | undefined
     if (hasFloor) {
       try {
-        // OMBRE DE CONTACT = simple ellipse SVG floutée sous les pieds.
-        //
-        // Pourquoi pas la silhouette flippée ? → ça donne un "fantôme" reconnaissable du corps.
-        // Une ellipse anonyme + flou + opacité douce = look naturel, jamais identifiable.
+        // 1. Génère un masque PNG : noir partout, ellipse blanche autour des pieds
+        const feetZoneW = Math.min(bgW, Math.round(subjW * 1.5))
+        const feetZoneH = Math.min(bgH - (top + Math.round(subjH * 0.82)), Math.round(subjH * 0.25))
+        const feetCx    = left + Math.round(subjW / 2)
+        const feetCy    = top + Math.round(subjH * 0.95)
 
-        // Dimensions de l'ellipse (en pixels) — proportionnelles au sujet
-        const ellipseW = Math.max(40, Math.round(subjW * 0.32))   // 32% largeur sujet
-        const ellipseH = Math.max(8,  Math.round(subjH * 0.012))   // 1.2% hauteur sujet (très plat)
-        const blurR    = Math.max(8,  Math.round(ellipseH * 1.8))
-
-        // Padding pour que le blur ne soit pas tronqué aux bords
-        const canvasW = ellipseW + 4 * blurR
-        const canvasH = ellipseH + 4 * blurR
-
-        // Vérifie qu'on tient dans le fond
-        if (canvasW > bgW || canvasH > bgH) {
-          shadowOverlay = null
-        } else {
-          // SVG ellipse noire avec opacité 60%
-          const svgEllipse = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasW}" height="${canvasH}"><ellipse cx="${canvasW/2}" cy="${canvasH/2}" rx="${ellipseW/2}" ry="${ellipseH/2}" fill="black" fill-opacity="0.6"/></svg>`
-
-          const shadowImg = await sharp(Buffer.from(svgEllipse))
-            .blur(blurR)
-            .png()
-            .toBuffer()
-
-          // Position : centré horizontalement sous le sujet, sous les pieds
-          const shadowLeftDesired = left + Math.round(subjW / 2) - Math.round(canvasW / 2)
-          const shadowTopDesired  = top + subjH - Math.round(canvasH / 2)
-          const shadowLeft = Math.max(0, Math.min(bgW - canvasW, shadowLeftDesired))
-          const shadowTop  = Math.max(0, Math.min(bgH - canvasH, shadowTopDesired))
-
-          shadowOverlay = { input: shadowImg, left: shadowLeft, top: shadowTop, blend: 'multiply' }
+        if (feetZoneW < 40 || feetZoneH < 20) {
+          throw new Error('zone des pieds trop petite')
         }
-      } catch (err) {
-        console.warn('[pipeline] shadow generation failed, skipping:', err)
+
+        const svgMask = `<svg xmlns="http://www.w3.org/2000/svg" width="${bgW}" height="${bgH}"><rect width="100%" height="100%" fill="black"/><ellipse cx="${feetCx}" cy="${feetCy}" rx="${feetZoneW / 2}" ry="${feetZoneH / 2}" fill="white"/></svg>`
+
+        const maskBuf = await sharp(Buffer.from(svgMask))
+          .blur(30)   // feather edges → transition douce entre zone modifiée et intacte
+          .png()
+          .toBuffer()
+
+        // 2. Upload composite + masque vers FAL
+        const compositeFile = new File([finalJpegBuf], 'composite.jpg', { type: 'image/jpeg' })
+        const maskFile      = new File([maskBuf], 'mask.png', { type: 'image/png' })
+        const [compositeUrl, maskUrl] = await Promise.all([
+          fal.storage.upload(compositeFile),
+          fal.storage.upload(maskFile),
+        ])
+
+        // 3. Appel Flux Fill Pro
+        const fillResult: any = await fal.subscribe('fal-ai/flux-pro/v1/fill', {
+          input: {
+            image_url: compositeUrl,
+            mask_url:  maskUrl,
+            prompt: 'natural soft contact shadow under the model feet on the floor, matching the existing scene lighting and floor texture, subtle realistic photography shadow',
+            num_images: 1,
+            safety_tolerance: '6',
+          } as any,
+          logs: false,
+        })
+
+        const fillImageUrl: string | undefined = fillResult?.data?.images?.[0]?.url ?? fillResult?.images?.[0]?.url
+        if (fillImageUrl) {
+          const fillBuf = await fetch(fillImageUrl).then(r => r.arrayBuffer()).then(b => Buffer.from(b))
+          // Re-encode en JPEG pour cohérence
+          finalJpegBuf = await sharp(fillBuf).jpeg({ quality: 90, progressive: false, mozjpeg: true }).toBuffer()
+          shadowAiUsed = true
+        } else {
+          throw new Error('Flux Fill n\'a pas renvoyé d\'image')
+        }
+      } catch (err: any) {
+        shadowAiError = err?.message ?? String(err)
+        console.warn('[pipeline] Flux Fill shadow failed, using base composite without shadow:', shadowAiError)
       }
     }
-
-    // Composite final : fond → (ombre si dispo) → sujet
-    const composites: any[] = []
-    if (shadowOverlay) composites.push(shadowOverlay)
-    composites.push({ input: subjectFeathered, left, top, blend: 'over' })
-
-    const finalJpegBuf = await sharp(backgroundBuf)
-      .composite(composites)
-      .jpeg({ quality: 90, progressive: false, mozjpeg: true })
-      .toBuffer()
 
     // ============= ÉTAPE 4 — Upload Vercel Blob =============
     let imageUrl: string
@@ -279,7 +294,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       imageUrl,
       attempt: 1,
-      debug: { geminiUrl, subjectRgbaUrl, mannequinLabel, decorLabel, bgW, bgH, subjW, subjH, hasShadow: !!shadowOverlay },
+      debug: { geminiUrl, subjectRgbaUrl, mannequinLabel, decorLabel, bgW, bgH, subjW, subjH, shadowAiUsed, shadowAiError },
       blobError,
     })
 
