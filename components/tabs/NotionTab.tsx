@@ -204,14 +204,17 @@ export default function NotionTab() {
           updateState(item.task.id, { extractedEnv: env, extractedPose: pose })
 
           promptToUse = buildInspiPrompt({
-            mannequinName:    item.task.mannequinName,
-            modelDescription: item.task.modelDescription,
-            outfitCount:      item.task.outfitFiles?.length ?? 0,
-            extractedEnv:     env,
-            extractedPose:    pose,
-            extraDetailCount: item.task.extraInspiDetails?.length ?? 0,
-            bgOverride:       item.task.bgOverride,
-            viewOverride:     item.task.viewOverride,
+            mannequinName:     item.task.mannequinName,
+            mannequinNames:    item.task.mannequinNames,
+            modelDescription:  item.task.modelDescription,
+            modelDescriptions: item.task.modelDescriptions,
+            outfitCount:       item.task.outfitFiles?.length ?? 0,
+            extractedEnv:      env,
+            extractedPose:     pose,
+            extraDetailCount:  item.task.extraInspiDetails?.length ?? 0,
+            bgOverride:        item.task.bgOverride,
+            viewOverride:      item.task.viewOverride,
+            duoTrioDesc:       item.task.duoTrioDesc,
           })
         }
 

@@ -130,11 +130,15 @@ export async function parseInspiExport(
   }
 
   // ----- Parse models (uniquement ceux utilisés par les looks retenus) -----
-  // Pour économiser l'extraction, on collecte d'abord les noms utilisés
+  // Pour économiser l'extraction, on collecte d'abord les noms utilisés.
+  // La cellule "Model" peut contenir PLUSIEURS mannequins (séparés par virgule,
+  // & ou autre) → on split pour ne pas rater les visuels duo/trio.
   const usedModelNames = new Set<string>()
   for (const r of looksRowsToUse) {
-    const name = stripRef(String(r['Model'] ?? r['Mannequin'] ?? '').trim())
-    if (name) usedModelNames.add(normName(name))
+    const raw = String(r['Model'] ?? r['Mannequin'] ?? '').trim()
+    for (const name of parseModelList(raw)) {
+      usedModelNames.add(normName(name))
+    }
   }
 
   const modelsRowsAll = csvModelsText
@@ -169,20 +173,35 @@ export async function parseInspiExport(
     const id = String(r['ID'] ?? '').trim()
     if (!id) continue
     const numLook = String(r['NumLook'] ?? r['SKU'] ?? r['Numero Look'] ?? '').trim()
-    const mannequinName = stripRef(String(r['Model'] ?? r['Mannequin'] ?? '').trim()) || undefined
+
+    // Multi-mannequins : la cellule Model peut contenir plusieurs noms
+    const modelRaw = String(r['Model'] ?? r['Mannequin'] ?? '').trim()
+    const mannequinNames = parseModelList(modelRaw)
+    const mannequinName = mannequinNames[0] || undefined
 
     const filesFrontRaw = String(r['FILES (FRONT)']   ?? '').trim()
     const filesBackRaw  = String(r['FILES (BACK)']    ?? r['FILES (BACK) (1)']?? '').trim()
     const referenceRaw  = String(r['IMAGE DE REFERENCE'] ?? r['Image de référence'] ?? r['REFERENCE'] ?? '').trim()
 
-    const bgOverride   = String(r['Background Description'] ?? r['Background description'] ?? '').trim() || undefined
-    const viewOverride = String(r['View Details'] ?? r['View details'] ?? r['Vue Details'] ?? '').trim() || undefined
+    // Nouvelles colonnes (Background details, Vue et details, description duo/trio)
+    const bgOverride   = String(
+      r['Background details'] ?? r['Background Details'] ?? r['background details']
+      ?? r['Background Description'] ?? r['Background description'] ?? ''
+    ).trim() || undefined
+    const viewOverride = String(
+      r['Vue et details'] ?? r['Vue et Details'] ?? r['vue et details']
+      ?? r['View Details'] ?? r['View details'] ?? r['Vue Details'] ?? ''
+    ).trim() || undefined
+    const duoTrioDesc  = String(
+      r['description photos duo/trio'] ?? r['Description photos duo/trio']
+      ?? r['Description photos Duo/Trio'] ?? r['Description duo/trio'] ?? ''
+    ).trim() || undefined
 
     const filesFront = await resolveFileListLazy(filesFrontRaw, baseToKey, extractAsFile)
     const filesBack  = await resolveFileListLazy(filesBackRaw,  baseToKey, extractAsFile)
     const refFiles   = await resolveFileListLazy(referenceRaw,  baseToKey, extractAsFile)
 
-    const isFilled = !!mannequinName || filesFront.length > 0 || refFiles.length > 0
+    const isFilled = mannequinNames.length > 0 || filesFront.length > 0 || refFiles.length > 0
     if (!isFilled) continue
 
     const lookRow: LookRow = {
@@ -199,40 +218,57 @@ export async function parseInspiExport(
     }
     looks.push(lookRow)
 
-    if (!mannequinName) continue
+    if (mannequinNames.length === 0) continue
 
-    const model = models.get(normName(mannequinName))
+    // Pour les multi-mannequins : on collecte tous les models présents
+    const usedModels = mannequinNames
+      .map(name => models.get(normName(name)))
+      .filter((m): m is ModelDef => !!m)
+
     const w: string[] = []
     const refs: File[] = []
 
-    if (model?.frontModelFile) refs.push(model.frontModelFile)
-    else                       w.push(`Image du mannequin "${mannequinName}" introuvable.`)
+    // Refs : front model file de chaque mannequin (pour montrer chaque silhouette)
+    for (const m of usedModels) {
+      if (m.frontModelFile) refs.push(m.frontModelFile)
+    }
+    if (usedModels.length < mannequinNames.length) {
+      const missing = mannequinNames.filter(n => !models.get(normName(n))).join(', ')
+      w.push(`Image(s) mannequin introuvable(s) : "${missing}".`)
+    }
 
     for (const f of filesFront) refs.push(f)
     if (filesFront.length === 0) w.push('Aucun vêtement dans FILES (FRONT).')
 
-    const inspirationFile   = refFiles[0]
-    const extraInspiDetails = refFiles.slice(1)
+    // On prend SEULEMENT la première inspiration (ignore les suivantes)
+    const inspirationFile = refFiles[0]
     if (!inspirationFile) w.push('Aucune image d\'inspiration dans la colonne REFERENCE.')
 
-    for (const f of extraInspiDetails) refs.push(f)
+    // Face photo : on prend celle du premier mannequin (utilisée comme ref principale)
+    const facePhotoFile = usedModels[0]?.facePhotoFile
+
+    // Descriptions de chaque mannequin (pour le prompt multi-mannequin)
+    const modelDescriptions = usedModels.map(m => m.promptModel ?? '').filter(Boolean)
 
     tasks.push({
       id:                `${id}-inspi`,
       lookId:            id,
       numeroLook:        numLook || id,
       taskType:          'inspi',
-      mannequinName,
+      mannequinName:     mannequinName!,
+      mannequinNames,
+      modelDescriptions,
       fondName:          '',
       prompt:            '',
       refs,
-      facePhotoFile:     model?.facePhotoFile,
+      facePhotoFile,
       inspirationFile,
-      extraInspiDetails,
+      extraInspiDetails: [],   // on ignore les inspirations supplémentaires
       outfitFiles:       filesFront,
-      modelDescription:  model?.promptModel,
+      modelDescription:  usedModels[0]?.promptModel,
       bgOverride,
       viewOverride,
+      duoTrioDesc,
       warnings:          w,
     })
   }
@@ -261,25 +297,38 @@ function friendlyZipError(file: File, err: any, nested = false): Error {
 
 export function buildInspiPrompt(args: {
   mannequinName:    string
+  mannequinNames?:  string[]     // si plusieurs mannequins (duo/trio)
   modelDescription?:string
+  modelDescriptions?: string[]   // 1 description par mannequin
   outfitCount:      number
   extractedEnv:     string
   extractedPose:    string
   extraDetailCount?:number
   bgOverride?:      string
   viewOverride?:    string
+  duoTrioDesc?:     string       // précisions spécifiques pour visuels multi-mannequins
   notes?:           string
 }): string {
   const {
-    mannequinName, modelDescription, outfitCount,
-    extractedEnv, extractedPose, extraDetailCount = 0,
-    bgOverride, viewOverride, notes,
+    mannequinName, mannequinNames, modelDescription, modelDescriptions,
+    outfitCount, extractedEnv, extractedPose, extraDetailCount = 0,
+    bgOverride, viewOverride, duoTrioDesc, notes,
   } = args
   const parts: string[] = []
   parts.push(NOTION_BOILERPLATE_HEADER + '.')
-  parts.push(
-    `Photographie de mode professionnelle du mannequin "${mannequinName}" (deux références en image fournies : silhouette/corps + portrait visage). ⚠ PRÉSERVATION D'IDENTITÉ STRICTE : reproduire EXACTEMENT les traits du visage de la référence portrait (forme du visage, yeux, nez, bouche, sourcils, ligne de mâchoire), la couleur et la coiffure des cheveux, le grain de peau. La silhouette/corps donne la morphologie générale. Le visage doit être instantanément reconnaissable comme le même que celui de la référence portrait. Le mannequin porte la tenue montrée en référence (${outfitCount} fichier${outfitCount > 1 ? 's' : ''}).`,
-  )
+
+  const isMulti = (mannequinNames?.length ?? 0) > 1
+  if (isMulti) {
+    const names = mannequinNames!.join(', ')
+    const count = mannequinNames!.length
+    parts.push(
+      `Photographie de mode professionnelle ${count === 2 ? 'd\'un DUO' : count === 3 ? 'd\'un TRIO' : `d\'un groupe de ${count}`} de mannequins : ${names}. Les références en image fournissent la silhouette/corps de CHAQUE mannequin (1 par mannequin) + un portrait visage du premier. ⚠ PRÉSERVATION D'IDENTITÉ STRICTE : chaque mannequin doit ressembler à sa propre référence silhouette (morphologie, build, couleur de peau, coiffure). Ils portent la tenue montrée en référence (${outfitCount} fichier${outfitCount > 1 ? 's' : ''}).`
+    )
+  } else {
+    parts.push(
+      `Photographie de mode professionnelle du mannequin "${mannequinName}" (deux références en image fournies : silhouette/corps + portrait visage). ⚠ PRÉSERVATION D'IDENTITÉ STRICTE : reproduire EXACTEMENT les traits du visage de la référence portrait (forme du visage, yeux, nez, bouche, sourcils, ligne de mâchoire), la couleur et la coiffure des cheveux, le grain de peau. La silhouette/corps donne la morphologie générale. Le visage doit être instantanément reconnaissable comme le même que celui de la référence portrait. Le mannequin porte la tenue montrée en référence (${outfitCount} fichier${outfitCount > 1 ? 's' : ''}).`,
+    )
+  }
   parts.push(`ENVIRONNEMENT (base extraite de l\'image d\'inspiration) : ${extractedEnv}.`)
   if (bgOverride) {
     parts.push(
@@ -297,7 +346,23 @@ export function buildInspiPrompt(args: {
       `Intègre également ${extraDetailCount > 1 ? `les ${extraDetailCount} détails spécifiques montrés` : 'le détail spécifique montré'} en référence supplémentaire — élément de décor, accessoire, prop ou ambiance visuelle à ajouter au cadre.`,
     )
   }
-  if (modelDescription) parts.push(`Note mannequin : ${modelDescription}.`)
+
+  // Multi-mannequin : descriptions individuelles
+  if (isMulti && modelDescriptions && modelDescriptions.length > 0) {
+    for (let i = 0; i < modelDescriptions.length; i++) {
+      const desc = modelDescriptions[i]
+      const name = mannequinNames?.[i] ?? `Mannequin ${i + 1}`
+      if (desc) parts.push(`Note mannequin "${name}" : ${desc}.`)
+    }
+  } else if (modelDescription) {
+    parts.push(`Note mannequin : ${modelDescription}.`)
+  }
+
+  // Note duo/trio : précisions pour les visuels multi-mannequins (interaction, positionnement, etc.)
+  if (duoTrioDesc) {
+    parts.push(`⚠ COMPOSITION ${isMulti ? 'DUO/TRIO' : ''} : ${duoTrioDesc}.`)
+  }
+
   if (notes)            parts.push(`Notes : ${notes}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
   return parts.join('\n\n')
@@ -364,6 +429,14 @@ function stripRef(cell: string): string {
   if (!cell) return ''
   const i = cell.indexOf(' (')
   return i >= 0 ? cell.slice(0, i).trim() : cell.trim()
+}
+
+function parseModelList(raw: string): string[] {
+  if (!raw) return []
+  return raw
+    .split(/,|&|\+|\n|\bet\b/i)
+    .map(s => stripRef(s.trim()))
+    .filter(Boolean)
 }
 
 function decodeRef(raw: string): string {

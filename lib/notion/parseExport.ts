@@ -79,8 +79,11 @@ export type GenerationTask = {
   extraInspiDetails?: File[]     // photos supplémentaires de REFERENCE (détails à intégrer)
   outfitFiles?:       File[]     // tenue brute (utile au runtime pour rebuild le prompt)
   modelDescription?:  string
-  bgOverride?:        string     // colonne "Background Description" — modifie l'env extrait
-  viewOverride?:      string     // colonne "View Details"          — modifie la pose extraite
+  bgOverride?:        string     // colonne "Background details" — modifie l'env extrait
+  viewOverride?:      string     // colonne "Vue et details"     — modifie la pose extraite
+  duoTrioDesc?:       string     // colonne "description photos duo/trio" — précisions pour les visuels multi-mannequins
+  mannequinNames?:    string[]   // liste complète des mannequins du visuel (si plusieurs)
+  modelDescriptions?: string[]   // descriptions des mannequins (1 par mannequin)
   // Commun
   mannequinName:   string
   fondName:        string
