@@ -32,6 +32,16 @@ type Mode = 'batch' | 'inspi'
  *   - "100-150"  → { start: 100, end: 150 }
  *   - ""/"abc"   → null
  */
+function sanitizeFilename(s: string): string {
+  return s
+    .replace(/[\/\\:*?"<>|]/g, '_')   // caractères interdits Windows
+    .replace(/\s+/g, '_')              // espaces -> _
+    .replace(/_+/g, '_')               // _ multiples -> 1 seul
+    .replace(/^_|_$/g, '')             // pas de _ au début/fin
+    .slice(0, 80)
+    || 'unnamed'
+}
+
 function parseLookRange(input: string): { start: number; end: number } | null {
   const s = (input ?? '').trim()
   if (!s) return null
@@ -65,6 +75,13 @@ export default function NotionTab() {
   const [running, setRunning]         = useState(false)
   const [progress, setProgress]       = useState('')
   const [expanded, setExpanded]       = useState<Record<string, boolean>>({})
+
+  // 📁 Dossier de sortie : si défini, on écrit chaque visuel terminé dedans (nom = SKU)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const outputDirHandleRef    = useRef<any | null>(null)
+  const [outputDirName, setOutputDirName] = useState<string | null>(null)
+  const writtenTaskIdsRef     = useRef<Set<string>>(new Set())
+  const writeInFlightRef      = useRef<Set<string>>(new Set())
 
   /* ----------- Changement de mode ----------- */
   const switchMode = (m: Mode) => {
@@ -127,6 +144,72 @@ export default function NotionTab() {
   }
 
   useEffect(() => { statesRef.current = states }, [states])
+
+  /* ----------- 📁 File System Access : dossier de sortie ----------- */
+  const handleChooseOutputDir = async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any
+    if (!w || typeof w.showDirectoryPicker !== 'function') {
+      alert('API File System non supportée par ton navigateur. Utilise Chrome 86+ ou Edge 86+.')
+      return
+    }
+    try {
+      const handle = await w.showDirectoryPicker({ mode: 'readwrite' })
+      outputDirHandleRef.current = handle
+      setOutputDirName(handle.name as string)
+      writtenTaskIdsRef.current = new Set()
+      console.log('[outputDir] dossier choisi :', handle.name)
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        console.warn('[outputDir] échec :', err)
+        alert('Impossible de choisir le dossier : ' + (err?.message ?? err))
+      }
+    }
+  }
+
+  const clearOutputDir = () => {
+    outputDirHandleRef.current = null
+    setOutputDirName(null)
+    writtenTaskIdsRef.current = new Set()
+  }
+
+  /**
+   * Écrit le visuel terminé dans le dossier choisi, nommé d'après le SKU.
+   * Async non bloquant — appelé après chaque task done.
+   */
+  const writeTaskToOutputDir = async (task: GenerationTask, imageUrl: string) => {
+    const dir = outputDirHandleRef.current
+    if (!dir) return
+    if (writtenTaskIdsRef.current.has(task.id)) return
+    if (writeInFlightRef.current.has(task.id)) return
+    writeInFlightRef.current.add(task.id)
+    try {
+      // Récupère le Blob de l'image (data URL ou HTTPS URL)
+      let blob: Blob
+      if (imageUrl.startsWith('data:')) {
+        const m = imageUrl.match(/^data:([^;]+);base64,(.+)$/)
+        if (!m) throw new Error('data URL invalide')
+        const bytes = Uint8Array.from(atob(m[2]), c => c.charCodeAt(0))
+        blob = new Blob([bytes], { type: m[1] })
+      } else {
+        blob = await fetch(imageUrl).then(r => r.blob())
+      }
+      // Détecte l'extension
+      const ext = (blob.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+      // Nom = SKU (= numeroLook) sanitisé
+      const fileName = `${sanitizeFilename(task.numeroLook || task.lookId)}.${ext}`
+      const fileHandle = await dir.getFileHandle(fileName, { create: true })
+      const w = await fileHandle.createWritable()
+      await w.write(blob)
+      await w.close()
+      writtenTaskIdsRef.current.add(task.id)
+      console.log(`[outputDir] ✓ écrit ${fileName}`)
+    } catch (err) {
+      console.warn(`[outputDir] échec écriture ${task.id}:`, err)
+    } finally {
+      writeInFlightRef.current.delete(task.id)
+    }
+  }
 
   /* ----------- Grouping par look ----------- */
   const groupedLooks = useMemo(() => {
@@ -391,6 +474,7 @@ export default function NotionTab() {
               faceWasAvailable: !!item.task.facePhotoFile,
             })
             done++
+            void writeTaskToOutputDir(item.task, data2.imageUrl)
           }
           return
         }
@@ -440,6 +524,7 @@ export default function NotionTab() {
             faceWasAvailable: typeof data.faceWasAvailable === 'boolean' ? data.faceWasAvailable : undefined,
           })
           done++
+          void writeTaskToOutputDir(item.task, data.imageUrl)
         } else {
           updateState(item.task.id, { status: 'error', error: data?.error ?? 'Aucune image renvoyée' })
           errors++
@@ -521,6 +606,22 @@ export default function NotionTab() {
             hint={mode === 'inspi' ? "ZIP avec LOOK (LIFESTYLE).csv + Models Definition.csv + images + références" : "ZIP avec LOOK*.csv + Models Definition*.csv + Fonds*.csv + images"}
             minHeight={120}
           />
+
+          {/* 📁 Dossier de sortie (sauve chaque visuel terminé, nommé par SKU) */}
+          <div>
+            <label style={styles.label}>📁 Dossier de sortie (optionnel)</label>
+            {outputDirName ? (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '8px 10px', background: '#E8F2EC', border: '1px solid #B7DBC2', borderRadius: 6, fontSize: 12, color: '#1F7A35' }}>
+                <span>✓ <strong>{outputDirName}</strong></span>
+                <button onClick={clearOutputDir} style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: 11, background: '#fff', color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 4, fontWeight: 600, cursor: 'pointer' }}>✗ retirer</button>
+              </div>
+            ) : (
+              <button onClick={handleChooseOutputDir} style={{ width: '100%', padding: '8px 10px', fontSize: 12, background: '#fff', color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 6, fontWeight: 600, cursor: 'pointer' }}>📁 Choisir un dossier (sauve les visuels au fur et à mesure)</button>
+            )}
+            <p style={{ ...styles.hintSubtle, marginTop: 4 }}>
+              Chaque visuel terminé sera écrit dans ce dossier, nommé d'après son SKU. Pratique pour gros batch sans risque de perte.
+            </p>
+          </div>
 
           <div>
             <label style={styles.label}>Limite looks (optionnel)</label>
@@ -1008,13 +1109,9 @@ const lookHeader: React.CSSProperties = {
   gap: 12,
 }
 
+
 const chevron: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  fontSize: 18,
-  color: '#0D4A5C',
-  padding: '0 6px',
+  fontSize: 12, color: '#0D4A5C', transition: 'transform 0.15s', display: 'inline-block',
 }
 
 const taskRowStyle: React.CSSProperties = {
