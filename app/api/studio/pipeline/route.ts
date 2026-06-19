@@ -69,7 +69,8 @@ export async function POST(request: Request) {
       // image base du look déjà shooté, 2) une image du détail à zoomer.
       // Pas de mannequinBody/products structurés, juste le prompt + les 2 refs.
       if (refsLegacy.length > 0) {
-        parts.push({ text: `[SESSION ${sessionId}]\n${prompt}` })
+        const fabricNote = '⚠ FABRIC : if the garment is linen, cotton or any natural fiber, it MUST appear well-ironed and crisp — never crumpled or wrinkled. Smooth surface.'
+        parts.push({ text: `[SESSION ${sessionId}]\n${prompt}\n\n${fabricNote}` })
         // Les refs : 1ère = base du look, 2ème (si présente) = détail
         for (let i = 0; i < refsLegacy.length; i++) {
           const label = i === 0
@@ -89,6 +90,8 @@ export async function POST(request: Request) {
         '  2) THE GARMENT — reproduce every detail of the product reference(s) with absolute fidelity.',
         '  3) THE POSE — natural fashion editorial pose, fitting the framing.',
         '  4) THE FRAMING — respect the requested view exactly (full body / mid / upper / lower / detail).',
+        '',
+        '⚠ FABRIC RENDERING : All fabrics MUST appear properly ironed and crisp, freshly steamed for a high-end editorial look. Natural fibers (LINEN, cotton, hemp, ramie) MUST NOT look crumpled, wrinkled or creased. Smooth, clean garment surface — never the wrinkled "just-out-of-the-bag" look.',
         '',
         'Background : just provide a neutral coherent scene matching the lighting tone. We do not need it to be perfect, it will be replaced.',
         '',
