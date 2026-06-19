@@ -168,25 +168,16 @@ export async function POST(request: Request) {
     const bgW = bgMeta.width ?? 1024
     const bgH = bgMeta.height ?? 1536
 
-    // ⚠ CRITICAL : trim les bords transparents autour du sujet BiRefNet.
-    // Sans ça, le sujet "flotte" car son bounding box inclut tout l'espace vide,
-    // et le placement en bas du fond positionne ce vide, pas les vrais pieds.
-    let subjectBuf: Buffer
-    try {
-      subjectBuf = await sharp(subjectBufRaw)
-        .ensureAlpha()
-        .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 }, threshold: 5 })
-        .png()
-        .toBuffer()
-    } catch (err) {
-      console.warn('[pipeline] trim failed, using raw subject:', err)
-      subjectBuf = subjectBufRaw
-    }
+    // ⚠ Pas de trim() : BiRefNet renvoie un PNG RGBA de la même taille que l'image Gemini source.
+    // Le sujet réel est positionné EXACTEMENT à la même place que dans le visuel Gemini.
+    // Comme Gemini et le fond ont le même aspectRatio, on resize juste pour matcher
+    // les dimensions du fond → le sujet est placé naturellement au bon endroit.
+    const subjectBuf = subjectBufRaw
 
-    // Maintenant subjectBuf = juste le sujet, sans marges transparentes.
-    // On le resize pour qu'il tienne dans le fond en gardant son ratio.
+    // Resize pour matcher EXACTEMENT les dimensions du fond (même W et même H).
+    // On utilise fit:'fill' pour éviter le padding qui ferait flotter le sujet.
     let subjectFit = await sharp(subjectBuf)
-      .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false })
+      .resize({ width: bgW, height: bgH, fit: 'fill' })
       .png()
       .toBuffer()
 
