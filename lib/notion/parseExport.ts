@@ -109,7 +109,11 @@ export type ParsedExport = {
 
 /* ============================== ENTRY ============================== */
 
-export async function parseNotionExport(zipFile: File, onProgress?: (msg: string) => void, lookLimit?: number): Promise<ParsedExport> {
+export async function parseNotionExport(
+  zipFile: File,
+  onProgress?: (msg: string) => void,
+  lookRange?: { start: number; end: number } | number,
+): Promise<ParsedExport> {
   // Stratégie LAZY : on lit d'abord l'index du ZIP (~64 KB), puis on
   // extrait UNIQUEMENT les fichiers nécessaires pour les premiers N looks.
   // Le fichier source n'est jamais entièrement chargé en RAM.
@@ -218,11 +222,25 @@ export async function parseNotionExport(zipFile: File, onProgress?: (msg: string
   }
   warnings.push(`📊 CSV LOOK : ${looksRows.length} lignes au total, ${eligibleLookRows.length} avec ID.`)
 
-  const lookRowsTouse = (typeof lookLimit === 'number' && lookLimit > 0)
-    ? eligibleLookRows.slice(0, lookLimit)
+  // Normalise lookRange : nombre simple = {1..N}, objet = {start..end}
+  let rangeStart: number | null = null
+  let rangeEnd: number | null = null
+  if (typeof lookRange === 'number' && lookRange > 0) {
+    rangeStart = 1
+    rangeEnd   = lookRange
+  } else if (lookRange && typeof lookRange === 'object' && lookRange.start > 0 && lookRange.end >= lookRange.start) {
+    rangeStart = lookRange.start
+    rangeEnd   = lookRange.end
+  }
+  const lookRowsTouse = (rangeStart !== null && rangeEnd !== null)
+    ? eligibleLookRows.slice(rangeStart - 1, rangeEnd)
     : eligibleLookRows
-  if (typeof lookLimit === 'number' && lookLimit > 0 && eligibleLookRows.length > lookLimit) {
-    warnings.push(`Limité aux ${lookLimit} premiers looks (sur ${eligibleLookRows.length}).`)
+  if (rangeStart !== null && rangeEnd !== null && eligibleLookRows.length > 0) {
+    if (rangeStart === 1) {
+      warnings.push(`Limité aux ${rangeEnd} premiers looks (sur ${eligibleLookRows.length} eligible).`)
+    } else {
+      warnings.push(`Limité aux looks ${rangeStart}-${rangeEnd} (sur ${eligibleLookRows.length} eligible, ${lookRowsTouse.length} retenus).`)
+    }
   }
 
   // 2. Collecte les mannequins et fonds RÉELLEMENT utilisés par les N looks retenus
@@ -726,10 +744,6 @@ function guessMime(name: string): string {
   }
 }
 
-function normName(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
 function stripRef(cell: string): string {
   if (!cell) return ''
   const i = cell.indexOf(' (')
@@ -753,4 +767,8 @@ function resolveFileList(raw: string, index: Map<string, File>): File[] {
     .filter(Boolean)
     .map(name => index.get(name))
     .filter((f): f is File => !!f)
+}
+
+function normName(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ')
 }

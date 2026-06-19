@@ -49,6 +49,27 @@ function extFromUrl(url: string): string {
   return m ? m[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg'
 }
 
+/**
+ * Parse le champ "Limite looks" en une plage [start, end] (1-indexée, inclusive).
+ *   - "10"        → { start: 1,   end: 10  }  (les 10 premiers)
+ *   - "100-150"   → { start: 100, end: 150 }  (du 100ème au 150ème inclus)
+ *   - ""/"abc"    → null (= tous les looks)
+ */
+function parseLookRange(input: string): { start: number; end: number } | null {
+  const s = (input ?? '').trim()
+  if (!s) return null
+  const rangeMatch = s.match(/^(\d+)\s*-\s*(\d+)$/)
+  if (rangeMatch) {
+    const start = parseInt(rangeMatch[1], 10)
+    const end   = parseInt(rangeMatch[2], 10)
+    if (start > 0 && end >= start) return { start, end }
+    return null
+  }
+  const n = parseInt(s, 10)
+  if (!Number.isNaN(n) && n > 0) return { start: 1, end: n }
+  return null
+}
+
 function sanitizeFilename(s: string): string {
   return s
     .replace(/[\/\\:*?"<>|]/g, '_')   // caractères interdits Windows
@@ -119,17 +140,20 @@ export default function CompositeTab() {
       return
     }
     if (sizeGB > 3.0) {
-      const limitSet = lookLimit.trim() && Number(lookLimit) > 0
+      const range = parseLookRange(lookLimit)
+      const rangeLabel = range
+        ? (range.start === 1 ? `aux ${range.end} premiers looks` : `aux looks ${range.start}-${range.end}`)
+        : null
       setProgress(
         `ZIP volumineux (${sizeGB.toFixed(1)} GB)` +
-        (limitSet ? ` — limité aux ${lookLimit} premiers looks ✓` : ' — pense à remplir "Limite looks" pour un premier essai rapide (ex : 3)'),
+        (rangeLabel ? ` — limité ${rangeLabel} ✓` : ' — pense à remplir "Limite looks" pour un premier essai rapide (ex : 3 ou 100-150)'),
       )
     }
 
     setParsing(true)
     try {
-      const limit = lookLimit.trim() && Number(lookLimit) > 0 ? Number(lookLimit) : undefined
-      const result = await parseNotionExport(files[0], (msg) => setProgress(msg), limit)
+      const range = parseLookRange(lookLimit) ?? undefined
+      const result = await parseNotionExport(files[0], (msg) => setProgress(msg), range)
       setParsed(result)
       setStates(result.tasks.map(t => ({ task: t, status: 'pending', enabled: true })))
       setProgress('')
@@ -735,10 +759,10 @@ export default function CompositeTab() {
           label="Glisse-dépose ton export Notion (.zip)" />
         <div>
           <label style={styles.label}>Limite looks (avant le drop)</label>
-          <input value={lookLimit} onChange={e => setLookLimit(e.target.value)} placeholder="ex : 3"
-            style={styles.input} type="number" min="1" />
+          <input value={lookLimit} onChange={e => setLookLimit(e.target.value)} placeholder="ex : 3 ou 100-150"
+            style={styles.input} type="text" inputMode="text" />
           <div style={{ fontSize: 10, color: '#6B7A8A', marginTop: 4 }}>
-            Pour tester sur N looks seulement, indispensable pour les gros ZIPs (4-5 GB+).
+            "N" = les N premiers looks · "M-N" = du Mème au Nème (inclus). Vide = tous.
           </div>
         </div>
       </div>
@@ -788,8 +812,8 @@ export default function CompositeTab() {
               </div>
               <div>
                 <label style={styles.label}>Limite looks</label>
-                <input value={lookLimit} onChange={e => setLookLimit(e.target.value)} placeholder="ex: 3"
-                  style={styles.input} type="number" min="1" />
+                <input value={lookLimit} onChange={e => setLookLimit(e.target.value)} placeholder="ex : 3 ou 100-150"
+                  style={styles.input} type="text" inputMode="text" />
               </div>
             </div>
 
