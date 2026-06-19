@@ -179,8 +179,11 @@ export async function POST(request: Request) {
         }
         // Shadow AI mode renforcé : ai.hard donne une ombre plus marquée que ai.soft
         form.append('shadow.mode', 'ai.hard')
-        // Pas de padding (sujet à sa taille naturelle)
-        form.append('padding', '0')
+        // ⚠ Ne PAS forcer padding=0 : Photoroom rescale alors le sujet pour
+        // remplir le canvas, et la tête peut se retrouver coupée en haut.
+        // On utilise referenceBox=originalImage pour que Photoroom garde la
+        // position et l'échelle du sujet telles qu'elles sont dans l'image source.
+        form.append('referenceBox', 'originalImage')
         // Output JPEG quality
         form.append('outputFormat', 'jpg')
         form.append('quality', '92')
@@ -320,9 +323,9 @@ async function toInlinePart(file: File) {
 
 function describeFraming(framing: string): string {
   const f = (framing ?? '').toLowerCase()
-  if (f.includes('haut') || f.includes('upper')) return 'upper body / bust shot'
-  if (f.includes('bas')  || f.includes('lower')) return 'lower body / legs only'
-  if (f.includes('mi'))                          return 'mid body / cowboy shot'
-  if (f.includes('detail') || f.includes('macro')) return 'extreme macro on garment detail'
-  return 'full body, head to feet'
+  if (f.includes('haut') || f.includes('upper')) return 'upper body / bust shot (head, shoulders, top of chest). Leave 5-10% headroom above the head — the top of the head must NOT touch the top edge of the frame.'
+  if (f.includes('bas')  || f.includes('lower')) return 'lower body / legs only (from hips down to feet). Leave a small margin below the feet.'
+  if (f.includes('mi'))                          return 'mid body / cowboy shot (from head to mid-thigh). Leave 5-10% headroom above the head.'
+  if (f.includes('detail') || f.includes('macro')) return 'extreme macro on garment detail (no full body, no model context)'
+  return 'full body, head to feet. ⚠ Leave comfortable headroom : 5-10% empty space above the head AND a small margin below the feet. The head must NOT touch the top edge of the frame. The feet must NOT touch the bottom edge of the frame. The model is fully visible with breathing space all around.'
 }
