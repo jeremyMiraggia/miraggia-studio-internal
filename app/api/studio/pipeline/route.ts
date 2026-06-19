@@ -176,8 +176,10 @@ export async function POST(request: Request) {
 
     // Resize pour tenir dans le fond SANS déformation (fit:'inside' garde le ratio).
     // Si le ratio Gemini = ratio fond, le sujet remplira exactement bgW × bgH.
+    // sharpen() léger pour récupérer la netteté perdue au resize, surtout autour du visage.
     let subjectFit = await sharp(subjectBuf)
-      .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false })
+      .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false, kernel: 'lanczos3' })
+      .sharpen({ sigma: 0.8, m1: 0.4, m2: 1.5 })   // sharpen léger anti-flou
       .png()
       .toBuffer()
 
@@ -222,10 +224,10 @@ export async function POST(request: Request) {
     if (hasFloor) {
       try {
         // 1. Génère un masque PNG : noir partout, ellipse blanche autour des pieds
-        const feetZoneW = Math.min(bgW, Math.round(subjW * 1.5))
-        const feetZoneH = Math.min(bgH - (top + Math.round(subjH * 0.82)), Math.round(subjH * 0.25))
+        const feetZoneW = Math.min(bgW, Math.round(subjW * 1.3))
+        const feetZoneH = Math.min(bgH - (top + Math.round(subjH * 0.88)), Math.round(subjH * 0.18))
         const feetCx    = left + Math.round(subjW / 2)
-        const feetCy    = top + Math.round(subjH * 0.95)
+        const feetCy    = top + Math.round(subjH * 0.97)
 
         if (feetZoneW < 40 || feetZoneH < 20) {
           throw new Error('zone des pieds trop petite')
@@ -251,7 +253,7 @@ export async function POST(request: Request) {
           input: {
             image_url: compositeUrl,
             mask_url:  maskUrl,
-            prompt: 'natural soft contact shadow under the model feet on the floor, matching the existing scene lighting and floor texture, subtle realistic photography shadow',
+            prompt: 'a soft diffuse SHADOW on the floor under the feet of the standing model. The shadow is DARK and SUBTLE, matching the scene lighting. ⚠ DO NOT add a reflection. DO NOT add a mirror image. NO glossy surface. NO upside-down model. Just a plain matte shadow on a normal matte floor. Photography studio lighting.',
             num_images: 1,
             safety_tolerance: '6',
           } as any,

@@ -1029,6 +1029,25 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
 }
 
 function ImgThumb({ label, url, highlight }: { label: string, url: string, highlight?: boolean }) {
+  // Force download via fetch + Blob (l'attribute `download` ne marche pas cross-origin = Vercel Blob)
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault()
+    try {
+      const res = await fetch(url)
+      const blob = await res.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = `${label.replace(/\W+/g, '_')}.jpg`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+    } catch (err) {
+      console.warn('[download] failed, fallback open in new tab:', err)
+      window.open(url, '_blank')
+    }
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
       <img src={url} alt={label} style={{
@@ -1038,10 +1057,10 @@ function ImgThumb({ label, url, highlight }: { label: string, url: string, highl
       }} />
       <div style={{ fontSize: 9, color: highlight ? '#1F7A35' : '#6B7A8A', fontWeight: highlight ? 700 : 600 }}>{label}</div>
       <div style={{ display: 'flex', gap: 3 }}>
-        <a href={url} download={`${label.replace(/\W+/g, '_')}.jpg`}
-           style={highlight ? linkBtnDark : linkBtnLight}>⬇</a>
+        <a href={url} onClick={handleDownload}
+           style={highlight ? linkBtnDark : linkBtnLight} title="Télécharger">⬇</a>
         <a href={url} target="_blank" rel="noreferrer"
-           style={highlight ? linkBtnDark : linkBtnLight}>↗</a>
+           style={highlight ? linkBtnDark : linkBtnLight} title="Ouvrir dans un nouvel onglet">↗</a>
       </div>
     </div>
   )
