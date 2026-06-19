@@ -184,9 +184,10 @@ export async function POST(request: Request) {
         // On utilise referenceBox=originalImage pour que Photoroom garde la
         // position et l'échelle du sujet telles qu'elles sont dans l'image source.
         form.append('referenceBox', 'originalImage')
-        // Output JPEG quality
+        // ⚠ Qualité max : on demande JPEG q95 et on évite tout re-encode côté server.
+        // Préserve un maximum de détails (chaque encodage JPEG perd de la qualité).
         form.append('outputFormat', 'jpg')
-        form.append('quality', '92')
+        form.append('quality', '95')
 
         console.log('[photoroom] calling ' + photoroomUrl + ' (keyLen=' + photoroomKey.length + ', keyPrefix=' + photoroomKey.slice(0, 8) + '…)')
         const res = await fetch(photoroomUrl, {
@@ -203,10 +204,9 @@ export async function POST(request: Request) {
         }
         console.log('[photoroom] OK, content-type=' + res.headers.get('content-type'))
 
-        const photoroomBuf = Buffer.from(await res.arrayBuffer())
-        finalJpegBuf = await sharp(photoroomBuf)
-          .jpeg({ quality: 90, progressive: false, mozjpeg: true })
-          .toBuffer()
+        // ⚠ On utilise le buffer Photoroom DIRECTEMENT (pas de re-encode sharp).
+        // Évite la double compression JPEG qui dégradait visiblement les détails.
+        finalJpegBuf = Buffer.from(await res.arrayBuffer())
         shadowAiUsed = true
       } catch (err: any) {
         shadowAiError = err?.message ?? String(err)
