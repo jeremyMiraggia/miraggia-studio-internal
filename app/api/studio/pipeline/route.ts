@@ -18,6 +18,7 @@
  */
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
+import { fal } from '@fal-ai/client'
 import sharp from 'sharp'
 
 export const maxDuration = 300
@@ -136,7 +137,7 @@ export async function POST(request: Request) {
     const geminiRawBuf = Buffer.from(geminiImageB64, 'base64')
 
     // Récupère le background (utilisé soit en composite Photoroom, soit en fallback)
-    const backgroundBuf = Buffer.from(await background.arrayBuffer())
+    const backgroundBuf = Buffer.from(new Uint8Array(await background.arrayBuffer()))
 
     const fLow = (framing ?? '').toLowerCase()
     const hasFloor = !(fLow.includes('haut') || fLow.includes('upper') || fLow.includes('detail') || fLow.includes('macro'))
@@ -152,7 +153,9 @@ export async function POST(request: Request) {
     let shadowAiError: string | undefined
 
     const photoroomKey = process.env.PHOTOROOM_API_KEY
-    const wantPhotoroom = !!photoroomKey
+    // Photoroom uniquement pour les framings avec sol (plein, mi-corps, bas).
+    // Skip pour close-up haut & detail : on renvoie l'image Gemini brute (économie).
+    const wantPhotoroom = !!photoroomKey && hasFloor
 
     if (wantPhotoroom) {
       try {
@@ -166,12 +169,8 @@ export async function POST(request: Request) {
         // Background Notion (pixel-perfect)
         const bgBlob = new Blob([new Uint8Array(backgroundBuf)], { type: 'image/jpeg' })
         form.append('background.imageFile', bgBlob, 'background.jpg')
-        // Shadow AI mode (seulement si framing avec sol)
-        if (hasFloor) {
-          form.append('shadow.mode', 'ai.soft')
-        } else {
-          form.append('shadow.mode', 'none')
-        }
+        // Shadow AI mode (toujours activé ici, on n'arrive ici que si hasFloor)
+        form.append('shadow.mode', 'ai.soft')
         // Pas de padding (sujet à sa taille naturelle)
         form.append('padding', '0')
         // Output JPEG quality
@@ -207,8 +206,61 @@ export async function POST(request: Request) {
           .jpeg({ quality: 90, progressive: false, mozjpeg: true })
           .toBuffer()
       }
+    } else if (!hasFloor) {
+      // ============= BRANCHE close-up haut / detail =============
+      // Pour ces framings, on n'utilise pas Photoroom (pas d'ombre nécessaire,
+      // économie). À la place, on impose le fond Notion via l'ancienne méthode :
+      //   BiRefNet (détoure le sujet) → sharp composite (paste-back sur le fond Notion)
+      // Le fond reste pixel-perfect, le sujet est juste collé dessus, sans ombre.
+      const falKey = process.env.FAL_KEY
+      if (!falKey) {
+        shadowAiError = `framing=${framing} : FAL_KEY manquante pour BiRefNet`
+        finalJpegBuf = await sharp(geminiRawBuf)
+          .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+          .toBuffer()
+      } else {
+        try {
+          fal.config({ credentials: falKey })
+
+          // 1. BiRefNet détoure le sujet Gemini
+          const geminiFile = new File([new Uint8Array(geminiRawBuf)], 'gemini.png', { type: geminiMime })
+          const geminiFalUrl = await fal.storage.upload(geminiFile)
+          const rembgResult: any = await fal.subscribe('fal-ai/birefnet/v2', {
+            input: { image_url: geminiFalUrl },
+            logs: false,
+          })
+          const subjectRgbaUrl: string | undefined = rembgResult?.data?.image?.url ?? rembgResult?.image?.url
+          if (!subjectRgbaUrl) throw new Error('BiRefNet n\'a pas renvoyé d\'image RGBA')
+
+          // 2. Download sujet RGBA
+          const subjectArrBuf = await fetch(subjectRgbaUrl).then(r => r.arrayBuffer())
+          const subjectBuf = Buffer.from(new Uint8Array(subjectArrBuf))
+
+          // 3. Resize au format du fond + composite pixel-perfect
+          const bgMeta = await sharp(backgroundBuf).metadata()
+          const bgW = bgMeta.width ?? 1024
+          const bgH = bgMeta.height ?? 1536
+          const subjectFit = await sharp(subjectBuf)
+            .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false, kernel: 'lanczos3' })
+            .png()
+            .toBuffer()
+
+          finalJpegBuf = await sharp(backgroundBuf)
+            .composite([{ input: subjectFit, blend: 'over' }])
+            .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+            .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+            .toBuffer()
+          shadowAiError = `framing=${framing} : ancien pipeline (BiRefNet + paste-back fond Notion)`
+        } catch (err: any) {
+          shadowAiError = `BiRefNet/paste-back failed pour framing=${framing}: ${err?.message ?? err}`
+          console.warn('[pipeline] BiRefNet paste-back failed, fallback Gemini brute:', shadowAiError)
+          finalJpegBuf = await sharp(geminiRawBuf)
+            .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+            .toBuffer()
+        }
+      }
     } else {
-      // Pas de clé Photoroom → on renvoie l'image Gemini telle quelle
+      // Pas de clé Photoroom et framing avec sol → fallback Gemini brute
       shadowAiError = 'PHOTOROOM_API_KEY manquante côté serveur'
       finalJpegBuf = await sharp(geminiRawBuf)
         .jpeg({ quality: 90, progressive: false, mozjpeg: true })
@@ -240,7 +292,6 @@ export async function POST(request: Request) {
       blobError,
     })
 
-
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'Erreur inconnue', stack: error?.stack?.slice(0, 800) }, { status: 500 })
   }
@@ -256,7 +307,7 @@ async function toInlinePart(file: File) {
 function describeFraming(framing: string): string {
   const f = (framing ?? '').toLowerCase()
   if (f.includes('haut') || f.includes('upper')) return 'upper body / bust shot'
-  if (f.includes('mi'))                          return 'mid body / cowboy shot'
+  if (f.includes('bas')  || f.includes('lower')) return 'lower body / legs only'
   if (f.includes('detail') || f.includes('macro')) return 'extreme macro on garment detail'
   return 'full body, head to feet'
 }
