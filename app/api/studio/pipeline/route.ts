@@ -174,10 +174,10 @@ export async function POST(request: Request) {
     // les dimensions du fond → le sujet est placé naturellement au bon endroit.
     const subjectBuf = subjectBufRaw
 
-    // Resize pour matcher EXACTEMENT les dimensions du fond (même W et même H).
-    // On utilise fit:'fill' pour éviter le padding qui ferait flotter le sujet.
+    // Resize pour tenir dans le fond SANS déformation (fit:'inside' garde le ratio).
+    // Si le ratio Gemini = ratio fond, le sujet remplira exactement bgW × bgH.
     let subjectFit = await sharp(subjectBuf)
-      .resize({ width: bgW, height: bgH, fit: 'fill' })
+      .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false })
       .png()
       .toBuffer()
 
@@ -209,44 +209,54 @@ export async function POST(request: Request) {
     const hasFloor = !(fLow.includes('haut') || fLow.includes('upper') || fLow.includes('detail') || fLow.includes('macro'))
     if (hasFloor) {
       try {
-        // 1. Extrait le canal alpha du sujet = silhouette blanche
-        const alphaMask = await sharp(subjectFeathered)
+        // OMBRE STYLE PHOTOROOM = "cast shadow" = silhouette entière projetée au sol
+        //
+        // Algo :
+        //   1. Extract alpha = silhouette complète du sujet (tête → pieds)
+        //   2. Flip vertical → l'ombre est inversée (tête de l'ombre = sous les pieds du sujet)
+        //   3. Squash vertical à ~35% → effet perspective sol
+        //   4. Blur fort → ombre douce, pas un contour net
+        //   5. Linear → opacité finale ~35% (douce mais visible)
+        //   6. Composite en mode multiply sous le sujet
+
+        const fullAlpha = await sharp(subjectFeathered)
           .ensureAlpha()
           .extractChannel('alpha')
           .toBuffer()
 
-        // 2. Prend SEULEMENT le bas 8% du masque (= les vrais pieds)
-        // → l'ombre suit la forme des chaussures, pas celle du corps entier
-        const sliceTop = Math.round(subjH * 0.92)
-        const sliceH   = Math.max(4, subjH - sliceTop)
-        const bottomSlice = await sharp(alphaMask)
-          .extract({ left: 0, top: sliceTop, width: subjW, height: sliceH })
-          .toBuffer()
+        // Calcule la place dispo SOUS le sujet (entre les pieds et le bord bas du fond)
+        const spaceBelow = bgH - (top + subjH)
+        // Ombre = min(35% du sujet, l'espace dispo en bas, et reste raisonnable)
+        const castHDesired = Math.round(subjH * 0.35)
+        const castH = Math.max(20, Math.min(castHDesired, spaceBelow + Math.round(subjH * 0.05)))
+        const castW = Math.min(subjW, bgW - left)   // ne déborde jamais à droite
+        const blurR = Math.max(8, Math.round(castH * 0.18))
 
-        // 3. Squash perspective sol : on l'écrase verticalement (devient un ovale aplati débordant un peu)
-        const shadowH = Math.max(12, Math.round(subjH * 0.025))   // 2.5% hauteur du sujet (ombre fine)
-        const shadowW = Math.round(subjW * 1.1)                    // 10% plus large que le sujet (déborde)
-        const blurR   = Math.max(8, Math.round(shadowH * 2.0))
-        const shadowMaskSquashed = await sharp(bottomSlice)
-          .resize({ width: shadowW, height: shadowH, fit: 'fill' })
-          .blur(blurR)
-          .linear(0.6, 0)   // 60% opacité max → douce mais visible
-          .toBuffer()
+        if (castH < 8 || castW < 8) {
+          // Pas la place pour faire une ombre raisonnable, on skip
+          shadowOverlay = null
+        } else {
+          const castMask = await sharp(fullAlpha)
+            .flip()
+            .resize({ width: castW, height: castH, fit: 'fill' })
+            .blur(blurR)
+            .linear(0.4, 0)
+            .toBuffer()
 
-        // 4. Crée une image noire RGBA avec cet alpha
-        const shadowRGBA = await sharp({
-          create: { width: shadowW, height: shadowH, channels: 3, background: { r: 0, g: 0, b: 0 } },
-        })
-          .joinChannel(shadowMaskSquashed)
-          .png()
-          .toBuffer()
+          const castShadowRGBA = await sharp({
+            create: { width: castW, height: castH, channels: 3, background: { r: 0, g: 0, b: 0 } },
+          })
+            .joinChannel(castMask)
+            .png()
+            .toBuffer()
 
-        // 5. Position : centrée sous les pieds du sujet
-        // L'ombre déborde un peu sous les pieds (anchored au point de contact des chaussures)
-        const shadowLeft = Math.max(0, left - Math.round((shadowW - subjW) / 2))
-        const shadowTop  = Math.min(bgH - shadowH, top + subjH - Math.round(shadowH * 0.4))
+          // Position avec clamp final pour garantir que ça tient dans le fond
+          const castLeft = Math.max(0, Math.min(bgW - castW, left))
+          const castTopDesired = top + subjH - Math.round(castH * 0.05)
+          const castTop  = Math.max(0, Math.min(bgH - castH, castTopDesired))
 
-        shadowOverlay = { input: shadowRGBA, left: shadowLeft, top: shadowTop, blend: 'multiply' }
+          shadowOverlay = { input: castShadowRGBA, left: castLeft, top: castTop, blend: 'multiply' }
+        }
       } catch (err) {
         console.warn('[pipeline] shadow generation failed, skipping:', err)
       }
