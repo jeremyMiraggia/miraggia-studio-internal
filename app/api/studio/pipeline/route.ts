@@ -224,10 +224,15 @@ export async function POST(request: Request) {
     if (hasFloor) {
       try {
         // 1. Génère un masque PNG : noir partout, ellipse blanche autour des pieds
-        const feetZoneW = Math.min(bgW, Math.round(subjW * 1.3))
-        const feetZoneH = Math.min(bgH - (top + Math.round(subjH * 0.88)), Math.round(subjH * 0.18))
+        // Le mask est CENTRÉ SOUS les pieds, dans le sol uniquement.
+        // On laisse une marge de 3% au-dessus pour ne PAS toucher les chaussures.
+        const feetZoneW = Math.min(bgW, Math.round(subjW * 1.2))
+        const feetBottomY = top + subjH    // ligne théorique des pieds (bas du sujet)
+        const spaceBelow  = bgH - feetBottomY
+        const feetZoneH = Math.min(spaceBelow + Math.round(subjH * 0.02), Math.round(subjH * 0.12))
         const feetCx    = left + Math.round(subjW / 2)
-        const feetCy    = top + Math.round(subjH * 0.97)
+        // Centre de l'ellipse : juste sous les pieds (50% sous le bord bas du sujet)
+        const feetCy    = feetBottomY + Math.round(feetZoneH * 0.4)
 
         if (feetZoneW < 40 || feetZoneH < 20) {
           throw new Error('zone des pieds trop petite')
@@ -253,7 +258,7 @@ export async function POST(request: Request) {
           input: {
             image_url: compositeUrl,
             mask_url:  maskUrl,
-            prompt: 'a soft diffuse SHADOW on the floor under the feet of the standing model. The shadow is DARK and SUBTLE, matching the scene lighting. ⚠ DO NOT add a reflection. DO NOT add a mirror image. NO glossy surface. NO upside-down model. Just a plain matte shadow on a normal matte floor. Photography studio lighting.',
+            prompt: 'a very subtle natural soft contact shadow on the matte floor, the shadow is connected to the feet and follows the floor perspective, fading away from the feet. The floor surface and texture stay unchanged. ⚠ NO mirror reflection, NO upside-down model, NO glossy surface, NO black blobs, NO floating dark patches detached from the feet. Just a normal natural soft shadow.',
             num_images: 1,
             safety_tolerance: '6',
           } as any,
@@ -263,8 +268,15 @@ export async function POST(request: Request) {
         const fillImageUrl: string | undefined = fillResult?.data?.images?.[0]?.url ?? fillResult?.images?.[0]?.url
         if (fillImageUrl) {
           const fillBuf = await fetch(fillImageUrl).then(r => r.arrayBuffer()).then(b => Buffer.from(b))
-          // Re-encode en JPEG pour cohérence
-          finalJpegBuf = await sharp(fillBuf).jpeg({ quality: 90, progressive: false, mozjpeg: true }).toBuffer()
+
+          // ⚠ CRITIQUE : ré-applique le SUJET ORIGINAL par-dessus le résultat Flux.
+          // Flux Fill peut toucher les chaussures ou la jupe même avec un masque limité
+          // (notamment via feathering 30px du mask). On re-paste le sujet exact pour
+          // garantir 100% préservation du vêtement/chaussures/peau.
+          finalJpegBuf = await sharp(fillBuf)
+            .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
+            .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+            .toBuffer()
           shadowAiUsed = true
         } else {
           throw new Error('Flux Fill n\'a pas renvoyé d\'image')
@@ -299,6 +311,7 @@ export async function POST(request: Request) {
       debug: { geminiUrl, subjectRgbaUrl, mannequinLabel, decorLabel, bgW, bgH, subjW, subjH, shadowAiUsed, shadowAiError },
       blobError,
     })
+
 
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'Erreur inconnue', stack: error?.stack?.slice(0, 800) }, { status: 500 })
