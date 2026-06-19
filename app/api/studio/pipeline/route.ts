@@ -208,83 +208,74 @@ export async function POST(request: Request) {
     const fLow = (framing ?? '').toLowerCase()
     const hasFloor = !(fLow.includes('haut') || fLow.includes('upper') || fLow.includes('detail') || fLow.includes('macro'))
 
-    // Composite intermédiaire : fond + sujet (sans ombre encore)
-    let finalJpegBuf = await sharp(backgroundBuf)
-      .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
-      .jpeg({ quality: 92, progressive: false, mozjpeg: true })
-      .toBuffer()
-
-    // ============= ÉTAPE 3.5 — OMBRE AI via Flux Fill =============
-    // Au lieu d'une ellipse géométrique simple, on demande à un vrai modèle
-    // de diffusion (Flux Fill) de générer une ombre photoréaliste dans une
-    // zone limitée aux pieds + sol immédiat.
-    // Le masque limite la modification → tout le reste reste intact.
+    // ============= ÉTAPE 3 — COMPOSITE via Photoroom API (sujet + fond + ombre AI) =============
+    // Photoroom Image Editing API gère en 1 call :
+    //   - le compositing sujet/fond
+    //   - la génération d'une ombre AI réaliste (shadow.mode=ai.soft) qui s'adapte à la silhouette
+    // C'est LE service de référence pour ce type d'effet → bien plus fiable que nos bricolages.
+    let finalJpegBuf: Buffer
     let shadowAiUsed = false
     let shadowAiError: string | undefined
-    if (hasFloor) {
+
+    const photoroomKey = process.env.PHOTOROOM_API_KEY
+    const wantPhotoroom = hasFloor && !!photoroomKey
+
+    if (wantPhotoroom) {
       try {
-        // 1. Génère un masque PNG : noir partout, ellipse blanche autour des pieds
-        // Le mask est CENTRÉ SOUS les pieds, dans le sol uniquement.
-        // On laisse une marge de 3% au-dessus pour ne PAS toucher les chaussures.
-        const feetZoneW = Math.min(bgW, Math.round(subjW * 1.2))
-        const feetBottomY = top + subjH    // ligne théorique des pieds (bas du sujet)
-        const spaceBelow  = bgH - feetBottomY
-        const feetZoneH = Math.min(spaceBelow + Math.round(subjH * 0.02), Math.round(subjH * 0.12))
-        const feetCx    = left + Math.round(subjW / 2)
-        // Centre de l'ellipse : juste sous les pieds (50% sous le bord bas du sujet)
-        const feetCy    = feetBottomY + Math.round(feetZoneH * 0.4)
+        // L'endpoint : Photoroom détecte sandbox/prod via la clé elle-même,
+        // mais en pratique on utilise l'endpoint sandbox si la key contient "sandbox"
+        const isSandbox = photoroomKey.toLowerCase().includes('sandbox')
+        const photoroomUrl = isSandbox
+          ? 'https://sandbox.photoroom.com/v2/edit'
+          : 'https://image-api.photoroom.com/v2/edit'
 
-        if (feetZoneW < 40 || feetZoneH < 20) {
-          throw new Error('zone des pieds trop petite')
-        }
+        const form = new FormData()
+        // Sujet détouré (RGBA déjà fait par BiRefNet)
+        const subjectBlob = new Blob([new Uint8Array(subjectBuf)], { type: 'image/png' })
+        form.append('imageFile', subjectBlob, 'subject.png')
+        // Background Notion (paste-back pixel-perfect)
+        const bgBlob = new Blob([new Uint8Array(backgroundBuf)], { type: 'image/jpeg' })
+        form.append('background.imageFile', bgBlob, 'background.jpg')
+        // Shadow AI mode (le truc qu'on cherche)
+        form.append('shadow.mode', 'ai.soft')
+        // Pas de padding (sujet placé tel que dans l'image)
+        form.append('padding', '0')
+        // Output JPEG quality
+        form.append('outputFormat', 'jpg')
+        form.append('quality', '92')
 
-        const svgMask = `<svg xmlns="http://www.w3.org/2000/svg" width="${bgW}" height="${bgH}"><rect width="100%" height="100%" fill="black"/><ellipse cx="${feetCx}" cy="${feetCy}" rx="${feetZoneW / 2}" ry="${feetZoneH / 2}" fill="white"/></svg>`
-
-        const maskBuf = await sharp(Buffer.from(svgMask))
-          .blur(30)   // feather edges → transition douce entre zone modifiée et intacte
-          .png()
-          .toBuffer()
-
-        // 2. Upload composite + masque vers FAL
-        const compositeFile = new File([finalJpegBuf], 'composite.jpg', { type: 'image/jpeg' })
-        const maskFile      = new File([maskBuf], 'mask.png', { type: 'image/png' })
-        const [compositeUrl, maskUrl] = await Promise.all([
-          fal.storage.upload(compositeFile),
-          fal.storage.upload(maskFile),
-        ])
-
-        // 3. Appel Flux Fill Pro
-        const fillResult: any = await fal.subscribe('fal-ai/flux-pro/v1/fill', {
-          input: {
-            image_url: compositeUrl,
-            mask_url:  maskUrl,
-            prompt: 'a very subtle natural soft contact shadow on the matte floor, the shadow is connected to the feet and follows the floor perspective, fading away from the feet. The floor surface and texture stay unchanged. ⚠ NO mirror reflection, NO upside-down model, NO glossy surface, NO black blobs, NO floating dark patches detached from the feet. Just a normal natural soft shadow.',
-            num_images: 1,
-            safety_tolerance: '6',
-          } as any,
-          logs: false,
+        const res = await fetch(photoroomUrl, {
+          method: 'POST',
+          headers: { 'x-api-key': photoroomKey, 'Accept': 'image/jpeg, image/png' },
+          body: form as any,
         })
 
-        const fillImageUrl: string | undefined = fillResult?.data?.images?.[0]?.url ?? fillResult?.images?.[0]?.url
-        if (fillImageUrl) {
-          const fillBuf = await fetch(fillImageUrl).then(r => r.arrayBuffer()).then(b => Buffer.from(b))
-
-          // ⚠ CRITIQUE : ré-applique le SUJET ORIGINAL par-dessus le résultat Flux.
-          // Flux Fill peut toucher les chaussures ou la jupe même avec un masque limité
-          // (notamment via feathering 30px du mask). On re-paste le sujet exact pour
-          // garantir 100% préservation du vêtement/chaussures/peau.
-          finalJpegBuf = await sharp(fillBuf)
-            .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
-            .jpeg({ quality: 90, progressive: false, mozjpeg: true })
-            .toBuffer()
-          shadowAiUsed = true
-        } else {
-          throw new Error('Flux Fill n\'a pas renvoyé d\'image')
+        if (!res.ok) {
+          const errTxt = await res.text().catch(() => '')
+          throw new Error(`Photoroom HTTP ${res.status}: ${errTxt.slice(0, 200)}`)
         }
+
+        const photoroomBuf = Buffer.from(await res.arrayBuffer())
+        finalJpegBuf = await sharp(photoroomBuf)
+          .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+          .toBuffer()
+        shadowAiUsed = true
       } catch (err: any) {
         shadowAiError = err?.message ?? String(err)
-        console.warn('[pipeline] Flux Fill shadow failed, using base composite without shadow:', shadowAiError)
+        console.warn('[pipeline] Photoroom shadow failed, fallback sharp composite without shadow:', shadowAiError)
+        // Fallback : composite simple sans ombre
+        finalJpegBuf = await sharp(backgroundBuf)
+          .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
+          .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+          .toBuffer()
       }
+    } else {
+      // Pas de clé Photoroom OU framing sans sol → composite simple sans ombre
+      if (!photoroomKey) shadowAiError = 'PHOTOROOM_API_KEY manquante côté serveur'
+      finalJpegBuf = await sharp(backgroundBuf)
+        .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
+        .jpeg({ quality: 90, progressive: false, mozjpeg: true })
+        .toBuffer()
     }
 
     // ============= ÉTAPE 4 — Upload Vercel Blob =============
