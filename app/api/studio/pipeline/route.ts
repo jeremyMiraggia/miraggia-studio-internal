@@ -159,7 +159,7 @@ export async function POST(request: Request) {
     }
 
     // ============= ÉTAPE 3 — Paste-back =============
-    const [subjectBuf, backgroundBuf] = await Promise.all([
+    const [subjectBufRaw, backgroundBuf] = await Promise.all([
       fetch(subjectRgbaUrl).then(r => r.arrayBuffer()).then(b => Buffer.from(b)),
       background.arrayBuffer().then(b => Buffer.from(b)),
     ])
@@ -168,9 +168,23 @@ export async function POST(request: Request) {
     const bgW = bgMeta.width ?? 1024
     const bgH = bgMeta.height ?? 1536
 
-    // ⚠ Ici le sujet (Gemini) a une taille proche du fond (même ratio aspectRatio) —
-    // on resize juste pour faire matcher EXACTEMENT les dimensions du fond.
-    // Pas de scaling artificiel, le sujet est censé occuper la même zone que dans le visuel Gemini.
+    // ⚠ CRITICAL : trim les bords transparents autour du sujet BiRefNet.
+    // Sans ça, le sujet "flotte" car son bounding box inclut tout l'espace vide,
+    // et le placement en bas du fond positionne ce vide, pas les vrais pieds.
+    let subjectBuf: Buffer
+    try {
+      subjectBuf = await sharp(subjectBufRaw)
+        .ensureAlpha()
+        .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 }, threshold: 5 })
+        .png()
+        .toBuffer()
+    } catch (err) {
+      console.warn('[pipeline] trim failed, using raw subject:', err)
+      subjectBuf = subjectBufRaw
+    }
+
+    // Maintenant subjectBuf = juste le sujet, sans marges transparentes.
+    // On le resize pour qu'il tienne dans le fond en gardant son ratio.
     let subjectFit = await sharp(subjectBuf)
       .resize({ width: bgW, height: bgH, fit: 'inside', withoutEnlargement: false })
       .png()
@@ -210,33 +224,36 @@ export async function POST(request: Request) {
           .extractChannel('alpha')
           .toBuffer()
 
-        // 2. Prend le bas 30% du masque (les pieds + bas du corps)
-        const sliceTop = Math.round(subjH * 0.7)
-        const sliceH   = subjH - sliceTop
-        const bottomSlice = await sharp(alphaMask, { raw: undefined })
+        // 2. Prend SEULEMENT le bas 8% du masque (= les vrais pieds)
+        // → l'ombre suit la forme des chaussures, pas celle du corps entier
+        const sliceTop = Math.round(subjH * 0.92)
+        const sliceH   = Math.max(4, subjH - sliceTop)
+        const bottomSlice = await sharp(alphaMask)
           .extract({ left: 0, top: sliceTop, width: subjW, height: sliceH })
           .toBuffer()
 
-        // 3. Squash perspective sol : on l'écrase verticalement (devient un ovale aplati)
-        const shadowH = Math.max(8, Math.round(subjH * 0.04))   // 4% hauteur du sujet
-        const blurR   = Math.max(6, Math.round(shadowH * 1.2))
+        // 3. Squash perspective sol : on l'écrase verticalement (devient un ovale aplati débordant un peu)
+        const shadowH = Math.max(12, Math.round(subjH * 0.025))   // 2.5% hauteur du sujet (ombre fine)
+        const shadowW = Math.round(subjW * 1.1)                    // 10% plus large que le sujet (déborde)
+        const blurR   = Math.max(8, Math.round(shadowH * 2.0))
         const shadowMaskSquashed = await sharp(bottomSlice)
-          .resize({ width: subjW, height: shadowH, fit: 'fill' })
+          .resize({ width: shadowW, height: shadowH, fit: 'fill' })
           .blur(blurR)
-          .linear(0.55, 0)   // ramène l'intensité max à ~55% → ombre douce, pas noire
+          .linear(0.6, 0)   // 60% opacité max → douce mais visible
           .toBuffer()
 
         // 4. Crée une image noire RGBA avec cet alpha
         const shadowRGBA = await sharp({
-          create: { width: subjW, height: shadowH, channels: 3, background: { r: 0, g: 0, b: 0 } },
+          create: { width: shadowW, height: shadowH, channels: 3, background: { r: 0, g: 0, b: 0 } },
         })
           .joinChannel(shadowMaskSquashed)
           .png()
           .toBuffer()
 
-        // 5. Position : juste sous les pieds du sujet
-        const shadowLeft = left
-        const shadowTop  = Math.min(bgH - shadowH, top + subjH - Math.round(shadowH / 2))
+        // 5. Position : centrée sous les pieds du sujet
+        // L'ombre déborde un peu sous les pieds (anchored au point de contact des chaussures)
+        const shadowLeft = Math.max(0, left - Math.round((shadowW - subjW) / 2))
+        const shadowTop  = Math.min(bgH - shadowH, top + subjH - Math.round(shadowH * 0.4))
 
         shadowOverlay = { input: shadowRGBA, left: shadowLeft, top: shadowTop, blend: 'multiply' }
       } catch (err) {
