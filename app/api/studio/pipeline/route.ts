@@ -209,53 +209,39 @@ export async function POST(request: Request) {
     const hasFloor = !(fLow.includes('haut') || fLow.includes('upper') || fLow.includes('detail') || fLow.includes('macro'))
     if (hasFloor) {
       try {
-        // OMBRE STYLE PHOTOROOM = "cast shadow" = silhouette entière projetée au sol
+        // OMBRE DE CONTACT = simple ellipse SVG floutée sous les pieds.
         //
-        // Algo :
-        //   1. Extract alpha = silhouette complète du sujet (tête → pieds)
-        //   2. Flip vertical → l'ombre est inversée (tête de l'ombre = sous les pieds du sujet)
-        //   3. Squash vertical à ~35% → effet perspective sol
-        //   4. Blur fort → ombre douce, pas un contour net
-        //   5. Linear → opacité finale ~35% (douce mais visible)
-        //   6. Composite en mode multiply sous le sujet
+        // Pourquoi pas la silhouette flippée ? → ça donne un "fantôme" reconnaissable du corps.
+        // Une ellipse anonyme + flou + opacité douce = look naturel, jamais identifiable.
 
-        const fullAlpha = await sharp(subjectFeathered)
-          .ensureAlpha()
-          .extractChannel('alpha')
-          .toBuffer()
+        // Dimensions de l'ellipse (en pixels) — proportionnelles au sujet
+        const ellipseW = Math.max(40, Math.round(subjW * 0.32))   // 32% largeur sujet
+        const ellipseH = Math.max(8,  Math.round(subjH * 0.012))   // 1.2% hauteur sujet (très plat)
+        const blurR    = Math.max(8,  Math.round(ellipseH * 1.8))
 
-        // Calcule la place dispo SOUS le sujet (entre les pieds et le bord bas du fond)
-        const spaceBelow = bgH - (top + subjH)
-        // Ombre = min(35% du sujet, l'espace dispo en bas, et reste raisonnable)
-        const castHDesired = Math.round(subjH * 0.35)
-        const castH = Math.max(20, Math.min(castHDesired, spaceBelow + Math.round(subjH * 0.05)))
-        const castW = Math.min(subjW, bgW - left)   // ne déborde jamais à droite
-        const blurR = Math.max(8, Math.round(castH * 0.18))
+        // Padding pour que le blur ne soit pas tronqué aux bords
+        const canvasW = ellipseW + 4 * blurR
+        const canvasH = ellipseH + 4 * blurR
 
-        if (castH < 8 || castW < 8) {
-          // Pas la place pour faire une ombre raisonnable, on skip
+        // Vérifie qu'on tient dans le fond
+        if (canvasW > bgW || canvasH > bgH) {
           shadowOverlay = null
         } else {
-          const castMask = await sharp(fullAlpha)
-            .flip()
-            .resize({ width: castW, height: castH, fit: 'fill' })
-            .blur(blurR)
-            .linear(0.4, 0)
-            .toBuffer()
+          // SVG ellipse noire avec opacité 60%
+          const svgEllipse = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasW}" height="${canvasH}"><ellipse cx="${canvasW/2}" cy="${canvasH/2}" rx="${ellipseW/2}" ry="${ellipseH/2}" fill="black" fill-opacity="0.6"/></svg>`
 
-          const castShadowRGBA = await sharp({
-            create: { width: castW, height: castH, channels: 3, background: { r: 0, g: 0, b: 0 } },
-          })
-            .joinChannel(castMask)
+          const shadowImg = await sharp(Buffer.from(svgEllipse))
+            .blur(blurR)
             .png()
             .toBuffer()
 
-          // Position avec clamp final pour garantir que ça tient dans le fond
-          const castLeft = Math.max(0, Math.min(bgW - castW, left))
-          const castTopDesired = top + subjH - Math.round(castH * 0.05)
-          const castTop  = Math.max(0, Math.min(bgH - castH, castTopDesired))
+          // Position : centré horizontalement sous le sujet, sous les pieds
+          const shadowLeftDesired = left + Math.round(subjW / 2) - Math.round(canvasW / 2)
+          const shadowTopDesired  = top + subjH - Math.round(canvasH / 2)
+          const shadowLeft = Math.max(0, Math.min(bgW - canvasW, shadowLeftDesired))
+          const shadowTop  = Math.max(0, Math.min(bgH - canvasH, shadowTopDesired))
 
-          shadowOverlay = { input: castShadowRGBA, left: castLeft, top: castTop, blend: 'multiply' }
+          shadowOverlay = { input: shadowImg, left: shadowLeft, top: shadowTop, blend: 'multiply' }
         }
       } catch (err) {
         console.warn('[pipeline] shadow generation failed, skipping:', err)
