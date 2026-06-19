@@ -11,12 +11,14 @@ import VideoTab      from '@/components/tabs/VideoTab'
 import NotionTab        from '@/components/tabs/NotionTab'
 import NotionInternalTab from '@/components/tabs/NotionInternalTab'
 import CompositeTab      from '@/components/tabs/CompositeTab'
+import PipelineTab       from '@/components/tabs/PipelineTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
   { id: 'notion',          label: '📥 Notion' },
   { id: 'notion-internal', label: '📥 Notion Internal' },
-  { id: 'composite',       label: '🎯 Composite (test)' },
+  { id: 'composite',       label: '🎯 Composite (Gemini)' },
+  { id: 'pipeline',        label: '🔬 Pipeline (fond exact)' },
   { id: 'lookbook',        label: '👗 Lookbook' },
   { id: 'ghost',           label: '👻 Ghost' },
   { id: 'lifestyle',       label: '🌴 Lifestyle' },
@@ -56,11 +58,12 @@ export default function StudioPage() {
         {tab === 'notion'          && <NotionTab />}
         {tab === 'notion-internal' && <NotionInternalTab />}
         {tab === 'composite'       && <CompositeTab />}
+        {tab === 'pipeline'        && <PipelineTab />}
         {tab === 'lookbook'        && <LookbookTab />}
         {tab === 'ghost'           && <GhostTab />}
         {tab === 'lifestyle'       && <LifestyleTab />}
         {tab === 'video'           && <VideoTab />}
-        {tab === 'batch'           && <BatchTab />}
+                {tab === 'batch'           && <BatchTab />}
         {tab === 'free'            && <FreePromptTab />}
         {tab === 'extract'         && <ExtractTab />}
       </div>
