@@ -160,6 +160,18 @@ export default function FreePromptTab() {
                      style={{ ...styles.downloadBtn, flex: 1, borderRight: '1px solid rgba(13,74,92,0.08)' }}
                      title="Télécharger l'image">⬇ Télécharger</a>
                   <a href={url} target="_blank" rel="noreferrer"
+                     onClick={async (e) => {
+                       if (url.startsWith('data:')) {
+                         e.preventDefault()
+                         try {
+                           const res = await fetch(url)
+                           const blob = await res.blob()
+                           const blobUrl = URL.createObjectURL(blob)
+                           window.open(blobUrl, '_blank')
+                           setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+                         } catch (err) { console.warn('[open] failed:', err) }
+                       }
+                     }}
                      style={{ ...styles.downloadBtn, flex: 1 }}
                      title="Ouvrir dans un nouvel onglet">↗ Ouvrir</a>
                 </div>
@@ -188,7 +200,6 @@ const styles: Record<string, React.CSSProperties> = {
   card:         { background: '#fff', borderRadius: 12, padding: 20, border: '1px solid rgba(13,74,92,0.1)', display: 'flex', flexDirection: 'column', gap: 12 },
   textareaLarge:{ width: '100%', padding: '10px 12px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', resize: 'vertical', minHeight: 160, boxSizing: 'border-box' as const, lineHeight: 1.45 },
   select:       { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', background: '#fff' },
-  btn:          { padding: '12px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
   emptyState:   { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff' },
   resultCard:   { background: '#fff', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
   downloadBtn:  { display: 'block', textAlign: 'center', padding: '8px', fontSize: 12, color: '#0D4A5C', textDecoration: 'none', fontWeight: 600 },

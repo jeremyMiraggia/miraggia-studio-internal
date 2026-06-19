@@ -1057,6 +1057,18 @@ function ImgThumb({ label, url, highlight }: { label: string, url: string, highl
         <a href={url} onClick={handleDownload}
            style={highlight ? linkBtnDark : linkBtnLight} title="Télécharger">⬇</a>
         <a href={url} target="_blank" rel="noreferrer"
+           onClick={async (e) => {
+             if (url.startsWith('data:')) {
+               e.preventDefault()
+               try {
+                 const res = await fetch(url)
+                 const blob = await res.blob()
+                 const blobUrl = URL.createObjectURL(blob)
+                 window.open(blobUrl, '_blank')
+                 setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+               } catch (err) { console.warn('[open] failed:', err) }
+             }
+           }}
            style={highlight ? linkBtnDark : linkBtnLight} title="Ouvrir dans un nouvel onglet">↗</a>
       </div>
     </div>

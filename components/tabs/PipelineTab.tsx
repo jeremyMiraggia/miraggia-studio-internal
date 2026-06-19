@@ -1088,6 +1088,19 @@ function ImgThumb({ label, url, highlight }: { label: string, url: string, highl
         <a href={url} onClick={handleDownload}
            style={highlight ? linkBtnDark : linkBtnLight} title="Télécharger">⬇</a>
         <a href={url} target="_blank" rel="noreferrer"
+           onClick={async (e) => {
+             // Si data URL → convertir en Blob URL (Chrome bloque les data URLs en target=_blank)
+             if (url.startsWith('data:')) {
+               e.preventDefault()
+               try {
+                 const res = await fetch(url)
+                 const blob = await res.blob()
+                 const blobUrl = URL.createObjectURL(blob)
+                 window.open(blobUrl, '_blank')
+                 setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+               } catch (err) { console.warn('[open] failed:', err) }
+             }
+           }}
            style={highlight ? linkBtnDark : linkBtnLight} title="Ouvrir dans un nouvel onglet">↗</a>
       </div>
     </div>
@@ -1149,6 +1162,7 @@ const linkBtnDark: React.CSSProperties = {
   borderRadius: 4, textDecoration: 'none', fontWeight: 600, textAlign: 'center',
 }
 const linkBtnLight: React.CSSProperties = {
+  padding: '3px 7px', fontSize: 10, color: '#0D4A5C',
   border: '1px solid rgba(13,74,92,0.2)', borderRadius: 4,
   textDecoration: 'none', fontWeight: 600, textAlign: 'center',
 }
