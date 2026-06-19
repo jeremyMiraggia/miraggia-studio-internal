@@ -184,10 +184,10 @@ export async function POST(request: Request) {
         // On utilise referenceBox=originalImage pour que Photoroom garde la
         // position et l'échelle du sujet telles qu'elles sont dans l'image source.
         form.append('referenceBox', 'originalImage')
-        // ⚠ Qualité max : on demande JPEG q95 et on évite tout re-encode côté server.
-        // Préserve un maximum de détails (chaque encodage JPEG perd de la qualité).
-        form.append('outputFormat', 'jpg')
-        form.append('quality', '95')
+        // ⚠ Qualité max : PNG = zéro perte (lossless).
+        // Évite la perte JPEG inhérente au format. Fichiers 3-5× plus gros mais
+        // bande passante Vercel Blob a 100 GB/mois free donc OK pour ton volume.
+        form.append('outputFormat', 'png')
 
         console.log('[photoroom] calling ' + photoroomUrl + ' (keyLen=' + photoroomKey.length + ', keyPrefix=' + photoroomKey.slice(0, 8) + '…)')
         const res = await fetch(photoroomUrl, {
@@ -287,18 +287,23 @@ export async function POST(request: Request) {
     // ============= ÉTAPE 4 — Upload Vercel Blob =============
     let imageUrl: string
     let blobError: string | undefined
+    // Détecte le format réel du buffer final (PNG si Photoroom, JPEG si fallback)
+    const isPng = finalJpegBuf.length >= 8
+      && finalJpegBuf[0] === 0x89 && finalJpegBuf[1] === 0x50 && finalJpegBuf[2] === 0x4E && finalJpegBuf[3] === 0x47
+    const outExt  = isPng ? 'png'        : 'jpg'
+    const outMime = isPng ? 'image/png'  : 'image/jpeg'
     try {
-      const path = `pipeline/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+      const path = `pipeline/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${outExt}`
       const blob = await put(path, finalJpegBuf, {
         access: 'public',
-        contentType: 'image/jpeg',
+        contentType: outMime,
         cacheControlMaxAge: 60,
         token: process.env.BLOB_READ_WRITE_TOKEN,
       })
       imageUrl = blob.url
     } catch (err: any) {
       const b64 = finalJpegBuf.toString('base64')
-      imageUrl = `data:image/jpeg;base64,${b64}`
+      imageUrl = `data:${outMime};base64,${b64}`
       blobError = err?.message ?? String(err)
     }
 
