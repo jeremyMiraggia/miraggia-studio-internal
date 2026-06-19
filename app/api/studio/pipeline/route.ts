@@ -19,7 +19,6 @@
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import { fal } from '@fal-ai/client'
-import { compressGeminiImage } from '@/lib/serverImageCompress'
 import sharp from 'sharp'
 
 export const maxDuration = 300
@@ -138,15 +137,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Gemini n'a pas renvoyé d'image. ${textResp.slice(0, 200)}`, raw: geminiData }, { status: 502 })
     }
 
-    // Recompression JPEG q92 (plus haute que /free q90 car on va re-traiter)
-    const compressed = await compressGeminiImage(geminiImageB64, geminiMime, { format: 'jpeg', quality: 92 })
-    const geminiJpegBuf = Buffer.from(compressed.base64, 'base64')
+    // ⚠ Pas de recompression : on envoie l'image Gemini brute à FAL.
+    // compressGeminiImage produisait des artefacts scanlines.
+    const geminiRawBuf = Buffer.from(geminiImageB64, 'base64')
+    const geminiExt = geminiMime === 'image/png' ? 'png' : 'jpg'
 
     // ============= ÉTAPE 2 — BiRefNet (détoure le sujet) =============
     fal.config({ credentials: falKey })
 
     // Upload l'image Gemini vers FAL pour BiRefNet
-    const geminiFile = new File([geminiJpegBuf], 'gemini.jpg', { type: 'image/jpeg' })
+    const geminiFile = new File([geminiRawBuf], 'gemini.' + geminiExt, { type: geminiMime })
     const geminiUrl  = await fal.storage.upload(geminiFile)
 
     const rembgResult: any = await fal.subscribe('fal-ai/birefnet/v2', {
@@ -176,7 +176,9 @@ export async function POST(request: Request) {
       .png()
       .toBuffer()
 
-    let subjectFeathered = await featherAlpha(subjectFit, 4)
+    // ⚠ featherAlpha désactivé temporairement : il produisait des scanlines.
+    // Le bord sera un peu plus dur mais l'image sera propre.
+    let subjectFeathered = subjectFit
     const subjMeta = await sharp(subjectFeathered).metadata()
     let subjW = Math.min(subjMeta.width ?? bgW, bgW)
     let subjH = Math.min(subjMeta.height ?? bgH, bgH)
@@ -194,7 +196,7 @@ export async function POST(request: Request) {
 
     const finalJpegBuf = await sharp(backgroundBuf)
       .composite([{ input: subjectFeathered, left, top, blend: 'over' }])
-      .jpeg({ quality: 90, progressive: true })
+      .jpeg({ quality: 90, progressive: false, mozjpeg: true })
       .toBuffer()
 
     // ============= ÉTAPE 4 — Upload Vercel Blob =============
