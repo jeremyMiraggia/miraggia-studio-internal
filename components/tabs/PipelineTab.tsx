@@ -20,6 +20,8 @@ type TaskState = {
   faceUsed?:         boolean
   faceWasAvailable?: boolean
   progressStep?: 'gemini' | 'done'
+  shadowAiUsed?:    boolean    // true si Photoroom a généré l'ombre, false si fallback sans ombre
+  shadowAiError?:   string     // raison du fallback si shadowAiUsed=false
 }
 
 /**
@@ -551,6 +553,14 @@ export default function PipelineTab() {
           }
         }
 
+        // Log diagnostic Photoroom shadow (chaque visuel pour qu'on sache)
+        const dbg = data.debug ?? {}
+        if (dbg.shadowAiUsed === true) {
+          console.log(`[photoroom] ✓ Ombre AI Photoroom appliquée sur ${item.task.lookId} (${item.task.framingHint ?? 'plein'})`)
+        } else if (dbg.shadowAiError) {
+          console.warn(`[photoroom] ⚠ Fallback sans ombre sur ${item.task.lookId} (${item.task.framingHint ?? 'plein'}). Reason: ${dbg.shadowAiError}`)
+        }
+
         // 1 appel Gemini → c'est le visuel final, point.
         updateState(item.task.id, {
           imageUrl:         data.imageUrl,
@@ -558,6 +568,8 @@ export default function PipelineTab() {
           progressStep:     'done',
           faceUsed:         typeof data.faceUsed === 'boolean' ? data.faceUsed : undefined,
           faceWasAvailable: typeof data.faceWasAvailable === 'boolean' ? data.faceWasAvailable : undefined,
+          shadowAiUsed:     dbg.shadowAiUsed === true,
+          shadowAiError:    dbg.shadowAiError,
         })
         done++
         // Auto-écriture dossier + auto-zip
@@ -987,7 +999,7 @@ export default function PipelineTab() {
 /* ============================== TaskRow ============================== */
 
 function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }) {
-  const { task, status, imageUrl, error, enabled } = state
+  const { task, status, imageUrl, error, enabled, shadowAiUsed, shadowAiError } = state
   const color =
     status === 'done'    ? '#1F7A35'
     : status === 'error' ? '#9B1C1C'
@@ -999,6 +1011,14 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
     done:      '✓ Done',
   }
 
+  // Badge ombre AI : visible quand le visuel est done
+  const showShadowBadge = status === 'done'
+  const shadowBadge = showShadowBadge
+    ? (shadowAiUsed
+        ? { txt: '🌒 ombre AI', bg: '#E8F2EC', color: '#1F7A35', title: 'Ombre générée par Photoroom API' }
+        : { txt: '⚠ pas d\'ombre', bg: '#FDECEC', color: '#9B1C1C', title: shadowAiError ?? 'Photoroom n\'a pas été utilisé (clé manquante, framing sans sol, ou erreur)' })
+    : null
+
   return (
     <div style={taskRowStyle}>
       <input type="checkbox" checked={enabled} onChange={onToggle} disabled={status === 'running'} />
@@ -1008,10 +1028,17 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
             ? `🔬 Détail ${(task.detailIndex ?? 0) + 1} — ${task.detailName ?? ''}`
             : task.vueRaw ?? task.id}
         </div>
-        <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2 }}>
-          ID <code>{task.id}</code> · type <strong>{task.taskType}</strong>
+        <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>ID <code>{task.id}</code> · type <strong>{task.taskType}</strong></span>
           {state.progressStep && status === 'running' && (
-            <span style={{ marginLeft: 8, color: '#0D4A5C', fontWeight: 600 }}>· {stepLabel[state.progressStep]}</span>
+            <span style={{ color: '#0D4A5C', fontWeight: 600 }}>· {stepLabel[state.progressStep]}</span>
+          )}
+          {shadowBadge && (
+            <span title={shadowBadge.title}
+              style={{ padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700,
+                background: shadowBadge.bg, color: shadowBadge.color }}>
+              {shadowBadge.txt}
+            </span>
           )}
         </div>
         {error && <div style={{ ...errorBoxStyle, marginTop: 4 }}>⚠ {error}</div>}
