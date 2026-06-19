@@ -222,12 +222,9 @@ export async function POST(request: Request) {
 
     if (wantPhotoroom) {
       try {
-        // L'endpoint : Photoroom détecte sandbox/prod via la clé elle-même,
-        // mais en pratique on utilise l'endpoint sandbox si la key contient "sandbox"
-        const isSandbox = photoroomKey.toLowerCase().includes('sandbox')
-        const photoroomUrl = isSandbox
-          ? 'https://sandbox.photoroom.com/v2/edit'
-          : 'https://image-api.photoroom.com/v2/edit'
+        // Photoroom utilise le MÊME endpoint pour sandbox + production.
+        // C'est la clé API qui détermine le mode (sandbox keys = 100 calls gratuits).
+        const photoroomUrl = 'https://image-api.photoroom.com/v2/edit'
 
         const form = new FormData()
         // Sujet détouré (RGBA déjà fait par BiRefNet)
@@ -244,16 +241,20 @@ export async function POST(request: Request) {
         form.append('outputFormat', 'jpg')
         form.append('quality', '92')
 
+        console.log('[photoroom] calling ' + photoroomUrl + ' (keyLen=' + photoroomKey.length + ', keyPrefix=' + photoroomKey.slice(0, 8) + '…)')
         const res = await fetch(photoroomUrl, {
           method: 'POST',
           headers: { 'x-api-key': photoroomKey, 'Accept': 'image/jpeg, image/png' },
           body: form as any,
+          // Timeout 90s pour laisser le temps à Photoroom
+          signal: AbortSignal.timeout(90000),
         })
 
         if (!res.ok) {
           const errTxt = await res.text().catch(() => '')
-          throw new Error(`Photoroom HTTP ${res.status}: ${errTxt.slice(0, 200)}`)
+          throw new Error(`Photoroom HTTP ${res.status}: ${errTxt.slice(0, 300)}`)
         }
+        console.log('[photoroom] OK, content-type=' + res.headers.get('content-type'))
 
         const photoroomBuf = Buffer.from(await res.arrayBuffer())
         finalJpegBuf = await sharp(photoroomBuf)
@@ -319,7 +320,6 @@ async function toInlinePart(file: File) {
 function describeFraming(framing: string): string {
   const f = (framing ?? '').toLowerCase()
   if (f.includes('haut') || f.includes('upper')) return 'upper body / bust shot'
-  if (f.includes('bas')  || f.includes('lower')) return 'lower body / legs only'
   if (f.includes('mi'))                          return 'mid body / cowboy shot'
   if (f.includes('detail') || f.includes('macro')) return 'extreme macro on garment detail'
   return 'full body, head to feet'
