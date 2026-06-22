@@ -151,33 +151,42 @@ export async function parseExcelSelection(file: File): Promise<ExcelSelection> {
         toRegenerate.set(numeroLook, regenVues)
       }
 
-      // Colonnes B, C, D, E (vues 1..4)
+      // Colonnes B, C, D, E (vues 1..4).
+      // Règle : on régénère SEULEMENT si la cellule a une couleur explicite
+      // non-verte ET non-blanche (rouge, jaune, magenta, etc.).
+      // Cellule vide (pas de fill) OU blanche OU verte → skip (= pas demandé).
       const cols = ['B', 'C', 'D', 'E']
       cols.forEach((col, idx) => {
         const cell = cellsByCol.get(col)
+        if (!cell) return  // vide → skip
         totalCells++
-        const isGreen = cell ? isCellGreen(cell, cellXfFillIdByIdx, fillRgbById) : false
+        const isColored = isCellColored(cell, cellXfFillIdByIdx, fillRgbById)
+        if (!isColored) return  // pas de couleur → skip
+        const isGreen = isCellGreen(cell, cellXfFillIdByIdx, fillRgbById)
         if (isGreen) {
           totalGreen++
         } else {
+          // Couleur non-verte (rouge, jaune, etc.) → à regen
           regenVues.add(idx)
         }
       })
 
-      // Colonne F : DETAILS (1 par look)
+      // Colonne F : DETAILS (1 par look) — même règle que les vues
       const fCell = cellsByCol.get('F')
       if (fCell) {
-        totalDetailsCells++
-        const isGreen = isCellGreen(fCell, cellXfFillIdByIdx, fillRgbById)
-        if (isGreen) {
-          totalDetailsGreen++
-        } else {
-          detailsToRegenerate.add(numeroLook)
+        const isColored = isCellColored(fCell, cellXfFillIdByIdx, fillRgbById)
+        if (isColored) {
+          totalDetailsCells++
+          const isGreen = isCellGreen(fCell, cellXfFillIdByIdx, fillRgbById)
+          if (isGreen) {
+            totalDetailsGreen++
+          } else {
+            detailsToRegenerate.add(numeroLook)
+          }
         }
-      } else {
-        // Pas de cellule F → détail à régénérer (par défaut)
-        detailsToRegenerate.add(numeroLook)
+        // cellule F sans couleur → skip (pas demandé)
       }
+      // Pas de cellule F du tout → skip (pas demandé)
     }
     if (sheetLooks > 0) {
       warnings.push(`Onglet "${sheetName}" : ${sheetLooks} look(s) parsé(s).`)
@@ -205,6 +214,25 @@ function readCellValue(cell: Element, sharedStrings: string[]): string | null {
     return sharedStrings[idx] ?? null
   }
   return v
+}
+
+/**
+ * Détecte si une cellule a un fond coloré (= a une couleur explicite, non vide, non blanche).
+ * Permet de distinguer "cellule jamais touchée" vs "cellule volontairement colorée".
+ */
+function isCellColored(cell: Element, cellXfFillIdByIdx: (number | null)[], fillRgbById: (string | null)[]): boolean {
+  const sStr = cell.getAttribute('s')
+  if (sStr === null) return false
+  const sIdx = parseInt(sStr, 10)
+  if (isNaN(sIdx)) return false
+  const fillId = cellXfFillIdByIdx[sIdx]
+  if (fillId === null || fillId === undefined || fillId === 0) return false
+  const rgb = fillRgbById[fillId]
+  if (!rgb) return false
+  const hex = (rgb.length === 8 ? rgb.slice(2) : rgb).toUpperCase()
+  // Blanc explicite = considéré comme "pas coloré"
+  if (hex === 'FFFFFF') return false
+  return true
 }
 
 /** Détecte si une cellule a un fond vert en remontant style → cellXf → fillId → rgb. */
