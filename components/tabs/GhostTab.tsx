@@ -63,6 +63,8 @@ export default function GhostTab() {
   const outputDirHandleRef = useRef<any | null>(null)
   const [outputDirName, setOutputDirName] = useState<string | null>(null)
   const writtenTaskIdsRef  = useRef<Set<string>>(new Set())
+  const [savedCount, setSavedCount] = useState(0)
+  const [saveError, setSaveError]   = useState<string | null>(null)
 
   /* ----------------- Parse ZIP ----------------- */
   const handleZipChange = async (files: File[]) => {
@@ -106,13 +108,38 @@ export default function GhostTab() {
   }
 
   /* ----------------- Dossier sortie ----------------- */
+  // Vérifie/demande la permission readwrite sur le handle de dossier.
+  // Sans ça, getFileHandle({create:true}) plante silencieusement sur certains navigateurs.
+  const ensureWritePermission = async (handle: any): Promise<boolean> => {
+    try {
+      const opts = { mode: 'readwrite' as const }
+      // queryPermission peut renvoyer 'granted' | 'denied' | 'prompt'
+      const q = await handle.queryPermission?.(opts) ?? 'prompt'
+      if (q === 'granted') return true
+      const r = await handle.requestPermission?.(opts) ?? 'denied'
+      return r === 'granted'
+    } catch (e) {
+      console.warn('[Ghost] ensureWritePermission failed', e)
+      return false
+    }
+  }
+
   const pickOutputDir = async () => {
     try {
       // @ts-ignore – File System Access API
       const handle = await window.showDirectoryPicker({ mode: 'readwrite' })
+      // Demande explicitement la permission readwrite tout de suite (sinon elle est
+      // perdue entre 2 user gestures et l'écriture échoue plus tard)
+      const ok = await ensureWritePermission(handle)
+      if (!ok) {
+        setGlobalError('Permission d\'écriture refusée pour ce dossier.')
+        return
+      }
       outputDirHandleRef.current = handle
       setOutputDirName(handle.name ?? 'dossier')
       writtenTaskIdsRef.current = new Set()
+      setSavedCount(0)
+      setSaveError(null)
     } catch (e: any) {
       if (e?.name !== 'AbortError') setGlobalError(`Sélection dossier : ${e?.message ?? e}`)
     }
@@ -120,6 +147,8 @@ export default function GhostTab() {
   const clearOutputDir = () => {
     outputDirHandleRef.current = null
     setOutputDirName(null)
+    setSavedCount(0)
+    setSaveError(null)
   }
 
   const writeTaskToOutputDir = async (task: GhostTask) => {
@@ -129,8 +158,15 @@ export default function GhostTab() {
     if (writtenTaskIdsRef.current.has(key)) return
     writtenTaskIdsRef.current.add(key)
     try {
+      // Re-check la permission au cas où elle aurait été révoquée
+      const ok = await ensureWritePermission(handle)
+      if (!ok) throw new Error('Permission readwrite refusée')
+
+      // Fetch le PNG (peut être une URL Vercel Blob ou un data URI)
       const resp = await fetch(task.imageUrl)
+      if (!resp.ok) throw new Error(`Fetch image HTTP ${resp.status}`)
       const blob = await resp.blob()
+
       const base = sanitizeFilename(task.product.sku || `product_${task.productIdx + 1}`)
       const suffix = task.view === 'back' ? '_back' : ''
       const filename = `${base}${suffix}.png`
@@ -138,9 +174,14 @@ export default function GhostTab() {
       const writable = await fileHandle.createWritable()
       await writable.write(blob)
       await writable.close()
+      console.log(`[Ghost] Saved ${filename}`)
+      setSavedCount(c => c + 1)
+      setSaveError(null)
     } catch (e: any) {
-      console.warn('[Ghost] Write failed', e)
+      const msg = e?.message ?? String(e)
+      console.warn('[Ghost] Write failed', msg, e)
       writtenTaskIdsRef.current.delete(key)  // permet retry plus tard
+      setSaveError(`Sauvegarde échouée : ${msg.slice(0, 120)}`)
     }
   }
 
@@ -223,10 +264,11 @@ export default function GhostTab() {
           return next
         })
 
-        // Write to output dir if configured
+        // Write to output dir if configured.
+        // Await pour qu'on sache si ça a échoué (sinon erreur silencieuse).
         const updatedTask = tasksRef.current[idx]
-        if (outputDirHandleRef.current && updatedTask) {
-          writeTaskToOutputDir(updatedTask).catch(() => { /* swallow */ })
+        if (outputDirHandleRef.current && updatedTask?.imageUrl) {
+          await writeTaskToOutputDir(updatedTask)
         }
       } catch (e: any) {
         setTasks(prev => {
@@ -377,9 +419,16 @@ export default function GhostTab() {
           {outputDirName && (
             <span style={{ fontSize: 12, color: '#6B7280' }}>
               Chaque packshot sera sauvé en .png sous le nom du SKU.
+              {savedCount > 0 && <strong style={{ color: '#10B981', marginLeft: 8 }}>✓ {savedCount} sauvé(s)</strong>}
             </span>
           )}
         </div>
+        {saveError && (
+          <div style={{ marginTop: 8, fontSize: 12, color: '#991B1B',
+                        background: '#FEF2F2', padding: 8, borderRadius: 6 }}>
+            ❌ {saveError}
+          </div>
+        )}
       </div>
 
       {/* Produits / Tâches */}
