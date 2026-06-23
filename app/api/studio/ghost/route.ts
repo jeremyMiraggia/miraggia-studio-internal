@@ -20,17 +20,41 @@ import sharp from 'sharp'
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
-/** Dimensions canvas en fonction du ratio demandé. */
-function canvasDimsForRatio(ratio: string): { w: number; h: number } {
-  switch (ratio) {
-    case '1:1':  return { w: 2048, h: 2048 }
-    case '4:3':  return { w: 2048, h: 1536 }
-    case '3:4':  return { w: 1536, h: 2048 }
-    case '2:3':  return { w: 1536, h: 2304 }
-    case '9:16': return { w: 1152, h: 2048 }
-    case '16:9': return { w: 2048, h: 1152 }
-    default:     return { w: 2048, h: 2048 }
+/** Parse "W:H" en ratio W/H. */
+function parseRatio(ratio: string): number {
+  const m = ratio.match(/^(\d+)\s*:\s*(\d+)$/)
+  if (!m) return 1
+  const w = parseInt(m[1], 10), h = parseInt(m[2], 10)
+  if (!w || !h) return 1
+  return w / h
+}
+
+/**
+ * Trouve le bounding box du sujet dans une image RGBA (alpha > seuil).
+ * Retourne null si le sujet est invisible.
+ */
+async function findAlphaBoundingBox(imgBuf: Buffer, threshold = 20)
+  : Promise<{ left: number; top: number; width: number; height: number } | null>
+{
+  const { data, info } = await sharp(imgBuf)
+    .ensureAlpha()
+    .extractChannel('alpha')
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  const w = info.width, h = info.height
+  let minX = w, minY = h, maxX = -1, maxY = -1
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[y * w + x] > threshold) {
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+      }
+    }
   }
+  if (maxX < 0 || maxY < 0) return null
+  return { left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 }
 }
 
 export async function POST(request: Request) {
@@ -121,27 +145,47 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `BiRefNet : ${err?.message ?? err}` }, { status: 502 })
     }
 
-    // ============= ÉTAPE 3 — Composite sur fond blanc pur + ombre de contact =============
-    const { w: canvasW, h: canvasH } = canvasDimsForRatio(ratio)
+    // ============= ÉTAPE 3 — Composite ADAPTATIF sur fond blanc pur + ombre =============
+    // On ne fixe PAS la taille du canvas à l'avance. On crop d'abord le sujet à
+    // sa bounding box (vraie taille utile), puis on construit un canvas qui :
+    //   - laisse une marge confortable (~12%) autour du produit
+    //   - respecte le ratio demandé par le user
+    // Comme ça, le produit occupe toujours ~75-85% de sa dim contraignante,
+    // au lieu d'être perdu au milieu d'un grand canvas vide.
 
-    // Resize le sujet pour qu'il occupe ~88% de la dimension la plus courte,
-    // centré, avec marge confortable (style packshot pro).
-    const meta = await sharp(subjectBuf).metadata()
-    const subjW = meta.width ?? 1024
-    const subjH = meta.height ?? 1024
-    const targetMaxSide = Math.round(Math.min(canvasW, canvasH) * 0.85)
-    // Ajuste la taille en gardant le ratio
-    const scale = Math.min(targetMaxSide / subjW, targetMaxSide / subjH)
-    const newW = Math.round(subjW * scale)
-    const newH = Math.round(subjH * scale)
-    const subjectResized = await sharp(subjectBuf)
-      .resize({ width: newW, height: newH, fit: 'inside', kernel: 'lanczos3' })
+    const bbox = await findAlphaBoundingBox(subjectBuf, 20)
+    if (!bbox || bbox.width < 10 || bbox.height < 10) {
+      return NextResponse.json({ error: 'Produit non détecté après détourage.' }, { status: 502 })
+    }
+
+    // Crop le sujet RGBA à sa bounding box (= sujet "tight", sans transparent autour)
+    const subjectTight = await sharp(subjectBuf)
+      .extract({ left: bbox.left, top: bbox.top, width: bbox.width, height: bbox.height })
       .png()
       .toBuffer()
+    const newW = bbox.width
+    const newH = bbox.height
 
-    // Position : centré horizontalement, centré verticalement (avec petit offset vers le bas)
+    // Marge fractionnelle autour du produit (12% de la dim contraignante)
+    const marginFraction = 0.12
+    const ratioWH = parseRatio(ratio)
+    const subjRatio = newW / newH
+
+    let canvasW: number, canvasH: number
+    if (subjRatio > ratioWH) {
+      // Le produit est plus large que le canvas-cible → la largeur contraint
+      canvasW = Math.round(newW * (1 + 2 * marginFraction))
+      canvasH = Math.round(canvasW / ratioWH)
+    } else {
+      // Le produit est plus haut → la hauteur contraint
+      canvasH = Math.round(newH * (1 + 2 * marginFraction))
+      canvasW = Math.round(canvasH * ratioWH)
+    }
+
+    // Position : centré horizontalement, centré verticalement
     const offsetX = Math.round((canvasW - newW) / 2)
     const offsetY = Math.round((canvasH - newH) / 2)
+    const subjectResized = subjectTight
 
     // === Ombre de contact douce ===
     // Technique : extraire le canal alpha du sujet → flouter → assombrir → décaler
