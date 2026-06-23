@@ -206,7 +206,7 @@ export default function GhostTab() {
         const refs = task.view === 'back' ? task.product.backFiles : task.product.frontFiles
         for (const f of refs) fd.append('refs', f)
 
-        const resp = await fetch('/api/studio/free', { method: 'POST', body: fd })
+        const resp = await fetch('/api/studio/ghost', { method: 'POST', body: fd })
         if (!resp.ok) {
           let detail = `HTTP ${resp.status}`
           try { detail = (await resp.json()).error ?? detail } catch {}

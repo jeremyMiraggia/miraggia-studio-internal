@@ -253,33 +253,31 @@ function decodeRef(raw: string): string {
 
 /**
  * Construit le prompt packshot envoyé à Gemini pour un produit donné.
- * Le prompt est centré sur : fond blanc neutre, packshot piqué, e-commerce style.
+ * Le fond blanc est garanti côté serveur via BiRefNet + sharp, donc on insiste
+ * surtout sur la fidélité au produit, le piqué, et l'éclairage neutre.
  */
 export function buildGhostPrompt(p: GhostProduct, viewLabel: 'front' | 'back' = 'front'): string {
   const parts: string[] = []
   parts.push(
-    `Create a high-quality professional product PACKSHOT for e-commerce / catalogue use.`,
+    `Professional product PACKSHOT photograph for e-commerce / catalogue.`,
   )
   parts.push(
-    `BACKGROUND : pure WHITE (#FFFFFF), perfectly clean, no texture, no gradient, no shadows on the background itself.`,
+    `Focus 100% on THE PRODUCT itself. Background should be PLAIN, neutral, uncluttered (it will be replaced by pure white in post-processing — so do NOT add textures, patterns, blocks, or "creative" backgrounds).`,
   )
   parts.push(
-    `Subtle soft contact shadow only directly underneath the product (very light, professional).`,
+    `Lighting : soft, even, diffuse studio lighting. No harsh highlights, no deep shadows, colours faithful to the reference photo.`,
   )
   parts.push(
-    `Sharpness : extremely SHARP and crisp focus on the entire product (very "piqué"). Every detail of the fabric/material/stitching must be perfectly visible.`,
+    `Sharpness : extremely SHARP / crisp focus on the entire product (very "piqué"). Every detail of fabric / material / stitching / logo / colour must be perfectly visible.`,
   )
   parts.push(
-    `Studio lighting : soft, even, diffuse — no harsh highlights, no overexposure, no underexposed shadows. Colours of the product must be faithful to the reference.`,
-  )
-  parts.push(
-    `Composition : product perfectly centered with comfortable margins on all sides. Professional e-commerce style.`,
+    `Composition : product centered with comfortable margins, professional e-commerce style.`,
   )
   parts.push(
     `View : ${viewLabel === 'back' ? 'BACK view of the product' : 'FRONT view of the product'}.`,
   )
   parts.push(
-    `⚠ CRITICAL : reproduce the EXACT same product as shown in the reference photo. Do NOT invent variations, do NOT change colours, materials, or shapes. The reference photos are taken with an iPhone — improve only lighting/background/sharpness, keep the product identical.`,
+    `⚠ CRITICAL : reproduce the EXACT same product as shown in the reference photo. Do NOT invent variations, do NOT change colours, materials, shapes, logos, or details. The reference photos are iPhone snapshots — improve ONLY lighting and sharpness, keep the product strictly identical.`,
   )
 
   if (p.sku) parts.push(`Product reference (SKU) : ${p.sku}.`)
