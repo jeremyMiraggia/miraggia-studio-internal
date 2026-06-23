@@ -785,6 +785,7 @@ export default function CompositeTab() {
                 <label style={styles.label}>Ratio</label>
                 <select value={ratio} onChange={e => setRatio(e.target.value)} style={styles.select}>
                   <option value="9:16">9:16</option>
+                  <option value="2:3">2:3</option>
                   <option value="3:4">3:4</option>
                   <option value="1:1">1:1</option>
                   <option value="16:9">16:9</option>
