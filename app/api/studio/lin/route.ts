@@ -65,7 +65,8 @@ export async function POST(request: Request) {
     }
 
     // 3. Re-fetch puis upload Vercel Blob pour persistance (sinon FAL CDN expire)
-    const editedBuf = Buffer.from(await fetch(editedUrl).then(r => r.arrayBuffer()))
+    const editedArrBuf = await fetch(editedUrl).then(r => r.arrayBuffer())
+    const editedBuf = Buffer.from(new Uint8Array(editedArrBuf))
     let imageUrl: string
     let blobError: string | undefined
     try {
