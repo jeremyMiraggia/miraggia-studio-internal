@@ -103,9 +103,13 @@ export default function LinTab() {
     try {
       // @ts-ignore – File System Access API
       const root = await window.showDirectoryPicker({ mode: 'readwrite' })
+      // ⚠ Demande la permission TOUT DE SUITE dans le user gesture (sinon plus
+      // tard ça échoue silencieusement car requestPermission exige un user
+      // gesture). Cette permission est récursive : tous les sous-dossiers et
+      // fichiers obtenus via values() en hériteront.
       const ok = await ensureWritePermission(root)
       if (!ok) {
-        setError('Permission d\'écriture refusée pour ce dossier.')
+        setError('Permission d\'écriture refusée pour ce dossier. Re-sélectionne-le et clique "Autoriser".')
         return
       }
       setRootDirName(root.name ?? 'dossier')
@@ -114,6 +118,21 @@ export default function LinTab() {
 
       const collected: Array<{ file: File; parentDir: any; relativePath: string; originalName: string }> = []
       await walkDirectory(root, collected)
+
+      // Test d'écriture : on essaie d'écrire un fichier temporaire DANS LE
+      // ROOT pour s'assurer que la permission marche réellement. Si ça plante,
+      // on remonte tout de suite au lieu d'attendre les 1ers défroissages.
+      try {
+        const testHandle = await root.getFileHandle('.lin-perm-check', { create: true })
+        const writable = await testHandle.createWritable()
+        await writable.write(new Blob(['ok']))
+        await writable.close()
+        await root.removeEntry('.lin-perm-check').catch(() => {})
+      } catch (e: any) {
+        setScanning(false)
+        setError(`Test d'écriture échoué dans "${root.name}" : ${e?.message ?? e}. Vérifie que le dossier n'est pas read-only / synchronisé OneDrive.`)
+        return
+      }
 
       const newTasks: LinTask[] = collected.map((c, i) => {
         const m = c.originalName.match(/^(.*)\.([^.]+)$/)
@@ -139,14 +158,20 @@ export default function LinTab() {
   }
 
   /* ----------------- Write defroisse file in original folder ----------------- */
-  const writeDefroisseToFolder = async (task: LinTask): Promise<boolean> => {
-    if (!task.parentDir || !task.imageUrl) return false
+  // Retourne { saved: boolean, error?: string }
+  const writeDefroisseToFolder = async (task: LinTask): Promise<{ saved: boolean; error?: string }> => {
+    if (!task.parentDir) return { saved: false, error: 'parentDir manquant' }
+    if (!task.imageUrl)  return { saved: false, error: 'imageUrl manquant' }
     try {
-      const ok = await ensureWritePermission(task.parentDir)
-      if (!ok) throw new Error('Permission readwrite refusée sur le sous-dossier.')
+      // ⚠ Ne PAS re-appeler requestPermission ici : on est en dehors d'un user
+      // gesture (worker async, des dizaines de secondes après le click).
+      // La permission readwrite a déjà été accordée sur le root au pickRootDir
+      // — elle s'applique récursivement aux sous-dossiers/handles obtenus via
+      // values(). Si elle a vraiment été révoquée, l'erreur remontera via
+      // getFileHandle / createWritable qu'on attrape ci-dessous.
 
       const resp = await fetch(task.imageUrl)
-      if (!resp.ok) throw new Error(`Fetch HTTP ${resp.status}`)
+      if (!resp.ok) throw new Error(`Fetch image HTTP ${resp.status}`)
       const blob = await resp.blob()
 
       // Nom : "<baseName>-defroisse.<ext>" (ext d'origine conservée)
@@ -157,10 +182,11 @@ export default function LinTab() {
       await writable.write(blob)
       await writable.close()
       console.log(`[Lin] Saved ${task.relativePath.replace(/\/[^/]+$/, '')}/${filename}`)
-      return true
+      return { saved: true }
     } catch (e: any) {
-      console.warn('[Lin] write failed', task.relativePath, e?.message)
-      return false
+      const msg = e?.message ?? String(e)
+      console.warn('[Lin] write failed', task.relativePath, msg, e)
+      return { saved: false, error: msg }
     }
   }
 
@@ -220,18 +246,22 @@ export default function LinTab() {
           return next
         })
 
-        // Write immediately to the original folder (saved status)
+        // Write immediately to the original folder (status passe à 'saved')
         const updated = tasksRef.current[idx]
         if (updated?.parentDir) {
-          const saved = await writeDefroisseToFolder(updated)
-          if (saved) {
-            setTasks(prev => {
-              const next = [...prev]
+          const result = await writeDefroisseToFolder(updated)
+          setTasks(prev => {
+            const next = [...prev]
+            if (result.saved) {
               next[idx] = { ...next[idx], status: 'saved' }
-              tasksRef.current = next
-              return next
-            })
-          }
+            } else {
+              // Garde status 'done' (le visuel est généré) mais ajoute l'erreur de save
+              next[idx] = { ...next[idx], error: `Save : ${result.error ?? '?'}` }
+              setError(`Sauvegarde échouée pour ${updated.relativePath} : ${result.error}`)
+            }
+            tasksRef.current = next
+            return next
+          })
         }
       } catch (e: any) {
         setTasks(prev => {
