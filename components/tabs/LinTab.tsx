@@ -30,8 +30,12 @@ type LinTask = {
 }
 
 const DEFROISSAGE_PROMPT =
-  "Le vêtement est parfaitement repassé et défroissé : tissu lisse, propre, sans aucun pli, sans aucun froissement, sans aucune marque de pliage. La matière (lin, coton) garde sa texture naturelle visible mais tombe parfaitement, comme repassée à la vapeur juste avant la prise de vue. " +
-  "Tout le reste de la photo est strictement identique à la référence : même mannequin, même visage, même pose, même cadrage, même éclairage, même arrière-plan, même couleur du vêtement, même coupe, même coutures, mêmes accessoires."
+  "Retouch this fashion editorial photograph : the garment has been professionally STEAMED and IRONED. " +
+  "The fabric is now perfectly smooth, crisp, freshly pressed — wrinkle-free, crease-free, fold-free, NO crumpled areas anywhere. " +
+  "Linen and cotton fabrics keep their natural woven texture visible (still recognizable as linen / cotton), but lie flat with a clean natural drape, soft fall, neat lines — like a luxury runway or magazine cover shot. " +
+  "Pay special attention to common wrinkle zones : shoulders, sleeves, elbows, armpits, mid-back, waist, lap, hips, behind knees, around buttons and pockets — every single one must be perfectly smooth. " +
+  "KEEP STRICTLY IDENTICAL to the reference image : same model, same face, same hair, same skin, same exact pose, same hand and finger position, same camera angle, same crop, same framing, same composition, same background (every pixel), same lighting, same shadows, same garment color, same garment cut, same garment length, same seams, same stitching, same buttons, same logo, same accessories. " +
+  "Style keywords : editorial, lookbook, luxury, pristine, crisp, freshly steamed, professionally ironed, wrinkle-free, magazine quality, high-end fashion photography."
 
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic)$/i
 
