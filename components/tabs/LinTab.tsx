@@ -29,13 +29,13 @@ type LinTask = {
   error?:        string
 }
 
+// Prompt calqué sur ce qui fonctionne en mode chat manuel : court, direct, en français,
+// avec des mots concrets et redondants ("parfaitement repassé", "100% lisse", "tout neuf").
+// Gemini Image obéit beaucoup mieux à ce style "instruction parlée" qu'aux longs prompts académiques.
 const DEFROISSAGE_PROMPT =
-  "Retouch this fashion editorial photograph : the garment has been professionally STEAMED and IRONED. " +
-  "The fabric is now perfectly smooth, crisp, freshly pressed — wrinkle-free, crease-free, fold-free, NO crumpled areas anywhere. " +
-  "Linen and cotton fabrics keep their natural woven texture visible (still recognizable as linen / cotton), but lie flat with a clean natural drape, soft fall, neat lines — like a luxury runway or magazine cover shot. " +
-  "Pay special attention to common wrinkle zones : shoulders, sleeves, elbows, armpits, mid-back, waist, lap, hips, behind knees, around buttons and pockets — every single one must be perfectly smooth. " +
-  "KEEP STRICTLY IDENTICAL to the reference image : same model, same face, same hair, same skin, same exact pose, same hand and finger position, same camera angle, same crop, same framing, same composition, same background (every pixel), same lighting, same shadows, same garment color, same garment cut, same garment length, same seams, same stitching, same buttons, same logo, same accessories. " +
-  "Style keywords : editorial, lookbook, luxury, pristine, crisp, freshly steamed, professionally ironed, wrinkle-free, magazine quality, high-end fashion photography."
+  "Je veux que le lin / coton de ce vêtement soit parfaitement repassé, sans aucun pli, il doit être tout lisse, 100% lisse, tout neuf — comme un vêtement qui sort tout juste du pressing. " +
+  "Garde absolument tout le reste de la photo identique : même mannequin, même visage, même pose, même cadrage, même fond, même éclairage, même couleur du vêtement, mêmes accessoires. " +
+  "Modifie uniquement les plis du tissu pour qu'ils disparaissent complètement."
 
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic)$/i
 
