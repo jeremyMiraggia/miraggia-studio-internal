@@ -13,6 +13,7 @@
  */
 import { useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
+import { compressImage } from '@/lib/compressImage'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'error' | 'saved'
 
@@ -227,11 +228,19 @@ export default function LinTab() {
         return next
       })
       try {
+        // ⚠ Compresse côté client pour rester sous la limite 4.5 MB de Vercel
+        // (sinon erreur 413 "Payload Too Large" sur les photos iPhone HD).
+        // 2048px / qualité 0.9 = ~500 KB - 1.2 MB, largement OK.
+        let sourceForUpload = task.source
+        try {
+          sourceForUpload = await compressImage(task.source, { maxSide: 2048, quality: 0.9 })
+        } catch { /* fallback : envoie tel quel */ }
+
         const fd = new FormData()
         fd.set('prompt', DEFROISSAGE_PROMPT)
         fd.set('ratio', ratio)
         fd.set('quality', quality)
-        fd.append('refs', task.source)
+        fd.append('refs', sourceForUpload)
 
         const resp = await fetch('/api/studio/free', { method: 'POST', body: fd })
         if (!resp.ok) {
