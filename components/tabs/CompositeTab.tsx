@@ -930,10 +930,13 @@ export default function CompositeTab() {
               const allOn   = tasks.every(t => t.enabled)
               const anyOn   = tasks.some(t => t.enabled)
               const numero  = tasks[0].task.numeroLook
+              const idLabel = tasks[0].task.lookId
               return (
                 <div key={lookId} style={styles.lookCard}>
                   <div style={styles.lookHead} onClick={() => setLookExpansion(lookId, !open)}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: '#0D4A5C' }}>{open ? '▼' : '▶'} Look {numero}</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: '#0D4A5C' }}>
+                      {open ? '▼' : '▶'} <span style={{ color: '#6B7280', fontWeight: 500 }}>#{idLabel}</span> · Look {numero}
+                    </span>
                     <span style={{ fontSize: 11, color: '#6B7A8A', marginLeft: 8 }}>
                       ({tasks.length} pose(s) · ✓ {doneN} · ⚠ {errN} · ⏳ {runN})
                     </span>
