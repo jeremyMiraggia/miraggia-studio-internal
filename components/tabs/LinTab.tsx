@@ -22,10 +22,32 @@ type LinTask = {
   error?:    string
 }
 
-const DEFROISSAGE_PROMPT =
-  "Conserve exactement la même image d'origine : même mannequin, même visage, même pose, même cadrage, même lumière, même arrière-plan, même couleur et même texture du vêtement. Ne modifie aucun élément de la scène. " +
-  "Corrige uniquement les plis et les froissements du tissu : rends le vêtement parfaitement défroissé, lisse et repassé, avec un tombé naturel et réaliste. Garde les coutures, la coupe, les volumes et les détails du vêtement strictement identiques. " +
-  "Le résultat doit ressembler à la même photo prise avec un vêtement bien repassé."
+const DEFROISSAGE_PROMPT = [
+  // === CONTEXTE EN PREMIER : on cadre la tâche ===
+  "TASK : MINIMAL LOCAL EDIT — fabric de-wrinkling / ironing retouch only.",
+  "This is a STRICT image-to-image edit, NOT a re-generation. The reference image attached is the 'BEFORE'. Produce the 'AFTER' which is the EXACT same photograph, with the SINGLE difference that the garment fabric (especially LINEN, cotton, hemp or any natural fiber) has been freshly ironed and steamed flat — no wrinkles, no creases, no folds in the fabric, no crumpled areas.",
+  "",
+  // === Ce qu'il NE DOIT ABSOLUMENT PAS changer ===
+  "⚠ DO NOT CHANGE ANYTHING ELSE. The output MUST be pixel-faithful to the reference for everything except wrinkles. Specifically, keep IDENTICAL :",
+  "  • the model — same face (eyes, nose, mouth, eyebrows, skin tone, hair, hair length & style)",
+  "  • the body — same morphology, same height, same posture, same exact pose, same hand position, same finger position",
+  "  • the framing — same crop, same camera angle, same focal length, same composition",
+  "  • the background — every pixel of the background EXACTLY the same (decor, furniture, scenery, gradients, lighting on the wall)",
+  "  • the lighting — same direction, same softness, same color temperature, same shadows on the floor/wall",
+  "  • the garment — same exact color, same exact texture (linen weave must remain visible), same seams, same stitching, same buttons, same logo, same cut, same length, same volume, same drape",
+  "  • the accessories — same jewelry, same belt, same shoes, same bag, same hat — strictly unchanged",
+  "",
+  // === Ce qu'il DOIT changer (et seulement ça) ===
+  "✅ CHANGE ONLY THIS : remove ALL wrinkles, creases, fold lines and crumples from the garment fabric. The clothing must look like it has just been professionally ironed and steamed. Smooth, crisp, neat — like a high-end editorial / luxury catalogue shot.",
+  "Specifically for LINEN : keep the characteristic linen weave texture visible (it's still linen, not silk), but completely eliminate the wrinkled / 'just-out-of-the-bag' look. The fabric should fall naturally and flat on the body, with soft natural drape but ZERO visible creases or fold marks.",
+  "Pay attention to typical wrinkle zones : elbows, inner arms, waist, lap area, behind knees, under armpits, near pockets, around buttons. All of these must be perfectly smooth in the output.",
+  "",
+  // === FR pour Gemini qui comprend le français aussi ===
+  "EN FRANÇAIS — Pour résumer : tu reçois UNE photo de référence. Tu dois produire EXACTEMENT la même photo, à un seul détail près : le vêtement (notamment s'il est en lin) doit apparaître parfaitement défroissé, lisse, repassé, sans aucun pli ni froissement. Garde absolument identiques le mannequin, son visage, sa pose, ses mains, le cadrage, l'éclairage, le fond, la couleur et la texture du tissu (le lin doit rester du lin, juste sans plis), les coutures, les accessoires. Ne re-génère pas la scène — c'est une retouche locale uniquement sur les plis.",
+  "",
+  // === Ton final ===
+  "Output : a single high-quality photograph, indistinguishable from the original except for the perfectly smooth garment.",
+].join('\n')
 
 function sanitizeFilename(s: string): string {
   return s
