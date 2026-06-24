@@ -36,7 +36,15 @@ export default function LinTab() {
   const [tasks, setTasks]       = useState<LinTask[]>([])
   const tasksRef                = useRef<LinTask[]>([])
 
+  const [ratio, setRatio]             = useState('9:16')
+  const [quality, setQuality]         = useState('4K')
   const [concurrency, setConcurrency] = useState<number>(2)
+
+  // Prompt court & direct — Gemini Image obéit mieux aux instructions concises
+  // qu'aux longs essais avec négations. On parle au présent affirmatif.
+  const DEFROISSAGE_PROMPT =
+    "Le vêtement est parfaitement repassé et défroissé : tissu lisse, propre, sans aucun pli, sans aucun froissement, sans aucune marque de pliage. La matière (lin, coton) garde sa texture naturelle visible mais tombe parfaitement, comme repassée à la vapeur juste avant la prise de vue. " +
+    "Tout le reste de la photo est strictement identique à la référence : même mannequin, même visage, même pose, même cadrage, même éclairage, même arrière-plan, même couleur du vêtement, même coupe, même coutures, mêmes accessoires."
 
   const [running, setRunning]   = useState(false)
   const [error, setError]       = useState<string | null>(null)
@@ -87,11 +95,12 @@ export default function LinTab() {
       })
       try {
         const fd = new FormData()
-        // Flux Kontext conserve le ratio / la taille de l'image source.
-        // Les options ratio/quality ne sont donc pas utilisées par /lin.
-        fd.append('source', task.source)
+        fd.set('prompt', DEFROISSAGE_PROMPT)
+        fd.set('ratio', ratio)
+        fd.set('quality', quality)
+        fd.append('refs', task.source)
 
-        const resp = await fetch('/api/studio/lin', { method: 'POST', body: fd })
+        const resp = await fetch('/api/studio/free', { method: 'POST', body: fd })
         if (!resp.ok) {
           let detail = `HTTP ${resp.status}`
           try { detail = (await resp.json()).error ?? detail } catch {}
@@ -237,7 +246,26 @@ export default function LinTab() {
 
       <div style={card}>
         <div style={label}>2 — Paramètres</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(1, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
+            <select value={ratio} onChange={e => setRatio(e.target.value)} style={input}>
+              <option value="9:16">9:16</option>
+              <option value="3:4">3:4</option>
+              <option value="2:3">2:3</option>
+              <option value="1:1">1:1 (carré)</option>
+              <option value="4:3">4:3</option>
+              <option value="16:9">16:9</option>
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Qualité</div>
+            <select value={quality} onChange={e => setQuality(e.target.value)} style={input}>
+              <option value="1K">1K</option>
+              <option value="2K">2K</option>
+              <option value="4K">4K</option>
+            </select>
+          </div>
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Parallèle</div>
             <select value={concurrency} onChange={e => setConcurrency(parseInt(e.target.value, 10))} style={input}>
@@ -247,12 +275,6 @@ export default function LinTab() {
               <option value={4}>4</option>
             </select>
           </div>
-        </div>
-        <div style={{ marginTop: 8, fontSize: 12, color: '#6B7280', background: '#F9FAFB',
-                      padding: 8, borderRadius: 6 }}>
-          💡 Le défroissage utilise <strong>Flux Kontext</strong> (FAL.ai), un modèle d'édition locale
-          qui garde fidèlement l'image source (mannequin, pose, fond) — bien plus fidèle que Gemini pour ce type de retouche.
-          Le ratio et la résolution de la source sont conservés tels quels.
         </div>
       </div>
 
