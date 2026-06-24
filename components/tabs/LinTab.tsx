@@ -1,26 +1,39 @@
 'use client'
 /**
- * Onglet Lin — défroissage automatique d'une série d'images.
+ * Onglet Lin — défroissage automatique d'un dossier entier de looks.
  *
  * Workflow :
- *   1. Le user drop un dossier d'images (ou multi-sélection)
- *   2. Chaque image est envoyée à /api/studio/free avec le prompt de défroissage
- *   3. Au fur et à mesure, les résultats s'affichent en grille
- *   4. À la fin, bouton "Télécharger ZIP" qui empaquette tous les visuels
+ *   1. Le user sélectionne un dossier parent (qui contient des sous-dossiers de
+ *      looks). On walke récursivement et on collecte toutes les images.
+ *   2. Chaque image est envoyée à /api/studio/free avec le prompt de défroissage.
+ *   3. Dès qu'une image est défroissée, on l'écrit DIRECTEMENT à côté de
+ *      l'originale (même sous-dossier) sous le nom <baseName>-defroisse.<ext>.
+ *   4. (Bonus) Bouton de download ZIP à la fin pour les utilisateurs sans
+ *      File System Access API.
  */
 import { useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
-import Dropzone from '@/components/ui/Dropzone'
 
-type TaskStatus = 'pending' | 'running' | 'done' | 'error'
+type TaskStatus = 'pending' | 'running' | 'done' | 'error' | 'saved'
 
 type LinTask = {
-  id:       string
-  source:   File
-  status:   TaskStatus
-  imageUrl?: string
-  error?:    string
+  id:            string
+  source:        File
+  relativePath:  string           // ex "Look 1/IMG_4521.jpg"
+  baseName:      string           // ex "IMG_4521"
+  ext:           string           // ex "jpg"
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  parentDir:     any              // FileSystemDirectoryHandle (= le sous-dossier du look)
+  status:        TaskStatus
+  imageUrl?:     string
+  error?:        string
 }
+
+const DEFROISSAGE_PROMPT =
+  "Le vêtement est parfaitement repassé et défroissé : tissu lisse, propre, sans aucun pli, sans aucun froissement, sans aucune marque de pliage. La matière (lin, coton) garde sa texture naturelle visible mais tombe parfaitement, comme repassée à la vapeur juste avant la prise de vue. " +
+  "Tout le reste de la photo est strictement identique à la référence : même mannequin, même visage, même pose, même cadrage, même éclairage, même arrière-plan, même couleur du vêtement, même coupe, même coutures, mêmes accessoires."
+
+const IMAGE_EXTS = /\.(jpe?g|png|webp|heic)$/i
 
 function sanitizeFilename(s: string): string {
   return s
@@ -31,36 +44,124 @@ function sanitizeFilename(s: string): string {
     .slice(0, 80) || 'image'
 }
 
+async function ensureWritePermission(handle: any): Promise<boolean> {
+  try {
+    const opts = { mode: 'readwrite' as const }
+    const q = await handle.queryPermission?.(opts) ?? 'prompt'
+    if (q === 'granted') return true
+    const r = await handle.requestPermission?.(opts) ?? 'denied'
+    return r === 'granted'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Walker récursif d'un FileSystemDirectoryHandle.
+ * Collecte toutes les images (jpg, png, webp, heic) avec leur dossier parent.
+ */
+async function walkDirectory(
+  handle: any,
+  accumulator: Array<{ file: File; parentDir: any; relativePath: string; originalName: string }>,
+  basePath = '',
+): Promise<void> {
+  for await (const entry of handle.values()) {
+    if (entry.kind === 'directory') {
+      const subPath = basePath ? `${basePath}/${entry.name}` : entry.name
+      await walkDirectory(entry, accumulator, subPath)
+    } else if (entry.kind === 'file') {
+      if (IMAGE_EXTS.test(entry.name) && !entry.name.includes('-defroisse')) {
+        const file = await entry.getFile()
+        accumulator.push({
+          file,
+          parentDir:    handle,
+          relativePath: basePath ? `${basePath}/${entry.name}` : entry.name,
+          originalName: entry.name,
+        })
+      }
+    }
+  }
+}
+
 export default function LinTab() {
-  const [files, setFiles]       = useState<File[]>([])
   const [tasks, setTasks]       = useState<LinTask[]>([])
   const tasksRef                = useRef<LinTask[]>([])
+
+  const [rootDirName, setRootDirName] = useState<string | null>(null)
+  const [scanning, setScanning]       = useState(false)
 
   const [ratio, setRatio]             = useState('9:16')
   const [quality, setQuality]         = useState('4K')
   const [concurrency, setConcurrency] = useState<number>(2)
 
-  // Prompt court & direct — Gemini Image obéit mieux aux instructions concises
-  // qu'aux longs essais avec négations. On parle au présent affirmatif.
-  const DEFROISSAGE_PROMPT =
-    "Le vêtement est parfaitement repassé et défroissé : tissu lisse, propre, sans aucun pli, sans aucun froissement, sans aucune marque de pliage. La matière (lin, coton) garde sa texture naturelle visible mais tombe parfaitement, comme repassée à la vapeur juste avant la prise de vue. " +
-    "Tout le reste de la photo est strictement identique à la référence : même mannequin, même visage, même pose, même cadrage, même éclairage, même arrière-plan, même couleur du vêtement, même coupe, même coutures, mêmes accessoires."
-
   const [running, setRunning]   = useState(false)
   const [error, setError]       = useState<string | null>(null)
   const [zipping, setZipping]   = useState(false)
 
-  /* ----------------- Drop ----------------- */
-  const handleFilesChange = (newFiles: File[]) => {
-    setFiles(newFiles)
-    const newTasks: LinTask[] = newFiles.map((f, i) => ({
-      id:     `${i}-${f.name}-${f.lastModified}`,
-      source: f,
-      status: 'pending',
-    }))
-    setTasks(newTasks)
-    tasksRef.current = newTasks
-    setError(null)
+  /* ----------------- Pick root directory + walk ----------------- */
+  const pickRootDir = async () => {
+    try {
+      // @ts-ignore – File System Access API
+      const root = await window.showDirectoryPicker({ mode: 'readwrite' })
+      const ok = await ensureWritePermission(root)
+      if (!ok) {
+        setError('Permission d\'écriture refusée pour ce dossier.')
+        return
+      }
+      setRootDirName(root.name ?? 'dossier')
+      setError(null)
+      setScanning(true)
+
+      const collected: Array<{ file: File; parentDir: any; relativePath: string; originalName: string }> = []
+      await walkDirectory(root, collected)
+
+      const newTasks: LinTask[] = collected.map((c, i) => {
+        const m = c.originalName.match(/^(.*)\.([^.]+)$/)
+        const baseName = m ? m[1] : c.originalName
+        const ext      = m ? m[2].toLowerCase() : 'png'
+        return {
+          id:           `${i}-${c.relativePath}-${c.file.lastModified}`,
+          source:       c.file,
+          relativePath: c.relativePath,
+          baseName,
+          ext,
+          parentDir:    c.parentDir,
+          status:       'pending',
+        }
+      })
+      setTasks(newTasks)
+      tasksRef.current = newTasks
+      setScanning(false)
+    } catch (e: any) {
+      setScanning(false)
+      if (e?.name !== 'AbortError') setError(`Sélection : ${e?.message ?? e}`)
+    }
+  }
+
+  /* ----------------- Write defroisse file in original folder ----------------- */
+  const writeDefroisseToFolder = async (task: LinTask): Promise<boolean> => {
+    if (!task.parentDir || !task.imageUrl) return false
+    try {
+      const ok = await ensureWritePermission(task.parentDir)
+      if (!ok) throw new Error('Permission readwrite refusée sur le sous-dossier.')
+
+      const resp = await fetch(task.imageUrl)
+      if (!resp.ok) throw new Error(`Fetch HTTP ${resp.status}`)
+      const blob = await resp.blob()
+
+      // Nom : "<baseName>-defroisse.<ext>" (ext d'origine conservée)
+      const safeBase = sanitizeFilename(task.baseName)
+      const filename = `${safeBase}-defroisse.${task.ext}`
+      const fileHandle = await task.parentDir.getFileHandle(filename, { create: true })
+      const writable = await fileHandle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      console.log(`[Lin] Saved ${task.relativePath.replace(/\/[^/]+$/, '')}/${filename}`)
+      return true
+    } catch (e: any) {
+      console.warn('[Lin] write failed', task.relativePath, e?.message)
+      return false
+    }
   }
 
   /* ----------------- Génération ----------------- */
@@ -75,14 +176,16 @@ export default function LinTab() {
 
     // Reset les tâches non terminées
     setTasks(prev => {
-      const next = prev.map(t => t.status === 'done' ? t : { ...t, status: 'pending' as TaskStatus, error: undefined })
+      const next = prev.map(t => (t.status === 'done' || t.status === 'saved')
+        ? t
+        : { ...t, status: 'pending' as TaskStatus, error: undefined })
       tasksRef.current = next
       return next
     })
 
     const todo = tasksRef.current
       .map((t, idx) => ({ t, idx }))
-      .filter(({ t }) => t.status !== 'done')
+      .filter(({ t }) => t.status !== 'done' && t.status !== 'saved')
 
     const runOne = async ({ idx }: { idx: number }) => {
       const task = tasksRef.current[idx]
@@ -116,6 +219,20 @@ export default function LinTab() {
           tasksRef.current = next
           return next
         })
+
+        // Write immediately to the original folder (saved status)
+        const updated = tasksRef.current[idx]
+        if (updated?.parentDir) {
+          const saved = await writeDefroisseToFolder(updated)
+          if (saved) {
+            setTasks(prev => {
+              const next = [...prev]
+              next[idx] = { ...next[idx], status: 'saved' }
+              tasksRef.current = next
+              return next
+            })
+          }
+        }
       } catch (e: any) {
         setTasks(prev => {
           const next = [...prev]
@@ -139,9 +256,9 @@ export default function LinTab() {
     setRunning(false)
   }
 
-  /* ----------------- ZIP download ----------------- */
+  /* ----------------- ZIP download (bonus) ----------------- */
   const downloadZip = async () => {
-    const doneTasks = tasksRef.current.filter(t => t.status === 'done' && t.imageUrl)
+    const doneTasks = tasksRef.current.filter(t => (t.status === 'done' || t.status === 'saved') && t.imageUrl)
     if (doneTasks.length === 0) {
       setError('Aucun visuel terminé à empaqueter.')
       return
@@ -150,31 +267,31 @@ export default function LinTab() {
     setError(null)
     try {
       const zip = new JSZip()
-      // En cas de doublons de noms dans la sélection, on suffixe avec _2, _3, …
       const usedNames = new Set<string>()
       for (const t of doneTasks) {
         try {
           const resp = await fetch(t.imageUrl!)
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
           const blob = await resp.blob()
-          // Garde STRICTEMENT le même nom que l'original (juste sanitisé pour
-          // virer les caractères interdits par les filesystems Windows).
-          let name = sanitizeFilename(t.source.name.replace(/\.[^.]+$/, ''))
-          const origExt = (t.source.name.match(/\.([^.]+)$/)?.[1] ?? '').toLowerCase()
-          const ext = origExt || (blob.type === 'image/jpeg' ? 'jpg' : 'png')
-          let finalName = `${name}.${ext}`
+          const safeBase = sanitizeFilename(t.baseName)
+          // Garde la hiérarchie du dossier dans le ZIP
+          const folderPart = t.relativePath.replace(/\/[^/]+$/, '')
+          let basePath = folderPart
+            ? `${folderPart}/${safeBase}-defroisse.${t.ext}`
+            : `${safeBase}-defroisse.${t.ext}`
+          let final = basePath
           let n = 2
-          while (usedNames.has(finalName)) {
-            finalName = `${name}_${n}.${ext}`
+          while (usedNames.has(final)) {
+            final = basePath.replace(/(\.[^.]+)$/, `_${n}$1`)
             n++
           }
-          usedNames.add(finalName)
-          zip.file(finalName, blob)
+          usedNames.add(final)
+          zip.file(final, blob)
         } catch (e: any) {
-          console.warn('[Lin] zip skip', t.source.name, e)
+          console.warn('[Lin] zip skip', t.relativePath, e)
         }
       }
-      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })  // STORE = pas de compression (images sont déjà compressées)
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
       const url = URL.createObjectURL(blob)
       const a   = document.createElement('a')
       a.href    = url
@@ -190,10 +307,11 @@ export default function LinTab() {
 
   /* ----------------- Stats ----------------- */
   const stats = useMemo(() => {
-    const done    = tasks.filter(t => t.status === 'done').length
+    const done    = tasks.filter(t => t.status === 'done' || t.status === 'saved').length
+    const saved   = tasks.filter(t => t.status === 'saved').length
     const errors  = tasks.filter(t => t.status === 'error').length
-    const running = tasks.filter(t => t.status === 'running').length
-    return { done, errors, running, total: tasks.length }
+    const runningN= tasks.filter(t => t.status === 'running').length
+    return { done, saved, errors, running: runningN, total: tasks.length }
   }, [tasks])
 
   /* ----------------- Styles ----------------- */
@@ -219,29 +337,49 @@ export default function LinTab() {
     fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
   })
 
+  // Group tasks by folder for display
+  const grouped = useMemo(() => {
+    const byFolder = new Map<string, LinTask[]>()
+    for (const t of tasks) {
+      const folder = t.relativePath.includes('/')
+        ? t.relativePath.replace(/\/[^/]+$/, '')
+        : '(racine)'
+      const arr = byFolder.get(folder) ?? []
+      arr.push(t)
+      byFolder.set(folder, arr)
+    }
+    return Array.from(byFolder.entries())
+  }, [tasks])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 22 }}>🧺</span>
-          <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Lin — Défroissage automatique</h2>
+          <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Lin — Défroissage par dossier</h2>
         </div>
         <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-          Drop tes images : chacune sera retravaillée pour défroisser le vêtement, en gardant
-          tout le reste (mannequin, pose, cadrage, fond) strictement identique.
+          Sélectionne un dossier parent contenant tes sous-dossiers de looks. Chaque image
+          défroissée sera écrite à côté de l'originale, dans le MÊME sous-dossier, sous le nom
+          <code style={{ background: '#F3F4F6', padding: '1px 5px', borderRadius: 4, margin: '0 4px' }}>
+            NOMDUVISUEL-defroisse.ext
+          </code>
+          au fur et à mesure.
         </p>
       </div>
 
       <div style={card}>
-        <div style={label}>1 — Images à défroisser</div>
-        <Dropzone
-          files={files}
-          onChange={handleFilesChange}
-          multiple
-          accept="image/*"
-          label="Drop tes images ici (multi)"
-          hint="Tu peux aussi drop un dossier — toutes les images seront ajoutées"
-        />
+        <div style={label}>1 — Dossier parent (avec sous-dossiers de looks)</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={pickRootDir} style={btn('#0D4A5C')} disabled={scanning}>
+            📁 {scanning ? 'Scan en cours…' : rootDirName ? `Dossier : ${rootDirName}` : 'Choisir un dossier'}
+          </button>
+          {rootDirName && !scanning && (
+            <span style={{ fontSize: 12, color: '#6B7280' }}>
+              {tasks.length} image(s) détectée(s) dans {grouped.length} sous-dossier(s).
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={card}>
@@ -282,7 +420,7 @@ export default function LinTab() {
         <div style={card}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
             <div style={label}>
-              3 — Tâches ({stats.total} · ✓ {stats.done} · ⏳ {stats.running} · ✕ {stats.errors})
+              3 — Tâches ({stats.total} · ✓ {stats.done} · 💾 {stats.saved} sauvés · ⏳ {stats.running} · ✕ {stats.errors})
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
@@ -299,53 +437,64 @@ export default function LinTab() {
                 style={{ ...btn(zipping || stats.done === 0 ? '#9CA3AF' : '#10B981'),
                          cursor: zipping || stats.done === 0 ? 'not-allowed' : 'pointer' }}
               >
-                {zipping ? '⏳ ZIP…' : `📦 Télécharger ZIP (${stats.done})`}
+                {zipping ? '⏳ ZIP…' : `📦 ZIP (${stats.done})`}
               </button>
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
-            {tasks.map(t => {
-              const srcUrl = URL.createObjectURL(t.source)
-              return (
-                <div key={t.id} style={{
-                  border: '1px solid #E5E7EB', borderRadius: 10, padding: 8, background: '#fff',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                    {t.status === 'pending' && <span style={pill('#9CA3AF')}>•</span>}
-                    {t.status === 'running' && <span style={pill('#F59E0B')}>⏳</span>}
-                    {t.status === 'done'    && <span style={pill('#10B981')}>✓</span>}
-                    {t.status === 'error'   && <span style={pill('#EF4444')}>✕</span>}
-                    <span style={{ fontSize: 11, color: '#6B7280',
-                                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                          title={t.source.name}>
-                      {t.source.name}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <div style={{ flex: 1, aspectRatio: '3/4', background: '#F3F4F6',
-                                  borderRadius: 6, overflow: 'hidden' }}>
-                      <img src={srcUrl} alt="source" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    </div>
-                    <div style={{ flex: 1, aspectRatio: '3/4', background: '#fff',
-                                  border: '1px solid #E5E7EB', borderRadius: 6, overflow: 'hidden',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {t.imageUrl
-                        ? <img src={t.imageUrl} alt="result" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        : <span style={{ fontSize: 11, color: '#9CA3AF' }}>
-                            {t.status === 'running' ? '⏳' : t.status === 'error' ? '✕' : '–'}
-                          </span>}
-                    </div>
-                  </div>
-                  {t.error && (
-                    <div style={{ fontSize: 10, color: '#EF4444', marginTop: 4 }}
-                         title={t.error}>
-                      {t.error.slice(0, 60)}
-                    </div>
-                  )}
+          {/* Liste groupée par sous-dossier */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {grouped.map(([folder, items]) => (
+              <div key={folder}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#0D4A5C', marginBottom: 6 }}>
+                  📁 {folder} ({items.length})
                 </div>
-              )
-            })}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
+                  {items.map(t => {
+                    const srcUrl = URL.createObjectURL(t.source)
+                    return (
+                      <div key={t.id} style={{
+                        border: '1px solid #E5E7EB', borderRadius: 10, padding: 6, background: '#fff',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                          {t.status === 'pending' && <span style={pill('#9CA3AF')}>•</span>}
+                          {t.status === 'running' && <span style={pill('#F59E0B')}>⏳</span>}
+                          {t.status === 'done'    && <span style={pill('#3B82F6')}>✓</span>}
+                          {t.status === 'saved'   && <span style={pill('#10B981')}>💾</span>}
+                          {t.status === 'error'   && <span style={pill('#EF4444')}>✕</span>}
+                          <span style={{ fontSize: 10, color: '#6B7280',
+                                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                title={t.source.name}>
+                            {t.source.name}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <div style={{ flex: 1, aspectRatio: '3/4', background: '#F3F4F6',
+                                        borderRadius: 4, overflow: 'hidden' }}>
+                            <img src={srcUrl} alt="src" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          </div>
+                          <div style={{ flex: 1, aspectRatio: '3/4', background: '#fff',
+                                        border: '1px solid #E5E7EB', borderRadius: 4, overflow: 'hidden',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {t.imageUrl
+                              ? <img src={t.imageUrl} alt="out" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              : <span style={{ fontSize: 10, color: '#9CA3AF' }}>
+                                  {t.status === 'running' ? '⏳' : t.status === 'error' ? '✕' : '–'}
+                                </span>}
+                          </div>
+                        </div>
+                        {t.error && (
+                          <div style={{ fontSize: 10, color: '#EF4444', marginTop: 4 }}
+                               title={t.error}>
+                            {t.error.slice(0, 50)}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
