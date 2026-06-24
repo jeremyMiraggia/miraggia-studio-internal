@@ -6,6 +6,7 @@ import FreePromptTab from '@/components/tabs/FreePromptTab'
 import ExtractTab    from '@/components/tabs/ExtractTab'
 import LookbookTab   from '@/components/tabs/LookbookTab'
 import GhostTab      from '@/components/tabs/GhostTab'
+import LinTab        from '@/components/tabs/LinTab'
 import LifestyleTab  from '@/components/tabs/LifestyleTab'
 import VideoTab      from '@/components/tabs/VideoTab'
 import NotionTab        from '@/components/tabs/NotionTab'
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'pipeline',        label: '🔬 Pipeline (fond exact)' },
   { id: 'lookbook',        label: '👗 Lookbook' },
   { id: 'ghost',           label: '👻 Ghost' },
+  { id: 'lin',             label: '🧺 Lin' },
   { id: 'lifestyle',       label: '🌴 Lifestyle' },
   { id: 'video',           label: '🎬 Video' },
   { id: 'batch',           label: '📋 Batch' },
@@ -61,6 +63,7 @@ export default function StudioPage() {
         {tab === 'pipeline'        && <PipelineTab />}
         {tab === 'lookbook'        && <LookbookTab />}
         {tab === 'ghost'           && <GhostTab />}
+        {tab === 'lin'             && <LinTab />}
         {tab === 'lifestyle'       && <LifestyleTab />}
         {tab === 'video'           && <VideoTab />}
                 {tab === 'batch'           && <BatchTab />}
