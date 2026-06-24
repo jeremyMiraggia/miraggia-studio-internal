@@ -250,10 +250,14 @@ export default function LinTab() {
           return next
         })
 
-        // Write immediately to the original folder (status passe à 'saved')
-        const updated = tasksRef.current[idx]
-        if (updated?.parentDir) {
-          const result = await writeDefroisseToFolder(updated)
+        // Write immediately to the original folder.
+        // ⚠ On ne relit PAS tasksRef.current[idx] ici : si plusieurs workers
+        // parallèles font setTasks au même moment, le snapshot peut perdre
+        // l'imageUrl qu'on vient juste de set (race condition). On construit
+        // un objet local immutable avec les données qu'on a sous la main.
+        if (task.parentDir) {
+          const taskForSave: LinTask = { ...task, status: 'done', imageUrl: url }
+          const result = await writeDefroisseToFolder(taskForSave)
           setTasks(prev => {
             const next = [...prev]
             if (result.saved) {
@@ -261,11 +265,13 @@ export default function LinTab() {
             } else {
               // Garde status 'done' (le visuel est généré) mais ajoute l'erreur de save
               next[idx] = { ...next[idx], error: `Save : ${result.error ?? '?'}` }
-              setError(`Sauvegarde échouée pour ${updated.relativePath} : ${result.error}`)
             }
             tasksRef.current = next
             return next
           })
+          if (!result.saved) {
+            setError(`Sauvegarde échouée pour ${task.relativePath} : ${result.error}`)
+          }
         }
       } catch (e: any) {
         setTasks(prev => {
