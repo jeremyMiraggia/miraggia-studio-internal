@@ -22,33 +22,6 @@ type LinTask = {
   error?:    string
 }
 
-const DEFROISSAGE_PROMPT = [
-  // === CONTEXTE EN PREMIER : on cadre la tâche ===
-  "TASK : MINIMAL LOCAL EDIT — fabric de-wrinkling / ironing retouch only.",
-  "This is a STRICT image-to-image edit, NOT a re-generation. The reference image attached is the 'BEFORE'. Produce the 'AFTER' which is the EXACT same photograph, with the SINGLE difference that the garment fabric (especially LINEN, cotton, hemp or any natural fiber) has been freshly ironed and steamed flat — no wrinkles, no creases, no folds in the fabric, no crumpled areas.",
-  "",
-  // === Ce qu'il NE DOIT ABSOLUMENT PAS changer ===
-  "⚠ DO NOT CHANGE ANYTHING ELSE. The output MUST be pixel-faithful to the reference for everything except wrinkles. Specifically, keep IDENTICAL :",
-  "  • the model — same face (eyes, nose, mouth, eyebrows, skin tone, hair, hair length & style)",
-  "  • the body — same morphology, same height, same posture, same exact pose, same hand position, same finger position",
-  "  • the framing — same crop, same camera angle, same focal length, same composition",
-  "  • the background — every pixel of the background EXACTLY the same (decor, furniture, scenery, gradients, lighting on the wall)",
-  "  • the lighting — same direction, same softness, same color temperature, same shadows on the floor/wall",
-  "  • the garment — same exact color, same exact texture (linen weave must remain visible), same seams, same stitching, same buttons, same logo, same cut, same length, same volume, same drape",
-  "  • the accessories — same jewelry, same belt, same shoes, same bag, same hat — strictly unchanged",
-  "",
-  // === Ce qu'il DOIT changer (et seulement ça) ===
-  "✅ CHANGE ONLY THIS : remove ALL wrinkles, creases, fold lines and crumples from the garment fabric. The clothing must look like it has just been professionally ironed and steamed. Smooth, crisp, neat — like a high-end editorial / luxury catalogue shot.",
-  "Specifically for LINEN : keep the characteristic linen weave texture visible (it's still linen, not silk), but completely eliminate the wrinkled / 'just-out-of-the-bag' look. The fabric should fall naturally and flat on the body, with soft natural drape but ZERO visible creases or fold marks.",
-  "Pay attention to typical wrinkle zones : elbows, inner arms, waist, lap area, behind knees, under armpits, near pockets, around buttons. All of these must be perfectly smooth in the output.",
-  "",
-  // === FR pour Gemini qui comprend le français aussi ===
-  "EN FRANÇAIS — Pour résumer : tu reçois UNE photo de référence. Tu dois produire EXACTEMENT la même photo, à un seul détail près : le vêtement (notamment s'il est en lin) doit apparaître parfaitement défroissé, lisse, repassé, sans aucun pli ni froissement. Garde absolument identiques le mannequin, son visage, sa pose, ses mains, le cadrage, l'éclairage, le fond, la couleur et la texture du tissu (le lin doit rester du lin, juste sans plis), les coutures, les accessoires. Ne re-génère pas la scène — c'est une retouche locale uniquement sur les plis.",
-  "",
-  // === Ton final ===
-  "Output : a single high-quality photograph, indistinguishable from the original except for the perfectly smooth garment.",
-].join('\n')
-
 function sanitizeFilename(s: string): string {
   return s
     .replace(/[\/\\:*?"<>|]/g, '_')
@@ -63,8 +36,6 @@ export default function LinTab() {
   const [tasks, setTasks]       = useState<LinTask[]>([])
   const tasksRef                = useRef<LinTask[]>([])
 
-  const [ratio, setRatio]             = useState('9:16')
-  const [quality, setQuality]         = useState('4K')
   const [concurrency, setConcurrency] = useState<number>(2)
 
   const [running, setRunning]   = useState(false)
@@ -116,12 +87,11 @@ export default function LinTab() {
       })
       try {
         const fd = new FormData()
-        fd.set('prompt', DEFROISSAGE_PROMPT)
-        fd.set('ratio', ratio)
-        fd.set('quality', quality)
-        fd.append('refs', task.source)
+        // Flux Kontext conserve le ratio / la taille de l'image source.
+        // Les options ratio/quality ne sont donc pas utilisées par /lin.
+        fd.append('source', task.source)
 
-        const resp = await fetch('/api/studio/free', { method: 'POST', body: fd })
+        const resp = await fetch('/api/studio/lin', { method: 'POST', body: fd })
         if (!resp.ok) {
           let detail = `HTTP ${resp.status}`
           try { detail = (await resp.json()).error ?? detail } catch {}
@@ -267,26 +237,7 @@ export default function LinTab() {
 
       <div style={card}>
         <div style={label}>2 — Paramètres</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
-            <select value={ratio} onChange={e => setRatio(e.target.value)} style={input}>
-              <option value="9:16">9:16</option>
-              <option value="3:4">3:4</option>
-              <option value="2:3">2:3</option>
-              <option value="1:1">1:1 (carré)</option>
-              <option value="4:3">4:3</option>
-              <option value="16:9">16:9</option>
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Qualité</div>
-            <select value={quality} onChange={e => setQuality(e.target.value)} style={input}>
-              <option value="1K">1K</option>
-              <option value="2K">2K</option>
-              <option value="4K">4K</option>
-            </select>
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(1, 1fr)', gap: 12 }}>
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Parallèle</div>
             <select value={concurrency} onChange={e => setConcurrency(parseInt(e.target.value, 10))} style={input}>
@@ -296,6 +247,12 @@ export default function LinTab() {
               <option value={4}>4</option>
             </select>
           </div>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 12, color: '#6B7280', background: '#F9FAFB',
+                      padding: 8, borderRadius: 6 }}>
+          💡 Le défroissage utilise <strong>Flux Kontext</strong> (FAL.ai), un modèle d'édition locale
+          qui garde fidèlement l'image source (mannequin, pose, fond) — bien plus fidèle que Gemini pour ce type de retouche.
+          Le ratio et la résolution de la source sont conservés tels quels.
         </div>
       </div>
 
