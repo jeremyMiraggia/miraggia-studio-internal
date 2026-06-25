@@ -30,13 +30,13 @@ type LinTask = {
   error?:        string
 }
 
-// Prompt calqué sur ce qui fonctionne en mode chat manuel : court, direct, en français,
-// avec des mots concrets et redondants ("parfaitement repassé", "100% lisse", "tout neuf").
-// Gemini Image obéit beaucoup mieux à ce style "instruction parlée" qu'aux longs prompts académiques.
+// Prompt validé manuellement par le user — ne PAS modifier sans raison.
+// Cette formulation a été testée et fonctionne bien avec Gemini Image en mode img2img.
 const DEFROISSAGE_PROMPT =
-  "Je veux que le lin / coton de ce vêtement soit parfaitement repassé, sans aucun pli, il doit être tout lisse, 100% lisse, tout neuf — comme un vêtement qui sort tout juste du pressing. " +
-  "Garde absolument tout le reste de la photo identique : même mannequin, même visage, même pose, même cadrage, même fond, même éclairage, même couleur du vêtement, mêmes accessoires. " +
-  "Modifie uniquement les plis du tissu pour qu'ils disparaissent complètement."
+  "The linen they are wearing is now perfectly smooth, wrinkle-free, and flawless, " +
+  "appearing as if professionally steam-pressed and pressed to a flat surface. " +
+  "The lighting is even, highlighting the flawless, smooth surface of the pressed linen fabric " +
+  "against the same neutral plain background."
 
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic)$/i
 
