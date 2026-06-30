@@ -507,11 +507,16 @@ function rgbToHex(r: number, g: number, b: number): string {
 /**
  * Harmonise le fond Gemini vers une couleur cible (celle du fond user).
  *
- * Pour chaque pixel "fond" identifié (clair, désaturé, neutre), on remplace
- * sa couleur par la couleur cible. Le sujet reste intact.
+ * Approche : FLOOD FILL depuis les bords de l'image.
+ *   1. On marque chaque pixel comme "candidat fond" s'il matche les critères
+ *      (clair, peu saturé, neutre).
+ *   2. On fait un flood-fill 4-connectivité depuis les 4 bords, en ne visitant
+ *      que les pixels candidats CONNECTÉS au bord.
+ *   3. Seuls ces pixels sont remplacés par la couleur cible.
  *
- * Effet : même si Photoroom laisse un halo résiduel, il sera de la même teinte
- * que le fond user → INVISIBLE au compositing final.
+ * → Le tissu blanc/écru à l'INTÉRIEUR du sujet (chemise, robe blanche) n'est
+ *   PAS touché, car il n'est pas connecté au bord de l'image.
+ * → Seul le vrai fond environnant le sujet est harmonisé.
  */
 async function harmonizeBackground(imgBuf: Buffer, tR: number, tG: number, tB: number): Promise<Buffer> {
   const { data, info } = await sharp(imgBuf)
@@ -521,19 +526,51 @@ async function harmonizeBackground(imgBuf: Buffer, tR: number, tG: number, tB: n
   const w = info.width, h = info.height, ch = info.channels
   if (ch !== 3) throw new Error(`harmonizeBackground: expected 3 channels, got ${ch}`)
 
-  const out = Buffer.from(data)
+  // 1. Build candidate mask (pixels matching "background-like" criteria)
+  const isCandidate = new Uint8Array(w * h)
   for (let i = 0; i < w * h; i++) {
-    const r = out[i * 3]
-    const g = out[i * 3 + 1]
-    const b = out[i * 3 + 2]
+    const r = data[i * 3]
+    const g = data[i * 3 + 1]
+    const b = data[i * 3 + 2]
     const lum = 0.299 * r + 0.587 * g + 0.114 * b
     const max = Math.max(r, g, b)
     const min = Math.min(r, g, b)
     const sat = max > 0 ? (max - min) / max : 0
     const chromaDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b))
+    if (lum > 200 && sat < 0.18 && chromaDiff < 30) {
+      isCandidate[i] = 1
+    }
+  }
 
-    // Critères "fond pâle" : clair + peu saturé + presque neutre
-    if (lum > 200 && sat < 0.15 && chromaDiff < 25) {
+  // 2. Flood-fill 4-connectivity from all border pixels
+  //    (iterative stack to avoid call stack overflow on large images)
+  const isBg = new Uint8Array(w * h)
+  const stack: number[] = []
+  // Seed : tous les pixels candidats sur les 4 bords
+  for (let x = 0; x < w; x++) {
+    if (isCandidate[x])               stack.push(x)            // top row
+    if (isCandidate[(h - 1) * w + x]) stack.push((h - 1) * w + x) // bottom row
+  }
+  for (let y = 0; y < h; y++) {
+    if (isCandidate[y * w])             stack.push(y * w)         // left col
+    if (isCandidate[y * w + (w - 1)])   stack.push(y * w + w - 1) // right col
+  }
+  while (stack.length > 0) {
+    const idx = stack.pop()!
+    if (isBg[idx]) continue
+    isBg[idx] = 1
+    const y = (idx / w) | 0
+    const x = idx - y * w
+    if (x > 0     && isCandidate[idx - 1] && !isBg[idx - 1]) stack.push(idx - 1)
+    if (x < w - 1 && isCandidate[idx + 1] && !isBg[idx + 1]) stack.push(idx + 1)
+    if (y > 0     && isCandidate[idx - w] && !isBg[idx - w]) stack.push(idx - w)
+    if (y < h - 1 && isCandidate[idx + w] && !isBg[idx + w]) stack.push(idx + w)
+  }
+
+  // 3. Replace only flood-filled pixels
+  const out = Buffer.from(data)
+  for (let i = 0; i < w * h; i++) {
+    if (isBg[i]) {
       out[i * 3]     = tR
       out[i * 3 + 1] = tG
       out[i * 3 + 2] = tB
