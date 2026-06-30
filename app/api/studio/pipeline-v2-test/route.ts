@@ -383,48 +383,86 @@ async function detectHorizonLine(bgBuf: Buffer, bgW: number, bgH: number): Promi
  * Donne une ombre physiquement cohérente (ovale sous les pieds) plutôt qu'une
  * silhouette qui suit la forme du sujet (pas naturel pour une ombre au sol).
  */
+/**
+ * Ombre de contact NATURELLE — utilise l'alpha des pieds eux-mêmes, squashé
+ * verticalement et fortement flouté. Suit la silhouette réelle des chaussures
+ * (plus naturel qu'une ellipse parfaite).
+ *
+ * Technique :
+ *   1. Crop les 12% du bas du sujet (zone pieds/chaussures)
+ *   2. Extraire l'alpha → silhouette noire avec opacité douce
+ *   3. Squash verticalement ×0.2 (effet projection au sol)
+ *   4. Blur ~12-15px (très diffus)
+ *   5. Placer pile sous les pieds en mode "over"
+ */
 async function buildContactShadow(
   subjectResized: Buffer, newW: number, newH: number, offsetX: number, offsetY: number,
   bgW: number, bgH: number,
 ): Promise<{ input: Buffer | null; left: number; top: number }> {
   try {
-    // Trouve la bbox réelle du sujet RESIZÉ pour ancrer l'ombre sous les vrais pieds
     const subjBbox = await findAlphaBoundingBox(subjectResized, 20)
     if (!subjBbox) return { input: null, left: 0, top: 0 }
 
-    // Largeur ombre = ~110% de la largeur sujet (déborde un peu sur les côtés)
-    // Hauteur = ~12% de la largeur (ellipse bien aplatie, lecture sol)
-    const shadowW = Math.round(subjBbox.width * 1.1)
-    const shadowH = Math.max(10, Math.round(subjBbox.width * 0.12))
-    if (shadowW < 4 || shadowH < 2) return { input: null, left: 0, top: 0 }
-
-    // Padding autour pour que le flou n'ait pas un bord net
-    const pad = Math.round(shadowH * 1.0)
-    const canvasW = shadowW + pad * 2
-    const canvasH = shadowH + pad * 2
-
-    // Ellipse noire + opacité plus forte pour rester visible après le flou
-    const svg = `<svg width="${canvasW}" height="${canvasH}" xmlns="http://www.w3.org/2000/svg">
-      <ellipse cx="${canvasW/2}" cy="${canvasH/2}" rx="${shadowW/2}" ry="${shadowH/2}"
-               fill="black" fill-opacity="0.55"/>
-    </svg>`
-    const shadow = await sharp(Buffer.from(svg))
-      .blur(Math.max(6, Math.round(shadowH * 0.5)))
+    // 1. Crop les 12% du bas du sujet (= zone pieds)
+    const footStripHeight = Math.max(8, Math.round(subjBbox.height * 0.12))
+    const footStripTop    = subjBbox.top + subjBbox.height - footStripHeight
+    const footStripBuf = await sharp(subjectResized)
+      .extract({ left: subjBbox.left, top: footStripTop,
+                 width: subjBbox.width, height: footStripHeight })
       .png()
       .toBuffer()
 
-    // Position : centré sur le sujet, ancré juste après les pieds (sous le sol)
-    const subjectCenterX = offsetX + subjBbox.left + Math.round(subjBbox.width / 2)
-    const subjectFeetY   = offsetY + subjBbox.top + subjBbox.height
-    let shadowX = subjectCenterX - Math.round(canvasW / 2)
-    // L'ellipse part LÉGÈREMENT au-dessus des pieds (effet pied posé sur ombre)
-    let shadowY = subjectFeetY - Math.round(canvasH / 2)
+    // 2. Extraire l'alpha → silhouette noire (l'alpha original devient l'opacité)
+    const { data: alphaData, info: alphaInfo } = await sharp(footStripBuf)
+      .ensureAlpha()
+      .extractChannel('alpha')
+      .raw()
+      .toBuffer({ resolveWithObject: true })
+    const w = alphaInfo.width, h = alphaInfo.height
 
-    // Bound
-    shadowX = Math.max(-pad, Math.min(bgW - canvasW + pad, shadowX))
-    shadowY = Math.max(-pad, Math.min(bgH - canvasH + pad, shadowY))
+    // Crée une image noire RGBA dont l'alpha = (alphaPieds × 0.45) pour être subtil
+    const rgba = Buffer.alloc(w * h * 4)
+    for (let i = 0; i < w * h; i++) {
+      rgba[i * 4]     = 0
+      rgba[i * 4 + 1] = 0
+      rgba[i * 4 + 2] = 0
+      rgba[i * 4 + 3] = Math.round(alphaData[i] * 0.45)  // opacité globale 45% de l'alpha
+    }
+    const silhouette = await sharp(rgba, { raw: { width: w, height: h, channels: 4 } })
+      .png()
+      .toBuffer()
 
-    return { input: shadow, left: shadowX, top: shadowY }
+    // 3. Squash vertical ×0.22 → effet projection au sol
+    const squashedH = Math.max(4, Math.round(h * 0.22))
+    const squashedW = w
+    const squashed = await sharp(silhouette)
+      .resize({ width: squashedW, height: squashedH, fit: 'fill', kernel: 'lanczos3' })
+      .png()
+      .toBuffer()
+
+    // 4. Pad + blur fort pour rendre l'ombre très diffuse
+    const blurRadius = Math.max(6, Math.round(squashedH * 0.6))
+    const pad = blurRadius * 2
+    const canvasW = squashedW + pad * 2
+    const canvasH = squashedH + pad * 2
+    const shadow = await sharp({
+      create: { width: canvasW, height: canvasH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    })
+      .composite([{ input: squashed, left: pad, top: pad }])
+      .blur(blurRadius)
+      .png()
+      .toBuffer()
+
+    // 5. Position : pile sous les pieds, légèrement décalé vers le bas pour effet sol
+    const subjectFeetY = offsetY + subjBbox.top + subjBbox.height
+    const shadowX = offsetX + subjBbox.left - pad
+    const shadowY = subjectFeetY - Math.round(squashedH / 2) - pad + Math.round(squashedH * 0.3)
+
+    return {
+      input: shadow,
+      left: Math.max(-pad, Math.min(bgW - canvasW + pad, shadowX)),
+      top:  Math.max(-pad, Math.min(bgH - canvasH + pad, shadowY)),
+    }
   } catch (e) {
     console.warn('[shadow] failed', e)
     return { input: null, left: 0, top: 0 }
