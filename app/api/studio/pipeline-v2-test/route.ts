@@ -44,16 +44,23 @@ export async function POST(request: Request) {
 
     // ============= ÉTAPE 1 — GEMINI (draft mannequin+tenue+pose) =============
     const sessionId = Date.now()
+    // === Extraire la teinte dominante du fond user pour briefer Gemini ===
+    // On échantillonne le haut-centre du fond (zone "mur uniforme")
+    const bgPreview = await background.arrayBuffer()
+    const bgColor = await extractDominantBackgroundColor(Buffer.from(new Uint8Array(bgPreview)))
+    const bgHex = rgbToHex(bgColor.r, bgColor.g, bgColor.b)
+    debug.steps.targetBgColor = { hex: bgHex, ...bgColor }
+
     const intro = [
       `[SESSION ${sessionId}]`,
       'Generate a fashion editorial photograph of the model wearing the provided garments.',
-      '⚠ Output will be POST-PROCESSED : the model will be cut out and placed on a real background.',
-      'Focus 100% on : (1) the model identity, (2) the garments fidelity, (3) the pose, (4) the framing.',
+      '⚠ Output will be POST-PROCESSED : the model will be cut out and placed on the EXACT background shown as REFERENCE below.',
+      'Focus on : (1) the model identity, (2) the garments fidelity, (3) the pose, (4) the framing, (5) the BACKGROUND MATCHING.',
       '',
-      '⚠ CRITICAL — BACKGROUND : the background MUST be PURE WHITE (#FFFFFF), completely flat, uniform, with no gradients, no texture, no shadows on the wall.',
-      'A pure white background is REQUIRED for the post-processing matting algorithm to perfectly cut out fine details (hair strands, garment edges, accessories).',
-      'Do NOT generate any decor, furniture, gradient, or visible floor line — JUST the model centered on PURE WHITE.',
-      'The contrast between the model (especially the hair) and the pure white background must be MAXIMAL to allow clean hair detail extraction.',
+      `⚠ CRITICAL — BACKGROUND : generate the model on a background that EXACTLY MATCHES the color and ambient of the BACKGROUND REFERENCE image attached below. The dominant color of this reference is ${bgHex} (a soft neutral tone).`,
+      `Reproduce the SAME background color (${bgHex}), the SAME ambient lighting, the SAME texture / softness as in the reference.`,
+      'The background should be uniform (flat, no decor, no floor line, no gradient), matching the reference tone.',
+      'This is CRUCIAL : the matting algorithm preserves a few pixels of the original background in fine details (hair, fabric edges). If your background color matches the final scene, this halo will be INVISIBLE. If it does not match, a visible halo will ruin the result.',
       '',
       'FABRIC : all fabrics MUST appear properly ironed and crisp, no wrinkles.',
       '',
@@ -62,6 +69,11 @@ export async function POST(request: Request) {
     ].join('\n')
 
     const parts: any[] = [{ text: intro }]
+
+    // ★ Image fond user passée en référence visuelle à Gemini
+    parts.push({ text: `BACKGROUND REFERENCE — match the color (${bgHex}) and ambient of this background. Generate the model on a similar uniform background.` })
+    parts.push(await toInlinePart(background))
+
     parts.push({ text: 'MODEL BODY — use THIS exact body : morphology, height, skin tone, posture base.' })
     parts.push(await toInlinePart(mannequinBody))
     if (mannequinFace) {
@@ -155,18 +167,16 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'PHOTOROOM_API_KEY manquante (requise pour shadowMode photoroom).' }, { status: 500 })
       }
 
-      // === PRE-PROCESS : blanchir le fond Gemini avant Photoroom ===
-      // Gemini génère souvent un fond "presque blanc" gris-bleuté, ce qui crée
-      // un halo grisâtre dans les semi-transparences (cheveux fins notamment).
-      // En forçant tous les pixels "fond pâle" en blanc PUR (#FFFFFF), on garantit
-      // que Photoroom matte avec du blanc absolu → halo résiduel = blanc = invisible
-      // sur ton fond user clair.
+      // === PRE-PROCESS : harmoniser le fond Gemini vers la teinte du fond user ===
+      // Au lieu de forcer en blanc pur, on force vers la couleur dominante du fond user.
+      // Comme ça, même si Photoroom laisse un halo résiduel autour des cheveux,
+      // il sera de la MÊME teinte que le fond user → invisible au compositing.
       let geminiBufClean: Buffer = geminiBuf
       try {
-        geminiBufClean = await whitenBackground(geminiBuf)
-        debug.steps.whitenBg = { ok: true }
+        geminiBufClean = await harmonizeBackground(geminiBuf, bgColor.r, bgColor.g, bgColor.b)
+        debug.steps.harmonizeBg = { ok: true, target: bgHex }
       } catch (e: any) {
-        debug.steps.whitenBg = { error: e?.message ?? String(e), fallback: 'gemini raw' }
+        debug.steps.harmonizeBg = { error: e?.message ?? String(e), fallback: 'gemini raw' }
       }
 
       try {
@@ -465,26 +475,51 @@ function describeLighting(framing: string, userPrompt: string): string {
 }
 
 /**
- * Pre-process anti-halo : force tous les pixels "fond clair gris-bleuté" en blanc PUR.
- *
- * Critères pour identifier un pixel "fond" :
- *   - luminance > 215 (clair)
- *   - saturation < 0.12 (peu coloré)
- *   - chrominance proche du gris (R≈G≈B, écart < 20)
- *
- * Ces pixels sont remplacés par #FFFFFF. Le sujet (peau, cheveux, vêtements
- * colorés) ne matche pas ces critères → reste intact.
- *
- * Effet final : le halo gris-bleuté dans les semi-transparences (cheveux fins)
- * disparaît car Photoroom matte avec du blanc absolu.
+ * Extrait la couleur dominante du fond user en échantillonnant une zone
+ * censée être uniforme (haut-centre de l'image — généralement "le mur").
  */
-async function whitenBackground(imgBuf: Buffer): Promise<Buffer> {
+async function extractDominantBackgroundColor(imgBuf: Buffer): Promise<{ r: number; g: number; b: number }> {
+  const meta = await sharp(imgBuf).metadata()
+  const w = meta.width ?? 1024, h = meta.height ?? 1024
+  // Échantillonne une bande horizontale dans le tiers supérieur (zone "mur" probable)
+  const sampleY = Math.floor(h * 0.15)
+  const sampleH = Math.max(20, Math.floor(h * 0.10))
+  const sampleX = Math.floor(w * 0.30)
+  const sampleW = Math.floor(w * 0.40)
+
+  const stats = await sharp(imgBuf)
+    .extract({ left: sampleX, top: sampleY, width: sampleW, height: sampleH })
+    .removeAlpha()
+    .stats()
+
+  return {
+    r: Math.round(stats.channels[0].mean),
+    g: Math.round(stats.channels[1].mean),
+    b: Math.round(stats.channels[2].mean),
+  }
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const h = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0').toUpperCase()
+  return `#${h(r)}${h(g)}${h(b)}`
+}
+
+/**
+ * Harmonise le fond Gemini vers une couleur cible (celle du fond user).
+ *
+ * Pour chaque pixel "fond" identifié (clair, désaturé, neutre), on remplace
+ * sa couleur par la couleur cible. Le sujet reste intact.
+ *
+ * Effet : même si Photoroom laisse un halo résiduel, il sera de la même teinte
+ * que le fond user → INVISIBLE au compositing final.
+ */
+async function harmonizeBackground(imgBuf: Buffer, tR: number, tG: number, tB: number): Promise<Buffer> {
   const { data, info } = await sharp(imgBuf)
     .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true })
   const w = info.width, h = info.height, ch = info.channels
-  if (ch !== 3) throw new Error(`whitenBackground: expected 3 channels, got ${ch}`)
+  if (ch !== 3) throw new Error(`harmonizeBackground: expected 3 channels, got ${ch}`)
 
   const out = Buffer.from(data)
   for (let i = 0; i < w * h; i++) {
@@ -497,10 +532,11 @@ async function whitenBackground(imgBuf: Buffer): Promise<Buffer> {
     const sat = max > 0 ? (max - min) / max : 0
     const chromaDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b))
 
-    if (lum > 215 && sat < 0.12 && chromaDiff < 20) {
-      out[i * 3]     = 255
-      out[i * 3 + 1] = 255
-      out[i * 3 + 2] = 255
+    // Critères "fond pâle" : clair + peu saturé + presque neutre
+    if (lum > 200 && sat < 0.15 && chromaDiff < 25) {
+      out[i * 3]     = tR
+      out[i * 3 + 1] = tG
+      out[i * 3 + 2] = tB
     }
   }
 
