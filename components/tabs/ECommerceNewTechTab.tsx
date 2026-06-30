@@ -22,6 +22,7 @@ type TaskStatus = 'pending' | 'running' | 'done' | 'saved' | 'error' | 'skipped'
 type State = {
   task:       GenerationTask
   status:     TaskStatus
+  enabled:    boolean
   imageUrl?:  string
   error?:     string
 }
@@ -91,7 +92,7 @@ export default function ECommerceNewTechTab() {
       setParsed(res)
       // Garde uniquement les pose tasks (skip detail + inspi pour ce mode E-Com)
       const poseTasks = res.tasks.filter(t => t.taskType === 'pose')
-      const newStates: State[] = poseTasks.map(t => ({ task: t, status: 'pending' }))
+      const newStates: State[] = poseTasks.map(t => ({ task: t, status: 'pending', enabled: true }))
       setStates(newStates)
       statesRef.current = newStates
     } catch (e: any) {
@@ -162,7 +163,7 @@ export default function ECommerceNewTechTab() {
 
     const todo = statesRef.current
       .map((s, idx) => ({ s, idx }))
-      .filter(({ s }) => s.status !== 'done' && s.status !== 'saved')
+      .filter(({ s }) => s.enabled && s.status !== 'done' && s.status !== 'saved')
 
     const runOne = async ({ idx }: { idx: number }) => {
       const state = statesRef.current[idx]
@@ -260,14 +261,39 @@ export default function ECommerceNewTechTab() {
     setRunning(false)
   }
 
+  /* ----------- Toggle enabled ----------- */
+  const toggleTask = (taskId: string) => {
+    setStates(prev => {
+      const next = prev.map(s => s.task.id === taskId ? { ...s, enabled: !s.enabled } : s)
+      statesRef.current = next
+      return next
+    })
+  }
+  const toggleLook = (lookId: string, value: boolean) => {
+    setStates(prev => {
+      const next = prev.map(s => s.task.lookId === lookId ? { ...s, enabled: value } : s)
+      statesRef.current = next
+      return next
+    })
+  }
+  const setAllEnabled = (value: boolean) => {
+    setStates(prev => {
+      const next = prev.map(s => ({ ...s, enabled: value }))
+      statesRef.current = next
+      return next
+    })
+  }
+
   /* ----------- Stats ----------- */
   const stats = useMemo(() => {
     const total   = states.length
+    const enabled = states.filter(s => s.enabled).length
     const done    = states.filter(s => s.status === 'done' || s.status === 'saved').length
     const saved   = states.filter(s => s.status === 'saved').length
     const errors  = states.filter(s => s.status === 'error').length
     const runningN= states.filter(s => s.status === 'running').length
-    return { total, done, saved, errors, running: runningN }
+    const toRun   = states.filter(s => s.enabled && s.status !== 'done' && s.status !== 'saved').length
+    return { total, enabled, done, saved, errors, running: runningN, toRun }
   }, [states])
 
   // Group by look pour l'affichage
@@ -395,36 +421,64 @@ export default function ECommerceNewTechTab() {
 
       {states.length > 0 && (
         <div style={card}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
             <div style={label}>
-              3 — Tâches ({stats.total} · ✓ {stats.done} · 💾 {stats.saved} · ⏳ {stats.running} · ✕ {stats.errors})
+              3 — Tâches ({stats.enabled}/{stats.total} cochées · ✓ {stats.done} · 💾 {stats.saved} · ⏳ {stats.running} · ✕ {stats.errors})
             </div>
-            <button onClick={runGeneration} disabled={running || stats.total === 0}
-                    style={{ ...btn(running || stats.total === 0 ? '#9CA3AF' : '#0D4A5C'),
-                             cursor: running || stats.total === 0 ? 'not-allowed' : 'pointer' }}>
-              {running ? `⏳ ${progress || 'Génération…'}` : `🚀 Générer ${stats.total - stats.done} tâches`}
-            </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => setAllEnabled(true)} style={btn('#E5E7EB', '#374151')}>
+                ☑ Tout cocher
+              </button>
+              <button onClick={() => setAllEnabled(false)} style={btn('#E5E7EB', '#374151')}>
+                ☐ Tout décocher
+              </button>
+              <button onClick={runGeneration} disabled={running || stats.toRun === 0}
+                      style={{ ...btn(running || stats.toRun === 0 ? '#9CA3AF' : '#0D4A5C'),
+                               cursor: running || stats.toRun === 0 ? 'not-allowed' : 'pointer' }}>
+                {running ? `⏳ ${progress || 'Génération…'}` : `🚀 Générer ${stats.toRun} tâche${stats.toRun > 1 ? 's' : ''}`}
+              </button>
+            </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {groupedByLook.map(([lookId, items]) => {
               const numero = items[0]?.task.numeroLook || lookId
+              const allOn = items.every(i => i.enabled)
+              const anyOn = items.some(i => i.enabled)
               return (
                 <div key={lookId} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0D4A5C', marginBottom: 8 }}>
-                    <span style={{ color: '#6B7280', fontWeight: 500 }}>#{lookId}</span> · Look {numero}
-                    <span style={{ fontSize: 11, color: '#6B7280', marginLeft: 8 }}>
-                      ({items.length} vue{items.length > 1 ? 's' : ''})
-                    </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={allOn}
+                      ref={el => { if (el) el.indeterminate = anyOn && !allOn }}
+                      onChange={() => toggleLook(lookId, !allOn)}
+                      style={{ width: 16, height: 16, cursor: 'pointer' }}
+                      title={allOn ? 'Décocher tout le look' : 'Cocher tout le look'}
+                    />
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0D4A5C' }}>
+                      <span style={{ color: '#6B7280', fontWeight: 500 }}>#{lookId}</span> · Look {numero}
+                      <span style={{ fontSize: 11, color: '#6B7280', marginLeft: 8 }}>
+                        ({items.filter(i => i.enabled).length}/{items.length} cochée{items.length > 1 ? 's' : ''})
+                      </span>
+                    </div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
                     {items.map(s => {
                       const framing = extractFraming(s.task.vueRaw ?? '')
                       return (
                         <div key={s.task.id} style={{
-                          border: '1px solid #E5E7EB', borderRadius: 6, padding: 6, background: '#fff',
+                          border: '1px solid #E5E7EB', borderRadius: 6, padding: 6,
+                          background: s.enabled ? '#fff' : '#F9FAFB',
+                          opacity: s.enabled ? 1 : 0.55,
                         }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                            <input
+                              type="checkbox"
+                              checked={s.enabled}
+                              onChange={() => toggleTask(s.task.id)}
+                              style={{ width: 14, height: 14, cursor: 'pointer' }}
+                            />
                             {s.status === 'pending' && <span style={pill('#9CA3AF')}>•</span>}
                             {s.status === 'running' && <span style={pill('#F59E0B')}>⏳</span>}
                             {s.status === 'done'    && <span style={pill('#3B82F6')}>✓</span>}
