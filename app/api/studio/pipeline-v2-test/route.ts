@@ -465,6 +465,49 @@ function describeLighting(framing: string, userPrompt: string): string {
 }
 
 /**
+ * Pre-process anti-halo : force tous les pixels "fond clair gris-bleuté" en blanc PUR.
+ *
+ * Critères pour identifier un pixel "fond" :
+ *   - luminance > 215 (clair)
+ *   - saturation < 0.12 (peu coloré)
+ *   - chrominance proche du gris (R≈G≈B, écart < 20)
+ *
+ * Ces pixels sont remplacés par #FFFFFF. Le sujet (peau, cheveux, vêtements
+ * colorés) ne matche pas ces critères → reste intact.
+ *
+ * Effet final : le halo gris-bleuté dans les semi-transparences (cheveux fins)
+ * disparaît car Photoroom matte avec du blanc absolu.
+ */
+async function whitenBackground(imgBuf: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(imgBuf)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  const w = info.width, h = info.height, ch = info.channels
+  if (ch !== 3) throw new Error(`whitenBackground: expected 3 channels, got ${ch}`)
+
+  const out = Buffer.from(data)
+  for (let i = 0; i < w * h; i++) {
+    const r = out[i * 3]
+    const g = out[i * 3 + 1]
+    const b = out[i * 3 + 2]
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const sat = max > 0 ? (max - min) / max : 0
+    const chromaDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b))
+
+    if (lum > 215 && sat < 0.12 && chromaDiff < 20) {
+      out[i * 3]     = 255
+      out[i * 3 + 1] = 255
+      out[i * 3 + 2] = 255
+    }
+  }
+
+  return await sharp(out, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer()
+}
+
+/**
  * Détecte la ligne d'horizon (transition mur → sol) d'un fond studio.
  * Méthode : scan vertical d'une bande centrale, on cherche la position avec
  * le gradient de luminance le plus marqué dans la moitié basse de l'image.
