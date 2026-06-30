@@ -133,8 +133,31 @@ export async function POST(request: Request) {
         //          ai.hard = ombre plus marquée
         form.append('shadow.mode', shadowMode === 'photoroom-soft' ? 'ai.soft' : 'ai.hard')
 
-        // Préserve position et taille du sujet telles qu'elles sont dans Gemini
-        form.append('referenceBox', 'originalImage')
+        // === Placement vertical du sujet (slider horizonPct du user) ===
+        // Si horizonPct est défini (ex 85%), on dit à Photoroom :
+        //   - mode outputImage : on peut spécifier le placement
+        //   - verticalAlignment=bottom : ancre le sujet en bas
+        //   - padding.bottom = (100 - horizonPct)% du canvas
+        //   → résultat : pieds du sujet pile sur la ligne horizon
+        const horizonPctRaw = formData.get('horizonPct') as string | null
+        const horizonPctVal = horizonPctRaw ? parseFloat(horizonPctRaw) : NaN
+        if (!isNaN(horizonPctVal) && horizonPctVal > 0.3 && horizonPctVal < 1.0) {
+          form.append('referenceBox', 'outputImage')
+          form.append('verticalAlignment', 'bottom')
+          // padding.bottom en % → "10%" pour horizon à 90%
+          const paddingBottomPct = Math.round((1 - horizonPctVal) * 100)
+          form.append('padding.bottom', `${paddingBottomPct}%`)
+          // padding latéral 5% pour ne pas coller aux bords
+          form.append('padding.left', '5%')
+          form.append('padding.right', '5%')
+          form.append('horizontalAlignment', 'center')
+          debug.steps.photoroom_placement = { mode: 'outputImage', verticalAlignment: 'bottom', paddingBottom: `${paddingBottomPct}%` }
+        } else {
+          // Sans horizonPct : Photoroom gère le placement automatiquement
+          form.append('referenceBox', 'originalImage')
+          debug.steps.photoroom_placement = { mode: 'originalImage' }
+        }
+
         // PNG lossless pour qualité max
         form.append('outputFormat', 'png')
 

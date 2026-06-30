@@ -183,23 +183,21 @@ export default function PipelineV2TestTab() {
             ))}
           </div>
         </div>
-        {shadowMode === 'custom' && (
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
-              Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct}%</strong>
-              <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
-                (utilisé uniquement en mode Custom)
-              </span>
-            </div>
-            <input
-              type="range"
-              min={50} max={95} step={1}
-              value={horizonPct}
-              onChange={e => setHorizonPct(parseInt(e.target.value, 10))}
-              style={{ width: '100%' }}
-            />
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+            Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct}%</strong>
+            <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
+              (les pieds du mannequin seront posés à cette ligne — ajuste selon ton fond, ex 85% pour BON_FOND_OFFICIEL)
+            </span>
           </div>
-        )}
+          <input
+            type="range"
+            min={50} max={95} step={1}
+            value={horizonPct}
+            onChange={e => setHorizonPct(parseInt(e.target.value, 10))}
+            style={{ width: '100%' }}
+          />
+        </div>
         <div style={{ marginTop: 14 }}>
           <button onClick={runOne} disabled={!canRun}
                   style={{ ...btn(canRun ? '#0D4A5C' : '#9CA3AF'), cursor: canRun ? 'pointer' : 'not-allowed' }}>
