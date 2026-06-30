@@ -137,24 +137,32 @@ export async function POST(request: Request) {
     const isUpperBody   = fLow.includes('haut') || fLow.includes('upper')
     const isLowerBody   = fLow.includes('bas')  || fLow.includes('lower')
 
-    // Calcule taille cible du sujet en % de la hauteur du canvas
-    let targetHeightRatio: number  // % de bgH occupé par le sujet
-    let anchorY: 'bottom' | 'center' | 'top'  // alignement vertical
+    // Détection automatique de la ligne d'horizon (sol vs mur) du fond.
+    // On scan une bande verticale au centre et on cherche le gradient le plus fort
+    // (transition mur → sol). Si la détection est faible, on fallback à 78%.
+    const horizonY = await detectHorizonLine(bgBuf, bgW, bgH)
+    debug.steps.horizonY = horizonY
+
+    // Calcule taille cible du sujet en % de la hauteur du canvas + anchor
+    let targetHeightRatio: number
+    let anchorMode: 'feet_on_horizon' | 'center' | 'top_aligned'
     if (isFullBody) {
-      targetHeightRatio = 0.85   // sujet = 85% de la hauteur, ancré au bas
-      anchorY = 'bottom'
+      // Plein-pied : le sujet doit occuper du sommet jusqu'à la ligne d'horizon (sol).
+      // On veut une marge de 5-8% en haut pour la headroom.
+      targetHeightRatio = (horizonY / bgH) - 0.06   // distance du top au sol, moins 6% de headroom
+      anchorMode = 'feet_on_horizon'
     } else if (isMidBody) {
-      targetHeightRatio = 0.80
-      anchorY = 'bottom'
+      targetHeightRatio = 0.78
+      anchorMode = 'feet_on_horizon'
     } else if (isUpperBody) {
-      targetHeightRatio = 0.75   // buste, plus grand
-      anchorY = 'center'
+      targetHeightRatio = 0.70   // buste seul
+      anchorMode = 'center'
     } else if (isLowerBody) {
-      targetHeightRatio = 0.75
-      anchorY = 'bottom'
+      targetHeightRatio = 0.72
+      anchorMode = 'feet_on_horizon'
     } else {
       targetHeightRatio = 0.85
-      anchorY = 'bottom'
+      anchorMode = 'feet_on_horizon'
     }
 
     const targetH = Math.round(bgH * targetHeightRatio)
@@ -167,48 +175,67 @@ export async function POST(request: Request) {
 
     const offsetX = Math.round((bgW - newW) / 2)
     let offsetY: number
-    if (anchorY === 'bottom')      offsetY = bgH - newH - Math.round(bgH * 0.02)  // 2% de marge bas
-    else if (anchorY === 'center') offsetY = Math.round((bgH - newH) / 2)
-    else                            offsetY = Math.round(bgH * 0.05)               // 5% de marge top
+    if (anchorMode === 'feet_on_horizon') {
+      // Pieds du sujet pile sur la ligne d'horizon détectée
+      offsetY = horizonY - newH
+    } else if (anchorMode === 'center') {
+      offsetY = Math.round((bgH - newH) / 2)
+    } else {
+      offsetY = Math.round(bgH * 0.05)
+    }
+    offsetY = Math.max(0, Math.min(bgH - newH, offsetY))
+    debug.steps.composite = { offsetX, offsetY, newW, newH, anchorMode, horizonY, targetHeightRatio }
 
-    // Composite : fond → sujet
+    // === Génération d'une ombre de contact douce sous le sujet ===
+    // Ellipse noire floue placée sous les pieds (cohérent avec un sol plat).
+    // Plus fiable qu'IC-Light qui hallucine des ombres complexes.
+    const shadowComp = await buildContactShadow(subjectResized, newW, newH, offsetX, offsetY, bgW, bgH)
+    const composites: any[] = []
+    if (shadowComp.input) {
+      composites.push({ input: shadowComp.input, left: shadowComp.left, top: shadowComp.top, blend: 'multiply' })
+    }
+    composites.push({ input: subjectResized, left: offsetX, top: offsetY, blend: 'over' })
     const compositeBuf = await sharp(bgBuf)
-      .composite([{ input: subjectResized, left: Math.max(0, offsetX), top: Math.max(0, offsetY), blend: 'over' }])
+      .composite(composites)
       .png().toBuffer()
-    debug.steps.composite = { offsetX, offsetY, newW, newH, anchorY }
 
-    // ============= ÉTAPE 4 — IC-Light (ré-illumination cohérente) =============
+    // ============= ÉTAPE 4 — IC-Light (DÉSACTIVÉ par défaut) =============
+    // IC-Light v2 hallucinait des ombres de fenêtre sur fond uniforme.
+    // L'ombre de contact custom (étape précédente) est plus fiable pour ce cas.
+    // Si le user le demande explicitement (?use_iclight=1), on l'active.
+    const url = new URL(request.url)
+    const useIcLight = url.searchParams.get('use_iclight') === '1'
     let finalBuf: Buffer = compositeBuf
     let icLightError: string | undefined
-    try {
-      const compositeFile = new File([new Uint8Array(compositeBuf)], 'composite.png', { type: 'image/png' })
-      const compositeFalUrl = await fal.storage.upload(compositeFile)
-
-      const lightingPrompt = describeLighting(framing, userPrompt)
-      const icLightResult: any = await fal.subscribe('fal-ai/iclight-v2', {
-        input: {
-          prompt: lightingPrompt,
-          image_url: compositeFalUrl,
-          enable_safety_checker: false,
-        },
-        logs: false,
-      })
-      const relightUrl: string | undefined = icLightResult?.data?.images?.[0]?.url
-        ?? icLightResult?.images?.[0]?.url
-        ?? icLightResult?.data?.image?.url
-        ?? icLightResult?.image?.url
-      if (relightUrl) {
-        const relightArrBuf = await fetch(relightUrl).then(r => r.arrayBuffer())
-        finalBuf = Buffer.from(new Uint8Array(relightArrBuf))
-        debug.steps.iclight = { url: relightUrl, bytes: finalBuf.length }
-      } else {
-        icLightError = 'IC-Light sans URL renvoyée. Composite brut utilisé.'
-        debug.steps.iclight = { error: icLightError, raw: icLightResult }
+    if (useIcLight) {
+      try {
+        const compositeFile = new File([new Uint8Array(compositeBuf)], 'composite.png', { type: 'image/png' })
+        const compositeFalUrl = await fal.storage.upload(compositeFile)
+        const icLightResult: any = await fal.subscribe('fal-ai/iclight-v2', {
+          input: {
+            prompt: describeLighting(framing, userPrompt),
+            image_url: compositeFalUrl,
+            enable_safety_checker: false,
+          },
+          logs: false,
+        })
+        const relightUrl: string | undefined = icLightResult?.data?.images?.[0]?.url
+          ?? icLightResult?.images?.[0]?.url
+          ?? icLightResult?.data?.image?.url
+          ?? icLightResult?.image?.url
+        if (relightUrl) {
+          const relightArrBuf = await fetch(relightUrl).then(r => r.arrayBuffer())
+          finalBuf = Buffer.from(new Uint8Array(relightArrBuf))
+          debug.steps.iclight = { url: relightUrl, bytes: finalBuf.length }
+        } else {
+          icLightError = 'IC-Light sans URL renvoyée.'
+        }
+      } catch (err: any) {
+        icLightError = err?.message ?? String(err)
+        debug.steps.iclight = { error: icLightError }
       }
-    } catch (err: any) {
-      icLightError = err?.message ?? String(err)
-      console.warn('[pipeline-v2] IC-Light failed:', icLightError)
-      debug.steps.iclight = { error: icLightError }
+    } else {
+      debug.steps.iclight = { skipped: 'disabled by default — add ?use_iclight=1 to enable' }
     }
 
     // ============= ÉTAPE 5 — Upload Vercel Blob =============
@@ -274,6 +301,100 @@ function describeLighting(framing: string, userPrompt: string): string {
     'photo-realistic, editorial quality, no harsh highlights',
     userPrompt && `Context : ${userPrompt}`,
   ].filter(Boolean).join(', ')
+}
+
+/**
+ * Détecte la ligne d'horizon (transition mur → sol) d'un fond studio.
+ * Méthode : scan vertical d'une bande centrale, on cherche la position avec
+ * le gradient de luminance le plus marqué dans la moitié basse de l'image.
+ * Fallback à 78% si pas de gradient clair.
+ */
+async function detectHorizonLine(bgBuf: Buffer, bgW: number, bgH: number): Promise<number> {
+  try {
+    const stripeW = Math.max(1, Math.floor(bgW * 0.5))   // bande de 50% au centre
+    const stripeX = Math.floor((bgW - stripeW) / 2)
+    const { data, info } = await sharp(bgBuf)
+      .extract({ left: stripeX, top: 0, width: stripeW, height: bgH })
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true })
+    // Pour chaque y, moyenne de luminance
+    const rowMeans: number[] = []
+    for (let y = 0; y < info.height; y++) {
+      let sum = 0
+      for (let x = 0; x < info.width; x++) sum += data[y * info.width + x]
+      rowMeans.push(sum / info.width)
+    }
+    // Gradient absolu entre rangées (avec lissage simple)
+    let bestY = -1
+    let bestGrad = 0
+    const minY = Math.floor(bgH * 0.55)   // on cherche dans la moitié basse seulement
+    const maxY = Math.floor(bgH * 0.95)
+    for (let y = minY; y < maxY; y++) {
+      const grad = Math.abs(rowMeans[y] - rowMeans[y - 4])
+      if (grad > bestGrad) {
+        bestGrad = grad
+        bestY = y
+      }
+    }
+    if (bestY > 0 && bestGrad > 5) return bestY
+    return Math.floor(bgH * 0.78)
+  } catch {
+    return Math.floor(bgH * 0.78)
+  }
+}
+
+/**
+ * Construit une ombre de contact douce sous le sujet.
+ * Technique : alpha du sujet → ellipse aplatie noire floue → décalée vers le bas.
+ * Donne une ombre physiquement cohérente (ovale sous les pieds) plutôt qu'une
+ * silhouette qui suit la forme du sujet (pas naturel pour une ombre au sol).
+ */
+async function buildContactShadow(
+  subjectResized: Buffer, newW: number, newH: number, offsetX: number, offsetY: number,
+  bgW: number, bgH: number,
+): Promise<{ input: Buffer | null; left: number; top: number }> {
+  try {
+    // Trouve la bbox réelle du sujet RESIZÉ pour ancrer l'ombre sous les vrais pieds
+    const subjBbox = await findAlphaBoundingBox(subjectResized, 20)
+    if (!subjBbox) return { input: null, left: 0, top: 0 }
+
+    // Largeur ombre = ~90% de la largeur réelle du sujet (au sol)
+    const shadowW = Math.round(subjBbox.width * 0.9)
+    const shadowH = Math.max(6, Math.round(subjBbox.width * 0.08))   // ellipse aplatie
+    if (shadowW < 4 || shadowH < 2) return { input: null, left: 0, top: 0 }
+
+    // Padding autour pour que le flou n'ait pas un bord net
+    const pad = Math.round(shadowH * 0.8)
+    const canvasW = shadowW + pad * 2
+    const canvasH = shadowH + pad * 2
+
+    const svg = `<svg width="${canvasW}" height="${canvasH}" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="${canvasW/2}" cy="${canvasH/2}" rx="${shadowW/2}" ry="${shadowH/2}"
+               fill="white" opacity="0.55"/>
+    </svg>`
+    // Crée l'ellipse, floute, puis inverse pour avoir une zone noire à multiplier sur le fond
+    const shadow = await sharp(Buffer.from(svg))
+      .blur(Math.max(4, Math.round(shadowH * 0.8)))
+      .negate({ alpha: false })   // blanc → noir, garde l'alpha
+      .png()
+      .toBuffer()
+
+    // Position : centré sur le sujet réel, au niveau des pieds
+    const subjectCenterX = offsetX + subjBbox.left + Math.round(subjBbox.width / 2)
+    const subjectFeetY   = offsetY + subjBbox.top + subjBbox.height
+    let shadowX = subjectCenterX - Math.round(canvasW / 2)
+    let shadowY = subjectFeetY - Math.round(canvasH / 2) + Math.round(shadowH * 0.4)
+
+    // Bound
+    shadowX = Math.max(-pad, Math.min(bgW - canvasW + pad, shadowX))
+    shadowY = Math.max(-pad, Math.min(bgH - canvasH + pad, shadowY))
+
+    return { input: shadow, left: shadowX, top: shadowY }
+  } catch (e) {
+    console.warn('[shadow] failed', e)
+    return { input: null, left: 0, top: 0 }
+  }
 }
 
 async function findAlphaBoundingBox(imgBuf: Buffer, threshold = 20)
