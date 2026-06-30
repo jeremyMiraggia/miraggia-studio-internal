@@ -115,10 +115,38 @@ export async function POST(request: Request) {
     const shadowMode = (formData.get('shadowMode') as string | null) ?? 'photoroom-soft'
     debug.steps.shadowMode = shadowMode
 
-    const bgArrBuf = await background.arrayBuffer()
-    const bgBuf = Buffer.from(new Uint8Array(bgArrBuf))
+    const bgArrBufRaw = await background.arrayBuffer()
+    const bgBufRaw = Buffer.from(new Uint8Array(bgArrBufRaw))
+    const bgMetaRaw = await sharp(bgBufRaw).metadata()
+    const bgWRaw = bgMetaRaw.width ?? 1024, bgHRaw = bgMetaRaw.height ?? 1536
+
+    // === AUTO-CROP du fond selon framing ===
+    // Pour close-up haut : on garde uniquement les 55% du haut du fond (mur, pas de sol)
+    // Pour mi-corps : on garde 75% du haut
+    // Pour close-up bas : on garde les 60% du bas (sol + bas du mur)
+    // Pour plein-pied : on garde tout
+    const fLowEarly = framing.toLowerCase()
+    let cropTop = 0, cropHeight = bgHRaw
+    if (fLowEarly.includes('haut') || fLowEarly.includes('upper')) {
+      cropHeight = Math.round(bgHRaw * 0.55)
+      cropTop = 0
+    } else if (fLowEarly.includes('mi')) {
+      cropHeight = Math.round(bgHRaw * 0.75)
+      cropTop = 0
+    } else if (fLowEarly.includes('bas') || fLowEarly.includes('lower')) {
+      cropHeight = Math.round(bgHRaw * 0.60)
+      cropTop = bgHRaw - cropHeight
+    }
+    // Plein-pied : pas de crop
+
+    const bgBuf = (cropHeight === bgHRaw && cropTop === 0)
+      ? bgBufRaw
+      : await sharp(bgBufRaw)
+          .extract({ left: 0, top: cropTop, width: bgWRaw, height: cropHeight })
+          .png().toBuffer()
     const bgMeta = await sharp(bgBuf).metadata()
-    const bgW = bgMeta.width ?? 1024, bgH = bgMeta.height ?? 1536
+    const bgW = bgMeta.width ?? bgWRaw, bgH = bgMeta.height ?? cropHeight
+    debug.steps.bgCrop = { framing, cropTop, cropHeight, originalH: bgHRaw, croppedH: bgH }
 
     // ============= MODE PHOTOROOM (recommandé) =============
     if (shadowMode === 'photoroom-soft' || shadowMode === 'photoroom-hard') {
@@ -127,11 +155,25 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'PHOTOROOM_API_KEY manquante (requise pour shadowMode photoroom).' }, { status: 500 })
       }
 
+      // === PRE-PROCESS : blanchir le fond Gemini avant Photoroom ===
+      // Gemini génère souvent un fond "presque blanc" gris-bleuté, ce qui crée
+      // un halo grisâtre dans les semi-transparences (cheveux fins notamment).
+      // En forçant tous les pixels "fond pâle" en blanc PUR (#FFFFFF), on garantit
+      // que Photoroom matte avec du blanc absolu → halo résiduel = blanc = invisible
+      // sur ton fond user clair.
+      let geminiBufClean: Buffer = geminiBuf
+      try {
+        geminiBufClean = await whitenBackground(geminiBuf)
+        debug.steps.whitenBg = { ok: true }
+      } catch (e: any) {
+        debug.steps.whitenBg = { error: e?.message ?? String(e), fallback: 'gemini raw' }
+      }
+
       try {
         const form = new FormData()
-        // imageFile = sujet brut Gemini (Photoroom détoure + analyse lumière + génère ombre)
-        const geminiBlob = new Blob([new Uint8Array(geminiBuf)], { type: geminiMime })
-        form.append('imageFile', geminiBlob, geminiMime === 'image/png' ? 'gemini.png' : 'gemini.jpg')
+        // imageFile = sujet Gemini avec fond blanchi (matting plus propre)
+        const geminiBlob = new Blob([new Uint8Array(geminiBufClean)], { type: 'image/png' })
+        form.append('imageFile', geminiBlob, 'gemini.png')
         // background.imageFile = fond user (Photoroom le préserve pixel-perfect)
         const bgBlob = new Blob([new Uint8Array(bgBuf)], { type: 'image/png' })
         form.append('background.imageFile', bgBlob, 'background.png')
