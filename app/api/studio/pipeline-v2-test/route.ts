@@ -65,7 +65,9 @@ export async function POST(request: Request) {
       'FABRIC : all fabrics MUST appear properly ironed and crisp, no wrinkles.',
       '',
       `Project prompt : ${userPrompt || '(none)'}`,
-      `FRAMING : ${describeFraming(framing)}`,
+      // ⚠ On demande TOUJOURS un plein-pied à Gemini, peu importe le framing demandé.
+      // Le crop au framing voulu est fait à la fin sur l'image finale.
+      `FRAMING : ${describeFraming('plein')}`,
     ].join('\n')
 
     const parts: any[] = [{ text: intro }]
@@ -127,38 +129,15 @@ export async function POST(request: Request) {
     const shadowMode = (formData.get('shadowMode') as string | null) ?? 'photoroom-soft'
     debug.steps.shadowMode = shadowMode
 
-    const bgArrBufRaw = await background.arrayBuffer()
-    const bgBufRaw = Buffer.from(new Uint8Array(bgArrBufRaw))
-    const bgMetaRaw = await sharp(bgBufRaw).metadata()
-    const bgWRaw = bgMetaRaw.width ?? 1024, bgHRaw = bgMetaRaw.height ?? 1536
-
-    // === AUTO-CROP du fond selon framing ===
-    // Pour close-up haut : on garde uniquement les 55% du haut du fond (mur, pas de sol)
-    // Pour mi-corps : on garde 75% du haut
-    // Pour close-up bas : on garde les 60% du bas (sol + bas du mur)
-    // Pour plein-pied : on garde tout
-    const fLowEarly = framing.toLowerCase()
-    let cropTop = 0, cropHeight = bgHRaw
-    if (fLowEarly.includes('haut') || fLowEarly.includes('upper')) {
-      cropHeight = Math.round(bgHRaw * 0.55)
-      cropTop = 0
-    } else if (fLowEarly.includes('mi')) {
-      cropHeight = Math.round(bgHRaw * 0.75)
-      cropTop = 0
-    } else if (fLowEarly.includes('bas') || fLowEarly.includes('lower')) {
-      cropHeight = Math.round(bgHRaw * 0.60)
-      cropTop = bgHRaw - cropHeight
-    }
-    // Plein-pied : pas de crop
-
-    const bgBuf = (cropHeight === bgHRaw && cropTop === 0)
-      ? bgBufRaw
-      : await sharp(bgBufRaw)
-          .extract({ left: 0, top: cropTop, width: bgWRaw, height: cropHeight })
-          .png().toBuffer()
+    // ⚠ On ne crop PLUS le fond avant Photoroom. Le crop se fait sur l'image
+    // finale (après composition Photoroom) selon le framing. Comme ça :
+    //   - Gemini génère toujours plein-pied (cadrage simple, peu ambigu)
+    //   - Photoroom compose sur le fond user complet (ratio cohérent)
+    //   - Sharp crop ENSUITE pour produire le framing voulu
+    const bgArrBuf = await background.arrayBuffer()
+    const bgBuf = Buffer.from(new Uint8Array(bgArrBuf))
     const bgMeta = await sharp(bgBuf).metadata()
-    const bgW = bgMeta.width ?? bgWRaw, bgH = bgMeta.height ?? cropHeight
-    debug.steps.bgCrop = { framing, cropTop, cropHeight, originalH: bgHRaw, croppedH: bgH }
+    const bgW = bgMeta.width ?? 1024, bgH = bgMeta.height ?? 1536
 
     // ============= MODE PHOTOROOM (recommandé) =============
     if (shadowMode === 'photoroom-soft' || shadowMode === 'photoroom-hard') {
@@ -214,10 +193,43 @@ export async function POST(request: Request) {
           const errTxt = await res.text().catch(() => '')
           throw new Error(`Photoroom HTTP ${res.status}: ${errTxt.slice(0, 300)}`)
         }
-        const finalBuf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
+        let finalBuf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
         debug.steps.photoroom = { ok: true, bytes: finalBuf.length, mode: shadowMode }
 
-        // Upload Vercel Blob + return (court-circuit le reste du pipeline)
+        // === CROP FINAL selon framing (côté serveur, après Photoroom) ===
+        // Le mannequin Gemini était toujours plein-pied. On crop la zone d'intérêt :
+        //   - close-up haut : top 55%
+        //   - mi-corps : top 75%
+        //   - close-up bas : bottom 50%
+        //   - plein-pied : pas de crop
+        try {
+          const finalMeta = await sharp(finalBuf).metadata()
+          const fW = finalMeta.width ?? bgW, fH = finalMeta.height ?? bgH
+          const fLow = framing.toLowerCase()
+          let cropTop = 0, cropHeight = fH
+          if (fLow.includes('haut') || fLow.includes('upper')) {
+            cropHeight = Math.round(fH * 0.55)
+            cropTop = 0
+          } else if (fLow.includes('mi')) {
+            cropHeight = Math.round(fH * 0.75)
+            cropTop = 0
+          } else if (fLow.includes('bas') || fLow.includes('lower')) {
+            cropHeight = Math.round(fH * 0.50)
+            cropTop = fH - cropHeight
+          }
+          if (cropHeight !== fH || cropTop !== 0) {
+            finalBuf = await sharp(finalBuf)
+              .extract({ left: 0, top: cropTop, width: fW, height: cropHeight })
+              .png().toBuffer()
+            debug.steps.finalCrop = { framing, cropTop, cropHeight, originalH: fH }
+          } else {
+            debug.steps.finalCrop = { framing, skipped: 'plein-pied' }
+          }
+        } catch (e: any) {
+          debug.steps.finalCrop = { error: e?.message ?? String(e) }
+        }
+
+        // Upload Vercel Blob + return
         let imageUrl: string
         let blobError: string | undefined
         try {
