@@ -137,14 +137,23 @@ export async function POST(request: Request) {
     const isUpperBody   = fLow.includes('haut') || fLow.includes('upper')
     const isLowerBody   = fLow.includes('bas')  || fLow.includes('lower')
 
-    // Détection automatique de la ligne d'horizon (sol vs mur) du fond.
-    // En cas d'échec → fallback hardcodé à 78%.
+    // Ligne d'horizon : si l'user a fourni horizonPct (slider UI), on l'utilise.
+    // Sinon, on essaie l'auto-détection. Fallback hardcodé à 80%.
+    const horizonPctRaw = formData.get('horizonPct') as string | null
+    const horizonPct = horizonPctRaw ? parseFloat(horizonPctRaw) : NaN
     let horizonY: number
-    try {
-      horizonY = await detectHorizonLine(bgBuf, bgW, bgH)
-    } catch (e: any) {
-      horizonY = Math.floor(bgH * 0.78)
-      debug.steps.horizonY_error = e?.message ?? String(e)
+    if (!isNaN(horizonPct) && horizonPct > 0.3 && horizonPct < 1.0) {
+      horizonY = Math.floor(bgH * horizonPct)
+      debug.steps.horizonY_source = `manual (${(horizonPct * 100).toFixed(0)}%)`
+    } else {
+      try {
+        horizonY = await detectHorizonLine(bgBuf, bgW, bgH)
+        debug.steps.horizonY_source = 'auto'
+      } catch (e: any) {
+        horizonY = Math.floor(bgH * 0.80)
+        debug.steps.horizonY_error = e?.message ?? String(e)
+        debug.steps.horizonY_source = 'fallback'
+      }
     }
     debug.steps.horizonY = horizonY
 
@@ -383,31 +392,33 @@ async function buildContactShadow(
     const subjBbox = await findAlphaBoundingBox(subjectResized, 20)
     if (!subjBbox) return { input: null, left: 0, top: 0 }
 
-    // Largeur ombre = ~90% de la largeur réelle du sujet (au sol)
-    const shadowW = Math.round(subjBbox.width * 0.9)
-    const shadowH = Math.max(6, Math.round(subjBbox.width * 0.08))   // ellipse aplatie
+    // Largeur ombre = ~110% de la largeur sujet (déborde un peu sur les côtés)
+    // Hauteur = ~12% de la largeur (ellipse bien aplatie, lecture sol)
+    const shadowW = Math.round(subjBbox.width * 1.1)
+    const shadowH = Math.max(10, Math.round(subjBbox.width * 0.12))
     if (shadowW < 4 || shadowH < 2) return { input: null, left: 0, top: 0 }
 
     // Padding autour pour que le flou n'ait pas un bord net
-    const pad = Math.round(shadowH * 0.8)
+    const pad = Math.round(shadowH * 1.0)
     const canvasW = shadowW + pad * 2
     const canvasH = shadowH + pad * 2
 
-    // SVG : ellipse noire directement avec opacité — pas de negate (qui pose pb avec alpha)
+    // Ellipse noire + opacité plus forte pour rester visible après le flou
     const svg = `<svg width="${canvasW}" height="${canvasH}" xmlns="http://www.w3.org/2000/svg">
       <ellipse cx="${canvasW/2}" cy="${canvasH/2}" rx="${shadowW/2}" ry="${shadowH/2}"
-               fill="black" fill-opacity="0.35"/>
+               fill="black" fill-opacity="0.55"/>
     </svg>`
     const shadow = await sharp(Buffer.from(svg))
-      .blur(Math.max(4, Math.round(shadowH * 0.8)))
+      .blur(Math.max(6, Math.round(shadowH * 0.5)))
       .png()
       .toBuffer()
 
-    // Position : centré sur le sujet réel, au niveau des pieds
+    // Position : centré sur le sujet, ancré juste après les pieds (sous le sol)
     const subjectCenterX = offsetX + subjBbox.left + Math.round(subjBbox.width / 2)
     const subjectFeetY   = offsetY + subjBbox.top + subjBbox.height
     let shadowX = subjectCenterX - Math.round(canvasW / 2)
-    let shadowY = subjectFeetY - Math.round(canvasH / 2) + Math.round(shadowH * 0.4)
+    // L'ellipse part LÉGÈREMENT au-dessus des pieds (effet pied posé sur ombre)
+    let shadowY = subjectFeetY - Math.round(canvasH / 2)
 
     // Bound
     shadowX = Math.max(-pad, Math.min(bgW - canvasW + pad, shadowX))
