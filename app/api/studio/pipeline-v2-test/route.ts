@@ -28,6 +28,7 @@ export async function POST(request: Request) {
     const products      = formData.getAll('products').filter((v): v is File => v instanceof File)
     const framing       = (formData.get('framing') as string | null) ?? 'plein'
     const ratio         = (formData.get('ratio')   as string | null) ?? '9:16'
+    const quality       = (formData.get('quality') as string | null) ?? '2K'
     const userPrompt    = (formData.get('prompt')  as string | null) ?? ''
 
     if (!background)    return NextResponse.json({ error: 'background requis.' },    { status: 400 })
@@ -46,9 +47,14 @@ export async function POST(request: Request) {
     const intro = [
       `[SESSION ${sessionId}]`,
       'Generate a fashion editorial photograph of the model wearing the provided garments.',
-      '⚠ Output will be POST-PROCESSED : background will be replaced + sujet ré-illuminé.',
+      '⚠ Output will be POST-PROCESSED : the model will be cut out and placed on a real background.',
       'Focus 100% on : (1) the model identity, (2) the garments fidelity, (3) the pose, (4) the framing.',
-      'Background can be a simple neutral studio — it will be REPLACED by a real photo.',
+      '',
+      '⚠ CRITICAL — BACKGROUND : the background MUST be PURE WHITE (#FFFFFF), completely flat, uniform, with no gradients, no texture, no shadows on the wall.',
+      'A pure white background is REQUIRED for the post-processing matting algorithm to perfectly cut out fine details (hair strands, garment edges, accessories).',
+      'Do NOT generate any decor, furniture, gradient, or visible floor line — JUST the model centered on PURE WHITE.',
+      'The contrast between the model (especially the hair) and the pure white background must be MAXIMAL to allow clean hair detail extraction.',
+      '',
       'FABRIC : all fabrics MUST appear properly ironed and crisp, no wrinkles.',
       '',
       `Project prompt : ${userPrompt || '(none)'}`,
@@ -67,11 +73,12 @@ export async function POST(request: Request) {
       for (const f of products) parts.push(await toInlinePart(f))
     }
 
+    const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiBody = JSON.stringify({
       contents: [{ parts }],
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
-        imageConfig: { aspectRatio: ratio, imageSize: '2K' },
+        imageConfig: { aspectRatio: ratio, imageSize },
       },
       safetySettings: [
         { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_ONLY_HIGH' },

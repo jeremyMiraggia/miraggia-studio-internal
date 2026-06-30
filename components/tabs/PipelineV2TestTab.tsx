@@ -28,6 +28,7 @@ export default function PipelineV2TestTab() {
 
   const [framing, setFraming]     = useState('plein')
   const [ratio, setRatio]         = useState('9:16')
+  const [quality, setQuality]     = useState('2K')
   const [prompt, setPrompt]       = useState('')
   const [horizonPct, setHorizonPct] = useState(80)   // % de la hauteur du fond où est la ligne du sol
   const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('photoroom-soft')
@@ -59,6 +60,7 @@ export default function PipelineV2TestTab() {
       for (const p of prods) fd.append('products', p)
       fd.set('framing', framing)
       fd.set('ratio', ratio)
+      fd.set('quality', quality)
       fd.set('prompt', prompt)
       fd.set('horizonPct', String(horizonPct / 100))
       fd.set('shadowMode', shadowMode)
@@ -135,7 +137,7 @@ export default function PipelineV2TestTab() {
 
       <div style={card}>
         <div style={label}>5 — Paramètres</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Framing</div>
             <select value={framing} onChange={e => setFraming(e.target.value)} style={input}>
@@ -155,9 +157,17 @@ export default function PipelineV2TestTab() {
             </select>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Prompt additionnel (optionnel)</div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Qualité</div>
+            <select value={quality} onChange={e => setQuality(e.target.value)} style={input}>
+              <option value="1K">1K (rapide)</option>
+              <option value="2K">2K (équilibré)</option>
+              <option value="4K">4K (max)</option>
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Prompt additionnel</div>
             <input type="text" value={prompt} onChange={e => setPrompt(e.target.value)} style={input}
-                   placeholder='ex "main dans la poche, regard caméra"' />
+                   placeholder='ex "main dans la poche"' />
           </div>
         </div>
         <div style={{ marginTop: 14 }}>
