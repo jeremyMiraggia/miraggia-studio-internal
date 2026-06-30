@@ -68,7 +68,8 @@ export default function ECommerceNewTechTab() {
   // Paramètres globaux
   const [ratio, setRatio]         = useState('9:16')
   const [quality, setQuality]     = useState('2K')
-  const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('photoroom-soft')
+  // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
+  const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('custom')
   const [concurrency, setConcurrency] = useState(2)
   const [running, setRunning]     = useState(false)
 
@@ -389,9 +390,9 @@ export default function ECommerceNewTechTab() {
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Mode ombre</div>
             <select value={shadowMode} onChange={e => setShadowMode(e.target.value as any)} style={inp}>
-              <option value="photoroom-soft">Photoroom AI soft (recommandé)</option>
-              <option value="photoroom-hard">Photoroom AI hard</option>
-              <option value="custom">Custom (BiRefNet + ellipse)</option>
+              <option value="custom">Custom soft shadow ($0.003/img · recommandé)</option>
+              <option value="photoroom-soft">Photoroom AI soft ($0.02+/img)</option>
+              <option value="photoroom-hard">Photoroom AI hard ($0.02+/img)</option>
             </select>
           </div>
           <div>

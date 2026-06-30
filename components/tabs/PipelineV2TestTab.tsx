@@ -31,7 +31,8 @@ export default function PipelineV2TestTab() {
   const [quality, setQuality]     = useState('2K')
   const [prompt, setPrompt]       = useState('')
   const [horizonPct, setHorizonPct] = useState(80)   // % de la hauteur du fond où est la ligne du sol
-  const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('photoroom-soft')
+  // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
+  const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('custom')
 
   const [running, setRunning] = useState(false)
   const [result, setResult]   = useState<Result | null>(null)

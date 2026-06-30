@@ -653,16 +653,18 @@ async function detectHorizonLine(bgBuf: Buffer, bgW: number, bgH: number): Promi
  * silhouette qui suit la forme du sujet (pas naturel pour une ombre au sol).
  */
 /**
- * Ombre de contact NATURELLE — utilise l'alpha des pieds eux-mêmes, squashé
- * verticalement et fortement flouté. Suit la silhouette réelle des chaussures
- * (plus naturel qu'une ellipse parfaite).
+ * Soft drop shadow STYLE STUDIO — ombre molle projetée au sol.
  *
- * Technique :
- *   1. Crop les 12% du bas du sujet (zone pieds/chaussures)
- *   2. Extraire l'alpha → silhouette noire avec opacité douce
- *   3. Squash verticalement ×0.2 (effet projection au sol)
- *   4. Blur ~12-15px (très diffus)
- *   5. Placer pile sous les pieds en mode "over"
+ * Technique pro (équivalent Photoshop "drop shadow soft") :
+ *   1. Récupère l'alpha de la SILHOUETTE ENTIÈRE du sujet
+ *   2. Convertit en noir avec opacité réduite (~25%)
+ *   3. Squash vertical ×0.32 (effet projection sur sol plat)
+ *   4. Blur très fort (40-60px) → ombre molle, diffuse
+ *   5. Ancre sous les pieds avec léger décalage vers le bas
+ *
+ * Donne un effet "ombre studio diffuse" qui suggère le volume du sujet
+ * sans être agressif. Beaucoup plus naturel qu'une silhouette de pieds
+ * isolée ou qu'une ellipse géométrique.
  */
 async function buildContactShadow(
   subjectResized: Buffer, newW: number, newH: number, offsetX: number, offsetY: number,
@@ -672,47 +674,43 @@ async function buildContactShadow(
     const subjBbox = await findAlphaBoundingBox(subjectResized, 20)
     if (!subjBbox) return { input: null, left: 0, top: 0 }
 
-    // 1. Crop les 12% du bas du sujet (= zone pieds)
-    const footStripHeight = Math.max(8, Math.round(subjBbox.height * 0.12))
-    const footStripTop    = subjBbox.top + subjBbox.height - footStripHeight
-    const footStripBuf = await sharp(subjectResized)
-      .extract({ left: subjBbox.left, top: footStripTop,
-                 width: subjBbox.width, height: footStripHeight })
+    // 1. Crop la silhouette tight (élimine le transparent autour)
+    const tight = await sharp(subjectResized)
+      .extract({ left: subjBbox.left, top: subjBbox.top,
+                 width: subjBbox.width, height: subjBbox.height })
       .png()
       .toBuffer()
 
-    // 2. Extraire l'alpha → silhouette noire (l'alpha original devient l'opacité)
-    const { data: alphaData, info: alphaInfo } = await sharp(footStripBuf)
+    // 2. Extraire alpha → silhouette noire transparente
+    const { data: alphaData, info: alphaInfo } = await sharp(tight)
       .ensureAlpha()
       .extractChannel('alpha')
       .raw()
       .toBuffer({ resolveWithObject: true })
-    const w = alphaInfo.width, h = alphaInfo.height
-
-    // Crée une image noire RGBA dont l'alpha = (alphaPieds × 0.45) pour être subtil
-    const rgba = Buffer.alloc(w * h * 4)
-    for (let i = 0; i < w * h; i++) {
+    const sw = alphaInfo.width, sh = alphaInfo.height
+    const rgba = Buffer.alloc(sw * sh * 4)
+    for (let i = 0; i < sw * sh; i++) {
       rgba[i * 4]     = 0
       rgba[i * 4 + 1] = 0
       rgba[i * 4 + 2] = 0
-      rgba[i * 4 + 3] = Math.round(alphaData[i] * 0.45)  // opacité globale 45% de l'alpha
+      // Opacité 25% → ombre subtile, lisible sans être agressive
+      rgba[i * 4 + 3] = Math.round(alphaData[i] * 0.25)
     }
-    const silhouette = await sharp(rgba, { raw: { width: w, height: h, channels: 4 } })
+    const silhouette = await sharp(rgba, { raw: { width: sw, height: sh, channels: 4 } })
       .png()
       .toBuffer()
 
-    // 3. Squash vertical ×0.22 → effet projection au sol
-    const squashedH = Math.max(4, Math.round(h * 0.22))
-    const squashedW = w
+    // 3. Squash vertical ×0.32 → projection au sol "lumière haute"
+    const squashedH = Math.max(20, Math.round(sh * 0.32))
     const squashed = await sharp(silhouette)
-      .resize({ width: squashedW, height: squashedH, fit: 'fill', kernel: 'lanczos3' })
+      .resize({ width: sw, height: squashedH, fit: 'fill', kernel: 'lanczos3' })
       .png()
       .toBuffer()
 
-    // 4. Pad + blur fort pour rendre l'ombre très diffuse
-    const blurRadius = Math.max(6, Math.round(squashedH * 0.6))
+    // 4. Blur très fort pour ombre molle studio
+    const blurRadius = Math.max(20, Math.round(sw * 0.06))
     const pad = blurRadius * 2
-    const canvasW = squashedW + pad * 2
+    const canvasW = sw + pad * 2
     const canvasH = squashedH + pad * 2
     const shadow = await sharp({
       create: { width: canvasW, height: canvasH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
@@ -722,10 +720,11 @@ async function buildContactShadow(
       .png()
       .toBuffer()
 
-    // 5. Position : pile sous les pieds, légèrement décalé vers le bas pour effet sol
-    const subjectFeetY = offsetY + subjBbox.top + subjBbox.height
-    const shadowX = offsetX + subjBbox.left - pad
-    const shadowY = subjectFeetY - Math.round(squashedH / 2) - pad + Math.round(squashedH * 0.3)
+    // 5. Position : centré sous les pieds, légèrement décalé vers le bas
+    const subjectCenterX = offsetX + subjBbox.left + Math.round(subjBbox.width / 2)
+    const subjectFeetY   = offsetY + subjBbox.top + subjBbox.height
+    const shadowX = subjectCenterX - Math.round(canvasW / 2)
+    const shadowY = subjectFeetY - Math.round(canvasH / 2) + Math.round(squashedH * 0.45)
 
     return {
       input: shadow,
