@@ -13,6 +13,7 @@ import NotionTab        from '@/components/tabs/NotionTab'
 import NotionInternalTab from '@/components/tabs/NotionInternalTab'
 import CompositeTab      from '@/components/tabs/CompositeTab'
 import PipelineTab       from '@/components/tabs/PipelineTab'
+import PipelineV2TestTab from '@/components/tabs/PipelineV2TestTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'notion-internal', label: '📥 Notion Internal' },
   { id: 'composite',       label: '🎯 Composite (Gemini)' },
   { id: 'pipeline',        label: '🔬 Pipeline (fond exact)' },
+  { id: 'pipeline-v2',     label: '🧪 Pipeline V2 Test' },
   { id: 'lookbook',        label: '👗 Lookbook' },
   { id: 'ghost',           label: '👻 Ghost' },
   { id: 'lin',             label: '🧺 Lin' },
@@ -61,6 +63,7 @@ export default function StudioPage() {
         {tab === 'notion-internal' && <NotionInternalTab />}
         {tab === 'composite'       && <CompositeTab />}
         {tab === 'pipeline'        && <PipelineTab />}
+        {tab === 'pipeline-v2'     && <PipelineV2TestTab />}
         {tab === 'lookbook'        && <LookbookTab />}
         {tab === 'ghost'           && <GhostTab />}
         {tab === 'lin'             && <LinTab />}
