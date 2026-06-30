@@ -210,12 +210,13 @@ export async function POST(request: Request) {
           const fLow = framing.toLowerCase()
           let cropTop = 0, cropHeight = fH
           if (fLow.includes('haut') || fLow.includes('upper')) {
-            // Close-up haut "bust shot" e-commerce : head to belt/hips
-            cropHeight = Math.round(fH * 0.70)
+            // Close-up haut style e-commerce : head to hips/waist
+            // On veut voir la TENUE complète du haut (col, manches, ourlet du top, hanches)
+            cropHeight = Math.round(fH * 0.82)
             cropTop = 0
           } else if (fLow.includes('mi')) {
-            // Mi-corps : head to mid-thigh
-            cropHeight = Math.round(fH * 0.82)
+            // Mi-corps : head to mid-thigh (un peu plus bas que close-up haut)
+            cropHeight = Math.round(fH * 0.92)
             cropTop = 0
           } else if (fLow.includes('bas') || fLow.includes('lower')) {
             // Close-up bas : hips to feet
