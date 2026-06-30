@@ -62,6 +62,8 @@ export async function POST(request: Request) {
       'The background should be uniform (flat, no decor, no floor line, no gradient), matching the reference tone.',
       'This is CRUCIAL : the matting algorithm preserves a few pixels of the original background in fine details (hair, fabric edges). If your background color matches the final scene, this halo will be INVISIBLE. If it does not match, a visible halo will ruin the result.',
       '',
+      '⚠ MARGIN : leave at LEAST 15% empty background space on EACH side of the model (left, right, top, bottom). The model must NOT touch the edges of the frame. This empty margin is required for the post-processing matting algorithm to work properly.',
+      '',
       'FABRIC : all fabrics MUST appear properly ironed and crisp, no wrinkles.',
       '',
       `Project prompt : ${userPrompt || '(none)'}`,
@@ -208,12 +210,15 @@ export async function POST(request: Request) {
           const fLow = framing.toLowerCase()
           let cropTop = 0, cropHeight = fH
           if (fLow.includes('haut') || fLow.includes('upper')) {
-            cropHeight = Math.round(fH * 0.55)
+            // Close-up haut "bust shot" e-commerce : head to belt/hips
+            cropHeight = Math.round(fH * 0.70)
             cropTop = 0
           } else if (fLow.includes('mi')) {
-            cropHeight = Math.round(fH * 0.75)
+            // Mi-corps : head to mid-thigh
+            cropHeight = Math.round(fH * 0.82)
             cropTop = 0
           } else if (fLow.includes('bas') || fLow.includes('lower')) {
+            // Close-up bas : hips to feet
             cropHeight = Math.round(fH * 0.50)
             cropTop = fH - cropHeight
           }
@@ -554,18 +559,21 @@ async function harmonizeBackground(imgBuf: Buffer, tR: number, tG: number, tB: n
     }
   }
 
-  // 2. Flood-fill 4-connectivity from all border pixels
-  //    (iterative stack to avoid call stack overflow on large images)
+  // 2. Flood-fill 4-connectivity from border pixels, MAIS limité à une zone
+  //    "périphérique" (les 20% du bord). Si le sujet a un vêtement blanc qui
+  //    touche les bords, le flood-fill ne pourra pas le traverser car le sujet
+  //    occupe la zone centrale qui est exclue.
+  //    → Garantit que seul le vrai fond périphérique est harmonisé.
+  const borderMargin = Math.round(Math.min(w, h) * 0.20)   // 20% du plus petit côté
   const isBg = new Uint8Array(w * h)
   const stack: number[] = []
-  // Seed : tous les pixels candidats sur les 4 bords
   for (let x = 0; x < w; x++) {
-    if (isCandidate[x])               stack.push(x)            // top row
-    if (isCandidate[(h - 1) * w + x]) stack.push((h - 1) * w + x) // bottom row
+    if (isCandidate[x])               stack.push(x)
+    if (isCandidate[(h - 1) * w + x]) stack.push((h - 1) * w + x)
   }
   for (let y = 0; y < h; y++) {
-    if (isCandidate[y * w])             stack.push(y * w)         // left col
-    if (isCandidate[y * w + (w - 1)])   stack.push(y * w + w - 1) // right col
+    if (isCandidate[y * w])             stack.push(y * w)
+    if (isCandidate[y * w + (w - 1)])   stack.push(y * w + w - 1)
   }
   while (stack.length > 0) {
     const idx = stack.pop()!
@@ -573,6 +581,10 @@ async function harmonizeBackground(imgBuf: Buffer, tR: number, tG: number, tB: n
     isBg[idx] = 1
     const y = (idx / w) | 0
     const x = idx - y * w
+    // Ne PAS étendre dans la zone centrale (au-delà des 20% de bord)
+    const inBorderZone = (x < borderMargin) || (x > w - borderMargin)
+                      || (y < borderMargin) || (y > h - borderMargin)
+    if (!inBorderZone) continue
     if (x > 0     && isCandidate[idx - 1] && !isBg[idx - 1]) stack.push(idx - 1)
     if (x < w - 1 && isCandidate[idx + 1] && !isBg[idx + 1]) stack.push(idx + 1)
     if (y > 0     && isCandidate[idx - w] && !isBg[idx - w]) stack.push(idx - w)
