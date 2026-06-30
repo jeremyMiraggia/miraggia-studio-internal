@@ -73,6 +73,10 @@ export default function ECommerceNewTechTab() {
   const [concurrency, setConcurrency] = useState(2)
   const [running, setRunning]     = useState(false)
 
+  // Fonds globaux (override le fond du mannequin / CSV)
+  const [bgPlein, setBgPlein]         = useState<File[]>([])   // fond pour plein-pied / mi / bas
+  const [bgCloseUpHaut, setBgCloseUpHaut] = useState<File[]>([])   // fond pour close-up haut (déjà cropé, sans sol)
+
   // Dossier sortie
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const outputDirHandleRef = useRef<any | null>(null)
@@ -89,7 +93,9 @@ export default function ECommerceNewTechTab() {
     setParsing(true)
     setProgress('Lecture du ZIP…')
     try {
-      const res = await parseNotionExport(files[0], (msg) => setProgress(msg))
+      // allowMissingFond=true : on accepte les CSV sans colonne Fond
+       // (le fond viendra du mannequin via Models Definition, ou du Fond global UI)
+      const res = await parseNotionExport(files[0], (msg) => setProgress(msg), undefined, { allowMissingFond: true })
       setParsed(res)
       // Garde uniquement les pose tasks (skip detail + inspi pour ce mode E-Com)
       const poseTasks = res.tasks.filter(t => t.taskType === 'pose')
@@ -171,11 +177,38 @@ export default function ECommerceNewTechTab() {
       if (!state) return
       const t = state.task
 
-      // Vérifie qu'on a les fichiers minimum
-      if (!t.bodyPhotoFile || !t.backgroundFile) {
+      // Vérifie qu'on a le mannequin
+      if (!t.bodyPhotoFile) {
         setStates(prev => {
           const next = [...prev]
-          next[idx] = { ...next[idx], status: 'skipped', error: 'bodyPhotoFile ou backgroundFile manquant' }
+          next[idx] = { ...next[idx], status: 'skipped', error: 'bodyPhotoFile manquant (mannequin)' }
+          statesRef.current = next
+          return next
+        })
+        return
+      }
+
+      // === Sélection du fond ===
+      // Selon le framing demandé, on choisit le bon fond :
+      //   - close-up haut → bgCloseUpHaut (UI) si fourni, sinon fond du look/mannequin
+      //   - autres        → fond du look/mannequin, sinon bgPlein (UI) en fallback
+      const framing = extractFraming(t.vueRaw ?? '')
+      const isCloseUpHaut = framing === 'haut'
+      let backgroundFile: File | undefined
+      let bgAlreadyAdaptedToFraming = false
+      if (isCloseUpHaut && bgCloseUpHaut[0]) {
+        backgroundFile = bgCloseUpHaut[0]
+        bgAlreadyAdaptedToFraming = true   // le fond est déjà cropé sans le sol
+      } else if (t.backgroundFile) {
+        backgroundFile = t.backgroundFile
+      } else if (bgPlein[0]) {
+        backgroundFile = bgPlein[0]
+      }
+      if (!backgroundFile) {
+        setStates(prev => {
+          const next = [...prev]
+          next[idx] = { ...next[idx], status: 'skipped',
+                        error: 'Pas de fond (ni dans CSV, ni dans Models, ni Fond global UI)' }
           statesRef.current = next
           return next
         })
@@ -190,7 +223,6 @@ export default function ECommerceNewTechTab() {
       })
 
       try {
-        const framing = extractFraming(t.vueRaw ?? '')
         const fd = new FormData()
 
         // Compress côté client (4.5 MB limit Vercel)
@@ -198,7 +230,7 @@ export default function ECommerceNewTechTab() {
           try { return await compressImage(f, { maxSide: 2048, quality: 0.9 }) }
           catch { return f }
         }
-        fd.append('background', await compress(t.backgroundFile))
+        fd.append('background', await compress(backgroundFile))
         fd.append('mannequinBody', await compress(t.bodyPhotoFile))
         if (t.facePhotoFile) fd.append('mannequinFace', await compress(t.facePhotoFile))
         for (const p of (t.productFiles ?? [])) fd.append('products', await compress(p))
@@ -207,6 +239,9 @@ export default function ECommerceNewTechTab() {
         fd.set('ratio', ratio)
         fd.set('quality', quality)
         fd.set('shadowMode', shadowMode)
+        // Si le fond a déjà été adapté côté client (ex : bgCloseUpHaut sans sol),
+        // on dit au serveur de NE PAS appliquer le crop final selon framing.
+        if (bgAlreadyAdaptedToFraming) fd.set('skipFinalCrop', '1')
         // Prompt = description de la pose (depuis CSV Notion)
         const promptText = t.posePromptWithBase || t.prompt || t.vueRaw || ''
         fd.set('prompt', promptText)
@@ -368,7 +403,27 @@ export default function ECommerceNewTechTab() {
       </div>
 
       <div style={card}>
-        <div style={label}>2 — Paramètres globaux</div>
+        <div style={label}>2 — Fonds (override le fond du mannequin / CSV)</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+              Fond plein-pied / mi / bas (optionnel)
+            </div>
+            <Dropzone files={bgPlein} onChange={setBgPlein} multiple={false} accept="image/*"
+                      label="Fond complet" hint="Mur + sol — utilisé en fallback si le mannequin/CSV n'a pas de fond" />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+              Fond close-up haut (optionnel)
+            </div>
+            <Dropzone files={bgCloseUpHaut} onChange={setBgCloseUpHaut} multiple={false} accept="image/*"
+                      label="Fond sans sol" hint="Partie supérieure du fond (juste le mur) — utilisé uniquement pour les close-up haut" />
+          </div>
+        </div>
+      </div>
+
+      <div style={card}>
+        <div style={label}>3 — Paramètres globaux</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
@@ -424,7 +479,7 @@ export default function ECommerceNewTechTab() {
         <div style={card}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
             <div style={label}>
-              3 — Tâches ({stats.enabled}/{stats.total} cochées · ✓ {stats.done} · 💾 {stats.saved} · ⏳ {stats.running} · ✕ {stats.errors})
+              4 — Tâches ({stats.enabled}/{stats.total} cochées · ✓ {stats.done} · 💾 {stats.saved} · ⏳ {stats.running} · ✕ {stats.errors})
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button onClick={() => setAllEnabled(true)} style={btn('#E5E7EB', '#374151')}>

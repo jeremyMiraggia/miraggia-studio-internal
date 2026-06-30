@@ -112,10 +112,16 @@ export type ParsedExport = {
 
 /* ============================== ENTRY ============================== */
 
+export type ParseOptions = {
+  /** Si true, les looks SANS Fond ne sont PAS skippés (E-Com mode : fond global UI) */
+  allowMissingFond?: boolean
+}
+
 export async function parseNotionExport(
   zipFile: File,
   onProgress?: (msg: string) => void,
   lookRange?: { start: number; end: number } | number,
+  options?: ParseOptions,
 ): Promise<ParsedExport> {
   // Stratégie LAZY : on lit d'abord l'index du ZIP (~64 KB), puis on
   // extrait UNIQUEMENT les fichiers nécessaires pour les premiers N looks.
@@ -330,7 +336,9 @@ export async function parseNotionExport(
     const fond  = look.fondName ? fonds.get(normName(look.fondName)) : undefined
 
     // Si pas de fond explicite et pas de fond intégré au mannequin → skip
-    if (!look.fondName && !model?.fondFile) continue
+    // En mode E-Com (allowMissingFond), on accepte les looks sans Fond.
+    // Le runtime utilisera un fond global fourni par l'UI.
+    if (!options?.allowMissingFond && !look.fondName && !model?.fondFile) continue
 
     // ---------- 1. Tasks "pose" (1 par vue valide) ----------
     look.vues.forEach((pose, vueIndex) => {
@@ -749,8 +757,16 @@ function guessMime(name: string): string {
 
 function stripRef(cell: string): string {
   if (!cell) return ''
-  const i = cell.indexOf(' (')
-  return i >= 0 ? cell.slice(0, i).trim() : cell.trim()
+  const trimmed = cell.trim()
+  // Si la cellule se termine par ".md)", c'est un lien Notion :
+  // "Nom du truc (Nom%20du%20truc abc...md)"
+  // On coupe au DERNIER " (" pour préserver les noms qui contiennent déjà
+  // des parenthèses (ex "TOM (1)").
+  if (trimmed.endsWith('.md)')) {
+    const i = trimmed.lastIndexOf(' (')
+    if (i > 0) return trimmed.slice(0, i).trim()
+  }
+  return trimmed
 }
 
 function decodeRef(raw: string): string {

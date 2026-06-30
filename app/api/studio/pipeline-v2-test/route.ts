@@ -199,12 +199,14 @@ export async function POST(request: Request) {
         debug.steps.photoroom = { ok: true, bytes: finalBuf.length, mode: shadowMode }
 
         // === CROP FINAL selon framing (côté serveur, après Photoroom) ===
-        // Le mannequin Gemini était toujours plein-pied. On crop la zone d'intérêt :
-        //   - close-up haut : top 55%
-        //   - mi-corps : top 75%
-        //   - close-up bas : bottom 50%
-        //   - plein-pied : pas de crop
+        // Sauté si le client a déjà adapté le fond pour le framing (skipFinalCrop=1).
+        const skipFinalCrop = formData.get('skipFinalCrop') === '1'
         try {
+          if (skipFinalCrop) {
+            debug.steps.finalCrop = { skipped: 'client provided framing-adapted background' }
+            // pas de crop, finalBuf reste tel quel
+            // (mais on continue vers l'upload Blob)
+          } else {
           const finalMeta = await sharp(finalBuf).metadata()
           const fW = finalMeta.width ?? bgW, fH = finalMeta.height ?? bgH
           const fLow = framing.toLowerCase()
@@ -231,6 +233,7 @@ export async function POST(request: Request) {
           } else {
             debug.steps.finalCrop = { framing, skipped: 'plein-pied' }
           }
+          }  // end else (skipFinalCrop)
         } catch (e: any) {
           debug.steps.finalCrop = { error: e?.message ?? String(e) }
         }
