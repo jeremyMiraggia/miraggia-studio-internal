@@ -138,9 +138,14 @@ export async function POST(request: Request) {
     const isLowerBody   = fLow.includes('bas')  || fLow.includes('lower')
 
     // Détection automatique de la ligne d'horizon (sol vs mur) du fond.
-    // On scan une bande verticale au centre et on cherche le gradient le plus fort
-    // (transition mur → sol). Si la détection est faible, on fallback à 78%.
-    const horizonY = await detectHorizonLine(bgBuf, bgW, bgH)
+    // En cas d'échec → fallback hardcodé à 78%.
+    let horizonY: number
+    try {
+      horizonY = await detectHorizonLine(bgBuf, bgW, bgH)
+    } catch (e: any) {
+      horizonY = Math.floor(bgH * 0.78)
+      debug.steps.horizonY_error = e?.message ?? String(e)
+    }
     debug.steps.horizonY = horizonY
 
     // Calcule taille cible du sujet en % de la hauteur du canvas + anchor
@@ -187,17 +192,36 @@ export async function POST(request: Request) {
     debug.steps.composite = { offsetX, offsetY, newW, newH, anchorMode, horizonY, targetHeightRatio }
 
     // === Génération d'une ombre de contact douce sous le sujet ===
-    // Ellipse noire floue placée sous les pieds (cohérent avec un sol plat).
-    // Plus fiable qu'IC-Light qui hallucine des ombres complexes.
-    const shadowComp = await buildContactShadow(subjectResized, newW, newH, offsetX, offsetY, bgW, bgH)
+    // Ellipse noire floue avec opacité, blend "over" (plus robuste que multiply).
+    // Chaque étape est isolée pour éviter qu'un échec ne fasse planter tout le composite.
     const composites: any[] = []
-    if (shadowComp.input) {
-      composites.push({ input: shadowComp.input, left: shadowComp.left, top: shadowComp.top, blend: 'multiply' })
+    try {
+      const shadowComp = await buildContactShadow(subjectResized, newW, newH, offsetX, offsetY, bgW, bgH)
+      if (shadowComp.input) {
+        composites.push({ input: shadowComp.input, left: shadowComp.left, top: shadowComp.top, blend: 'over' })
+        debug.steps.shadow = { left: shadowComp.left, top: shadowComp.top, ok: true }
+      } else {
+        debug.steps.shadow = { skipped: 'buildContactShadow returned null' }
+      }
+    } catch (e: any) {
+      debug.steps.shadow = { error: e?.message ?? String(e) }
+      console.warn('[pipeline-v2] shadow build failed (continuing without shadow):', e)
     }
     composites.push({ input: subjectResized, left: offsetX, top: offsetY, blend: 'over' })
-    const compositeBuf = await sharp(bgBuf)
-      .composite(composites)
-      .png().toBuffer()
+
+    let compositeBuf: Buffer
+    try {
+      compositeBuf = await sharp(bgBuf)
+        .composite(composites)
+        .png().toBuffer()
+    } catch (e: any) {
+      // Fallback : si le composite avec ombre plante, on essaie sans ombre
+      console.warn('[pipeline-v2] composite with shadow failed, retrying without:', e)
+      debug.steps.composite_fallback = e?.message ?? String(e)
+      compositeBuf = await sharp(bgBuf)
+        .composite([{ input: subjectResized, left: offsetX, top: offsetY, blend: 'over' }])
+        .png().toBuffer()
+    }
 
     // ============= ÉTAPE 4 — IC-Light (DÉSACTIVÉ par défaut) =============
     // IC-Light v2 hallucinait des ombres de fenêtre sur fond uniforme.
@@ -369,14 +393,13 @@ async function buildContactShadow(
     const canvasW = shadowW + pad * 2
     const canvasH = shadowH + pad * 2
 
+    // SVG : ellipse noire directement avec opacité — pas de negate (qui pose pb avec alpha)
     const svg = `<svg width="${canvasW}" height="${canvasH}" xmlns="http://www.w3.org/2000/svg">
       <ellipse cx="${canvasW/2}" cy="${canvasH/2}" rx="${shadowW/2}" ry="${shadowH/2}"
-               fill="white" opacity="0.55"/>
+               fill="black" fill-opacity="0.35"/>
     </svg>`
-    // Crée l'ellipse, floute, puis inverse pour avoir une zone noire à multiplier sur le fond
     const shadow = await sharp(Buffer.from(svg))
       .blur(Math.max(4, Math.round(shadowH * 0.8)))
-      .negate({ alpha: false })   // blanc → noir, garde l'alpha
       .png()
       .toBuffer()
 
