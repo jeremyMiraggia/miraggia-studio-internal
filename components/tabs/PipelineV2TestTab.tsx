@@ -193,11 +193,13 @@ export default function PipelineV2TestTab() {
             ))}
           </div>
         </div>
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, opacity: shadowMode === 'custom' ? 1 : 0.5 }}>
           <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
             Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct}%</strong>
             <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
-              (les pieds du mannequin seront posés à cette ligne — ajuste selon ton fond, ex 85% pour BON_FOND_OFFICIEL)
+              {shadowMode === 'custom'
+                ? '(actif : pieds du mannequin posés à cette ligne, ex 85% pour BON_FOND_OFFICIEL)'
+                : '(ignoré en mode Photoroom — Photoroom centre auto le sujet sur le fond)'}
             </span>
           </div>
           <input
@@ -233,6 +235,17 @@ export default function PipelineV2TestTab() {
             <div style={{ background: '#FFFBEB', color: '#92400E', padding: 10, borderRadius: 8,
                           fontSize: 12, marginBottom: 12 }}>
               ⚠ IC-Light : {result.icLightError}
+            </div>
+          )}
+          {result.debug?.steps && (
+            <div style={{ marginBottom: 12, fontSize: 11, color: '#374151',
+                          background: '#F3F4F6', padding: 8, borderRadius: 6 }}>
+              <strong>Pipeline utilisée :</strong>{' '}
+              {result.debug.steps.photoroom?.ok
+                ? `✨ Photoroom ${result.debug.steps.photoroom.mode || ''} OK`
+                : result.debug.steps.photoroom?.error
+                  ? `❌ Photoroom ÉCHEC : ${result.debug.steps.photoroom.error.slice(0, 100)}`
+                  : `⚙ Mode custom (BiRefNet + ombre sharp)`}
             </div>
           )}
           {(result.imageUrl || result.compositeUrl) && (

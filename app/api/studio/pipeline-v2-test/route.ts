@@ -140,30 +140,13 @@ export async function POST(request: Request) {
         //          ai.hard = ombre plus marquée
         form.append('shadow.mode', shadowMode === 'photoroom-soft' ? 'ai.soft' : 'ai.hard')
 
-        // === Placement vertical du sujet (slider horizonPct du user) ===
-        // Si horizonPct est défini (ex 85%), on dit à Photoroom :
-        //   - mode outputImage : on peut spécifier le placement
-        //   - verticalAlignment=bottom : ancre le sujet en bas
-        //   - padding.bottom = (100 - horizonPct)% du canvas
-        //   → résultat : pieds du sujet pile sur la ligne horizon
-        const horizonPctRaw = formData.get('horizonPct') as string | null
-        const horizonPctVal = horizonPctRaw ? parseFloat(horizonPctRaw) : NaN
-        if (!isNaN(horizonPctVal) && horizonPctVal > 0.3 && horizonPctVal < 1.0) {
-          form.append('referenceBox', 'outputImage')
-          form.append('verticalAlignment', 'bottom')
-          // padding.bottom en % → "10%" pour horizon à 90%
-          const paddingBottomPct = Math.round((1 - horizonPctVal) * 100)
-          form.append('padding.bottom', `${paddingBottomPct}%`)
-          // padding latéral 5% pour ne pas coller aux bords
-          form.append('padding.left', '5%')
-          form.append('padding.right', '5%')
-          form.append('horizontalAlignment', 'center')
-          debug.steps.photoroom_placement = { mode: 'outputImage', verticalAlignment: 'bottom', paddingBottom: `${paddingBottomPct}%` }
-        } else {
-          // Sans horizonPct : Photoroom gère le placement automatiquement
-          form.append('referenceBox', 'originalImage')
-          debug.steps.photoroom_placement = { mode: 'originalImage' }
-        }
+        // Préserve position et taille du sujet telles qu'elles sont dans Gemini.
+        // Comme Gemini génère sur fond blanc avec sujet centré, Photoroom va
+        // placer le sujet ~au centre du fond user.
+        // Note : le slider horizonPct ne fonctionne QUE pour le mode custom (le contrôle
+        // de placement précis via Photoroom v2 padding/alignment cause des erreurs).
+        form.append('referenceBox', 'originalImage')
+        debug.steps.photoroom_placement = { mode: 'originalImage', note: 'horizon slider ignored in Photoroom mode' }
 
         // PNG lossless pour qualité max
         form.append('outputFormat', 'png')
@@ -198,9 +181,13 @@ export async function POST(request: Request) {
         }
         return NextResponse.json({ imageUrl, debug, blobError })
       } catch (err: any) {
-        console.warn('[pipeline-v2] Photoroom failed, fallback to custom shadow:', err?.message)
-        debug.steps.photoroom = { error: err?.message ?? String(err), fallback: 'custom' }
-        // Fallback : on continue vers le mode custom ci-dessous
+        // NE PAS fallback silencieusement — le user a explicitement choisi Photoroom.
+        // On renvoie une erreur claire avec le détail pour qu'il sache pourquoi ça plante.
+        console.error('[pipeline-v2] Photoroom failed:', err?.message, err)
+        return NextResponse.json({
+          error: `Photoroom (${shadowMode}) a échoué : ${err?.message ?? err}`,
+          debug,
+        }, { status: 502 })
       }
     }
 
