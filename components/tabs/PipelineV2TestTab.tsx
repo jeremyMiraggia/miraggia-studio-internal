@@ -30,6 +30,7 @@ export default function PipelineV2TestTab() {
   const [ratio, setRatio]         = useState('9:16')
   const [prompt, setPrompt]       = useState('')
   const [horizonPct, setHorizonPct] = useState(80)   // % de la hauteur du fond où est la ligne du sol
+  const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('photoroom-soft')
 
   const [running, setRunning] = useState(false)
   const [result, setResult]   = useState<Result | null>(null)
@@ -60,6 +61,7 @@ export default function PipelineV2TestTab() {
       fd.set('ratio', ratio)
       fd.set('prompt', prompt)
       fd.set('horizonPct', String(horizonPct / 100))
+      fd.set('shadowMode', shadowMode)
 
       const resp = await fetch('/api/studio/pipeline-v2-test', { method: 'POST', body: fd })
       const json = await resp.json()
@@ -158,21 +160,46 @@ export default function PipelineV2TestTab() {
                    placeholder='ex "main dans la poche, regard caméra"' />
           </div>
         </div>
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
-            Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct}%</strong>
-            <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
-              (les pieds du mannequin seront posés à cette ligne — ajuste selon ton fond)
-            </span>
+            Ombre & détourage <strong style={{ color: '#0D4A5C' }}>(important)</strong>
           </div>
-          <input
-            type="range"
-            min={50} max={95} step={1}
-            value={horizonPct}
-            onChange={e => setHorizonPct(parseInt(e.target.value, 10))}
-            style={{ width: '100%' }}
-          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[
+              { id: 'photoroom-soft', label: '✨ Photoroom AI soft (recommandé)', desc: 'Ombre subtile naturelle, qualité pro' },
+              { id: 'photoroom-hard', label: '🌑 Photoroom AI hard',              desc: 'Ombre plus marquée' },
+              { id: 'custom',         label: '⚙ Custom (BiRefNet + ellipse)',    desc: 'Ombre artisanale (test)' },
+            ].map(m => (
+              <label key={m.id} style={{
+                flex: 1, padding: 10, borderRadius: 8, cursor: 'pointer',
+                border: shadowMode === m.id ? '2px solid #0D4A5C' : '1px solid #E5E7EB',
+                background: shadowMode === m.id ? '#E8F2F5' : '#fff',
+              }}>
+                <input type="radio" name="shadowMode" checked={shadowMode === m.id}
+                       onChange={() => setShadowMode(m.id as any)} style={{ marginRight: 6 }} />
+                <strong style={{ fontSize: 12, color: '#0D4A5C' }}>{m.label}</strong>
+                <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{m.desc}</div>
+              </label>
+            ))}
+          </div>
         </div>
+        {shadowMode === 'custom' && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+              Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct}%</strong>
+              <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
+                (utilisé uniquement en mode Custom)
+              </span>
+            </div>
+            <input
+              type="range"
+              min={50} max={95} step={1}
+              value={horizonPct}
+              onChange={e => setHorizonPct(parseInt(e.target.value, 10))}
+              style={{ width: '100%' }}
+            />
+          </div>
+        )}
         <div style={{ marginTop: 14 }}>
           <button onClick={runOne} disabled={!canRun}
                   style={{ ...btn(canRun ? '#0D4A5C' : '#9CA3AF'), cursor: canRun ? 'pointer' : 'not-allowed' }}>

@@ -103,7 +103,79 @@ export async function POST(request: Request) {
     const geminiBuf = Buffer.from(geminiB64, 'base64')
     debug.steps.gemini = { mime: geminiMime, bytes: geminiBuf.length }
 
-    // ============= ÉTAPE 2 — BiRefNet (détourage sujet) =============
+    // ============= ÉTAPE 2 — Choix de la méthode d'ombre =============
+    // shadowMode : 'photoroom-soft' (default) | 'photoroom-hard' | 'custom'
+    const shadowMode = (formData.get('shadowMode') as string | null) ?? 'photoroom-soft'
+    debug.steps.shadowMode = shadowMode
+
+    const bgArrBuf = await background.arrayBuffer()
+    const bgBuf = Buffer.from(new Uint8Array(bgArrBuf))
+    const bgMeta = await sharp(bgBuf).metadata()
+    const bgW = bgMeta.width ?? 1024, bgH = bgMeta.height ?? 1536
+
+    // ============= MODE PHOTOROOM (recommandé) =============
+    if (shadowMode === 'photoroom-soft' || shadowMode === 'photoroom-hard') {
+      const photoroomKey = process.env.PHOTOROOM_API_KEY
+      if (!photoroomKey) {
+        return NextResponse.json({ error: 'PHOTOROOM_API_KEY manquante (requise pour shadowMode photoroom).' }, { status: 500 })
+      }
+
+      try {
+        const form = new FormData()
+        // imageFile = sujet brut Gemini (Photoroom détoure + analyse lumière + génère ombre)
+        const geminiBlob = new Blob([new Uint8Array(geminiBuf)], { type: geminiMime })
+        form.append('imageFile', geminiBlob, geminiMime === 'image/png' ? 'gemini.png' : 'gemini.jpg')
+        // background.imageFile = fond user (Photoroom le préserve pixel-perfect)
+        const bgBlob = new Blob([new Uint8Array(bgBuf)], { type: 'image/png' })
+        form.append('background.imageFile', bgBlob, 'background.png')
+
+        // SHADOW : ai.soft = ombre subtile et naturelle (le user veut ça)
+        //          ai.hard = ombre plus marquée
+        form.append('shadow.mode', shadowMode === 'photoroom-soft' ? 'ai.soft' : 'ai.hard')
+
+        // Préserve position et taille du sujet telles qu'elles sont dans Gemini
+        form.append('referenceBox', 'originalImage')
+        // PNG lossless pour qualité max
+        form.append('outputFormat', 'png')
+
+        console.log(`[pipeline-v2] Photoroom call (shadow=${shadowMode})`)
+        const res = await fetch('https://image-api.photoroom.com/v2/edit', {
+          method: 'POST',
+          headers: { 'x-api-key': photoroomKey, 'Accept': 'image/png' },
+          body: form as any,
+          signal: AbortSignal.timeout(90000),
+        })
+        if (!res.ok) {
+          const errTxt = await res.text().catch(() => '')
+          throw new Error(`Photoroom HTTP ${res.status}: ${errTxt.slice(0, 300)}`)
+        }
+        const finalBuf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
+        debug.steps.photoroom = { ok: true, bytes: finalBuf.length, mode: shadowMode }
+
+        // Upload Vercel Blob + return (court-circuit le reste du pipeline)
+        let imageUrl: string
+        let blobError: string | undefined
+        try {
+          const path = `pipeline-v2-test/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`
+          const blob = await put(path, finalBuf, {
+            access: 'public', contentType: 'image/png', cacheControlMaxAge: 60,
+            token: process.env.BLOB_READ_WRITE_TOKEN,
+          })
+          imageUrl = blob.url
+        } catch (err: any) {
+          imageUrl = `data:image/png;base64,${finalBuf.toString('base64')}`
+          blobError = err?.message ?? String(err)
+        }
+        return NextResponse.json({ imageUrl, debug, blobError })
+      } catch (err: any) {
+        console.warn('[pipeline-v2] Photoroom failed, fallback to custom shadow:', err?.message)
+        debug.steps.photoroom = { error: err?.message ?? String(err), fallback: 'custom' }
+        // Fallback : on continue vers le mode custom ci-dessous
+      }
+    }
+
+    // ============= MODE CUSTOM (fallback ou choix explicite) =============
+    // BiRefNet → composite manuel + ombre custom
     const geminiFile = new File([new Uint8Array(geminiBuf)], 'gemini.png', { type: geminiMime })
     const geminiFalUrl = await fal.storage.upload(geminiFile)
     const rembgResult: any = await fal.subscribe('fal-ai/birefnet/v2', {
@@ -116,10 +188,7 @@ export async function POST(request: Request) {
     debug.steps.birefnet = { bytes: subjectBuf.length }
 
     // ============= ÉTAPE 3 — Composite sujet sur fond user =============
-    const bgArrBuf = await background.arrayBuffer()
-    const bgBuf = Buffer.from(new Uint8Array(bgArrBuf))
-    const bgMeta = await sharp(bgBuf).metadata()
-    const bgW = bgMeta.width ?? 1024, bgH = bgMeta.height ?? 1536
+    // (bgBuf, bgW, bgH déjà calculés plus haut)
 
     // Trouve la bounding box du sujet pour le cropper proprement
     const bbox = await findAlphaBoundingBox(subjectBuf, 20)
