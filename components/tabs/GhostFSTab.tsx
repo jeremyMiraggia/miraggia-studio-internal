@@ -27,14 +27,18 @@ type Task = {
 }
 
 // Prompt éditable côté client (le serveur a un fallback anti-hallucination
-// robuste si tu laisses ce champ tel quel).
+// robuste si tu laisses ce champ tel quel). Générique = fonctionne pour
+// chemise, t-shirt, polo, pull, top, etc.
 const STYLE_TRANSFER_PROMPT = [
-  "PACKSHOT GHOST : chemise pliée SEULE. Aucun humain, aucune tête, aucun buste.",
+  "PACKSHOT GHOST : UN SEUL vêtement plié, SEUL. Aucun humain, aucune tête, aucun buste.",
+  "Fond 100% propre : pas de doublon, pas de fantôme, pas de reflet, pas de silhouette derrière.",
   "",
   "IMAGE #1 = référence packshot : copie exactement sa composition, son fond, sa lumière, son cadrage, sa qualité.",
-  "IMAGE #2 = photo source du vêtement : reproduis fidèlement le vêtement (couleur, matière, coupe, coutures, boutons, étiquette de marque, détails) mais présente-le dans le style de l'image #1.",
+  "IMAGE #2 = photo source du vêtement (chemise, t-shirt, polo, pull...) : reproduis fidèlement le vêtement (couleur, matière, coupe, coutures, boutons/encolure, étiquette de marque) mais présente-le dans le style de l'image #1.",
   "",
-  "Résultat : un packshot pro d'une chemise pliée seule, exactement dans le style de l'image #1, mais avec le vêtement de l'image #2. Rien d'autre.",
+  "⚠ Le vêtement doit apparaître PARFAITEMENT REPASSÉ (lisse, sans plis, sans froissement).",
+  "",
+  "Résultat : un packshot pro avec UN SEUL vêtement plié, dans le style de l'image #1, avec le vêtement de l'image #2. Rien d'autre.",
 ].join('\n')
 
 function sanitizeFilename(s: string): string {
