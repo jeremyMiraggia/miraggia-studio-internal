@@ -15,6 +15,7 @@ import CompositeTab      from '@/components/tabs/CompositeTab'
 import PipelineTab       from '@/components/tabs/PipelineTab'
 import PipelineV2TestTab from '@/components/tabs/PipelineV2TestTab'
 import ECommerceNewTechTab from '@/components/tabs/ECommerceNewTechTab'
+import GhostFSTab from '@/components/tabs/GhostFSTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'ecom-newtech',    label: '🛍 E-Com New Tech' },
   { id: 'lookbook',        label: '👗 Lookbook' },
   { id: 'ghost',           label: '👻 Ghost' },
+  { id: 'ghost-fs',        label: '👻 Ghost F&S' },
   { id: 'lin',             label: '🧺 Lin' },
   { id: 'lifestyle',       label: '🌴 Lifestyle' },
   { id: 'video',           label: '🎬 Video' },
@@ -69,6 +71,7 @@ export default function StudioPage() {
         {tab === 'ecom-newtech'    && <ECommerceNewTechTab />}
         {tab === 'lookbook'        && <LookbookTab />}
         {tab === 'ghost'           && <GhostTab />}
+        {tab === 'ghost-fs'        && <GhostFSTab />}
         {tab === 'lin'             && <LinTab />}
         {tab === 'lifestyle'       && <LifestyleTab />}
         {tab === 'video'           && <VideoTab />}
