@@ -26,20 +26,15 @@ type Task = {
   error?:    string
 }
 
-// Prompt inspiré de ce que le user tape à la main.
-// On garde son style direct + français court + on rend le "vêtement à copier" générique.
+// Prompt éditable côté client (le serveur a un fallback anti-hallucination
+// robuste si tu laisses ce champ tel quel).
 const STYLE_TRANSFER_PROMPT = [
-  "Recrée exactement le packshot de l'image 2 en conservant :",
-  "- la même pose du vêtement",
-  "- le même cadrage",
-  "- la même lumière (direction, intensité, ambiance)",
-  "- le même fond (couleur, texture, uniformité)",
-  "- la même composition générale",
-  "- le même niveau de qualité (packshot professionnel piqué, netteté élevée)",
+  "PACKSHOT GHOST : chemise pliée SEULE. Aucun humain, aucune tête, aucun buste.",
   "",
-  "Remplace UNIQUEMENT le vêtement par celui présent sur l'image 1.",
-  "Reproduis fidèlement le vêtement de l'image 1 : sa forme exacte, ses couleurs, ses matières, sa coupe, ses coutures, ses boutons, ses détails, ses imprimés/motifs si présents.",
-  "Le vêtement final doit être identique à celui de l'image 1 mais présenté dans le style pro de l'image 2.",
+  "IMAGE #1 = référence packshot : copie exactement sa composition, son fond, sa lumière, son cadrage, sa qualité.",
+  "IMAGE #2 = photo source du vêtement : reproduis fidèlement le vêtement (couleur, matière, coupe, coutures, boutons, étiquette de marque, détails) mais présente-le dans le style de l'image #1.",
+  "",
+  "Résultat : un packshot pro d'une chemise pliée seule, exactement dans le style de l'image #1, mais avec le vêtement de l'image #2. Rien d'autre.",
 ].join('\n')
 
 function sanitizeFilename(s: string): string {
@@ -179,14 +174,18 @@ export default function GhostFSTab() {
         catch { source = task.source }
 
         const fd = new FormData()
-        fd.set('prompt', customPrompt)
+        // Optionnel : le user peut overrider le prompt (sinon le serveur utilise
+        // son prompt anti-hallucination par défaut). On envoie que si non-vide.
+        if (customPrompt && customPrompt.trim() !== STYLE_TRANSFER_PROMPT.trim()) {
+          fd.set('prompt', customPrompt)
+        }
         fd.set('ratio', ratio)
         fd.set('quality', quality)
-        // ⚠ Ordre important : image 1 = photo iPhone (vêtement à copier), image 2 = référence packshot
-        fd.append('refs', source)
-        fd.append('refs', refCompressed)
+        // Labels EXPLICITES côté serveur → pas de confusion possible
+        fd.append('reference', refCompressed)   // packshot pro (composition à copier)
+        fd.append('source',    source)          // photo iPhone (vêtement à extraire)
 
-        const resp = await fetch('/api/studio/free', { method: 'POST', body: fd })
+        const resp = await fetch('/api/studio/ghost-fs', { method: 'POST', body: fd })
         const json = await resp.json()
         if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
         const url = json.imageUrl ?? json.url
