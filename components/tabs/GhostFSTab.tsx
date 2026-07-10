@@ -34,11 +34,13 @@ const STYLE_TRANSFER_PROMPT = [
   "Fond 100% propre : pas de doublon, pas de fantôme, pas de reflet, pas de silhouette derrière.",
   "",
   "IMAGE #1 = référence packshot : copie exactement sa composition, son fond, sa lumière, son cadrage, sa qualité.",
-  "IMAGE #2 = photo source du vêtement (chemise, t-shirt, polo, pull...) : reproduis fidèlement le vêtement (couleur, matière, coupe, coutures, boutons/encolure, étiquette de marque) mais présente-le dans le style de l'image #1.",
+  "IMAGE #2 = photo source du vêtement (chemise, t-shirt, polo, pull...) : reproduis fidèlement le vêtement (couleur, matière, coupe, coutures, boutons/encolure, étiquette de marque exacte) mais présente-le dans le style de l'image #1.",
   "",
-  "⚠ Le vêtement doit apparaître PARFAITEMENT REPASSÉ (lisse, sans plis, sans froissement).",
+  "⚠ REPASSAGE : Vêtement PARFAITEMENT REPASSÉ, tissu TIRÉ TENDU, aucun pli, aucun froissement, aucune ondulation dans le tissu.",
+  "⚠ PLIAGE : symétrie parfaite (miroir gauche/droite), coins nets à 90°, arêtes rigoureusement droites (aucune vague, aucune ligne courbée), pli central vertical parfait — précision millimétrique comme un pliage pro de catalogue mode.",
+  "⚠ PIQUÉ : résultat ultra piqué, chaque détail net (tissage, coutures, boutons, texte de l'étiquette de marque doit être lisible et exact).",
   "",
-  "Résultat : un packshot pro avec UN SEUL vêtement plié, dans le style de l'image #1, avec le vêtement de l'image #2. Rien d'autre.",
+  "Résultat : un packshot pro avec UN SEUL vêtement parfaitement plié et repassé, dans le style de l'image #1, avec le vêtement de l'image #2. Rien d'autre.",
 ].join('\n')
 
 function sanitizeFilename(s: string): string {
