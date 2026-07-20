@@ -103,7 +103,7 @@ export async function POST(request: Request) {
       parts.push(await toInlinePart(mannequinFace))
     }
     if (products.length) {
-      parts.push({ text: `GARMENT${products.length > 1 ? 'S' : ''} — reproduce every detail with absolute fidelity.` })
+      parts.push({ text: `GARMENT${products.length > 1 ? 'S' : ''} — ISOLATED PRODUCT PACKSHOT${products.length > 1 ? 'S' : ''} (photographed alone, filling their frame). ⚠ Their scale / size in the frame is IRRELEVANT to the model's height — do NOT use them as size references. The model stays very TALL and ELONGATED. Simply resize these garments onto the tall model's body. Reproduce every detail with absolute fidelity.` })
       for (const f of products) parts.push(await toInlinePart(f))
     }
 

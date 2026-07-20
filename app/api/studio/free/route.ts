@@ -143,7 +143,7 @@ export async function POST(request: Request) {
 
         // VÊTEMENT — produits
         if (products.length) {
-          parts.push({ text: `GARMENT${products.length > 1 ? 'S' : ''} — reproduce every detail with absolute fidelity: cut, color, fabric, pattern, stitching, buttons. Use ONLY the product(s) below — no clothing from previous requests.` })
+          parts.push({ text: `GARMENT${products.length > 1 ? 'S' : ''} — the image${products.length > 1 ? 's' : ''} below ${products.length > 1 ? 'are' : 'is'} ISOLATED PRODUCT PACKSHOT${products.length > 1 ? 'S' : ''} (photographed alone, filling their frame). ⚠ THEIR SCALE / SIZE / FILLED FRAME IS IRRELEVANT to the model's height and proportions — do NOT use them as size references for the model. The model must remain very TALL and ELONGATED (top-model 10-heads morphology as described above). Simply resize and drape these garments onto the tall model's body. Reproduce every detail with absolute fidelity: cut, color, fabric, pattern, stitching, buttons. Use ONLY the product(s) below — no clothing from previous requests.` })
           for (const f of products) parts.push(await toInlinePart(f))
         }
 
