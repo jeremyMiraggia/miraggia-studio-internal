@@ -107,7 +107,12 @@ export async function POST(request: Request) {
 
         // MANNEQUIN — corps puis visage
         if (mannequinBody) {
-          parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use THIS exact body: morphology, build, height, proportions, curves, skin tone. Do not slim down or idealize.` })
+          // ⚠ On demande à Gemini de garder l'IDENTITÉ du mannequin (visage,
+          // peau, cheveux, ethnicité) MAIS de suivre les instructions de
+          // morphologie données dans le prompt utilisateur (qui peut demander
+          // une silhouette top model élancée). L'ancien "Do not slim down or
+          // idealize" écrasait toutes les instructions de morphologie du client.
+          parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use this reference for IDENTITY : skin tone, ethnicity, hair color and style, face features. The MORPHOLOGY (height, proportions, leg length, silhouette) MUST follow the morphology instructions in the user prompt above — those override the reference photo's actual proportions. If the user prompt asks for a tall top-model silhouette, apply it while keeping the identity of this reference.` })
           parts.push(await toInlinePart(mannequinBody))
         }
         if (mannequinFace && opts.withFace) {
