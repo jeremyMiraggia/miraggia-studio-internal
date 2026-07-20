@@ -196,8 +196,20 @@ export default function NotionTab() {
       }
       // Détecte l'extension
       const ext = (blob.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
-      // Nom = SKU (= numeroLook) sanitisé
-      const fileName = `${sanitizeFilename(task.numeroLook || task.lookId)}.${ext}`
+      // Nom = SKU_vueN_pose  (obligatoire d'inclure la vue sinon les 4 vues du même
+      // look écrasent la même fichier — bug historique).
+      const baseSku = sanitizeFilename(task.numeroLook || task.lookId)
+      let vueLabel = ''
+      if (task.taskType === 'pose' && task.vueIndex !== undefined) {
+        vueLabel = `_vue${(task.vueIndex ?? 0) + 1}`
+        if (task.vueRaw) vueLabel += '_' + sanitizeFilename(task.vueRaw).slice(0, 40)
+      } else if (task.taskType === 'detail') {
+        vueLabel = `_detail${(task.detailIndex ?? 0) + 1}`
+        if (task.detailName) vueLabel += '_' + sanitizeFilename(task.detailName).slice(0, 40)
+      } else if (task.taskType === 'inspi') {
+        vueLabel = '_inspi'
+      }
+      const fileName = `${baseSku}${vueLabel}.${ext}`
       const fileHandle = await dir.getFileHandle(fileName, { create: true })
       const w = await fileHandle.createWritable()
       await w.write(blob)
