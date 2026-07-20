@@ -487,6 +487,9 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
   parts.push(
     `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence. Le fond est fourni en image de référence — utilise-le tel quel.`,
   )
+  parts.push(
+    `⚠ MORPHOLOGIE DU MANNEQUIN : garde l'identité (visage, ethnicité, tonalité de peau, coiffure) du mannequin de référence, mais allonge les proportions du corps. Silhouette TRÈS GRANDE (au moins 1m80), TRÈS ÉLANCÉE, avec de LONGUES JAMBES et un buste allongé. Style top model de podium haute couture (proportions élongées, silhouette longiligne, jambes qui font la moitié du corps). Rendu élégant façon défilé Vogue.`,
+  )
   parts.push(`⚠ ORIENTATION DU SUJET : ${orientationToPrompt(pose.orientation)}. C'est l'orientation du corps par rapport à la caméra — distincte du cadrage.`)
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
   parts.push(viewCropInstruction(pose.view))
