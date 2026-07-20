@@ -488,7 +488,25 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
     `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence. Le fond est fourni en image de référence — utilise-le tel quel.`,
   )
   parts.push(
-    `⚠ MORPHOLOGIE DU MANNEQUIN : garde l'identité (visage, ethnicité, tonalité de peau, coiffure) du mannequin de référence, mais allonge les proportions du corps. Silhouette TRÈS GRANDE (au moins 1m80), TRÈS ÉLANCÉE, avec de LONGUES JAMBES et un buste allongé. Style top model de podium haute couture (proportions élongées, silhouette longiligne, jambes qui font la moitié du corps). Rendu élégant façon défilé Vogue.`,
+    `⚠⚠⚠ MORPHOLOGIE DU MANNEQUIN — TRÈS IMPORTANT (impose-toi de sortir de ta zone de confort réaliste) ⚠⚠⚠`,
+  )
+  parts.push(
+    `Garde l'IDENTITÉ (visage, ethnicité, tonalité de peau, coiffure, couleur des yeux) du mannequin de référence — mais TRANSFORME COMPLÈTEMENT sa MORPHOLOGIE en top model de haute couture :`,
+  )
+  parts.push(
+    `  • HAUTEUR : au moins 1m88, idéalement 1m90-1m92 (comme un top model de podium type Balenciaga / Loewe / Chanel Haute Couture)`,
+  )
+  parts.push(
+    `  • JAMBES : EXCEPTIONNELLEMENT LONGUES — les jambes doivent faire 55% de la hauteur totale du corps (bien plus que le 48% moyen). Cuisses longues, tibias longs. C'est un signe distinctif : le personnage a de LONGUES LONGUES jambes qui étirent la silhouette.`,
+  )
+  parts.push(
+    `  • SILHOUETTE : ULTRA-LONGILIGNE, extrêmement élancée, fine, avec des lignes verticales étirées. Buste également allongé. Cou long. Épaules fines mais bien dessinées. Bassin étroit.`,
+  )
+  parts.push(
+    `  • RENDU : silhouette de statue grecque élancée / silhouette Alaïa / silhouette défilé Vogue Paris. Cette morphologie DÉPASSE la norme humaine réaliste — c'est un top model exceptionnel, pas un·e passant·e ordinaire.`,
+  )
+  parts.push(
+    `⚠ NE PAS produire un mannequin de taille moyenne (1m70-1m75). NE PAS produire des proportions "réalistes classiques". La silhouette doit être VISIBLEMENT plus haute, plus élancée, plus longiligne que la moyenne — au premier regard on doit comprendre "top model de podium".`,
   )
   parts.push(`⚠ ORIENTATION DU SUJET : ${orientationToPrompt(pose.orientation)}. C'est l'orientation du corps par rapport à la caméra — distincte du cadrage.`)
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
