@@ -108,31 +108,11 @@ export async function POST(request: Request) {
 
         // MANNEQUIN — corps puis visage
         if (mannequinBody) {
-          // ⚠ HACK MORPHOLOGIE : on pré-étire verticalement la photo body de +22%
-          // avant de l'envoyer à Gemini. Comme ça il "voit" un mannequin déjà
-          // allongé (proportions top model 10-têtes) et reproduit ces proportions.
-          // Beaucoup plus efficace que de le convaincre par le texte.
-          //   - Original 1500×2000 → 1500×2440
-          //   - Ratio jambes/corps passe visuellement de ~48% à ~58%
-          //   - Gemini reproduit fidèlement ces proportions (image > texte)
-          let bodyToSend = mannequinBody
-          try {
-            const bodyBuf = Buffer.from(new Uint8Array(await mannequinBody.arrayBuffer()))
-            const meta = await sharp(bodyBuf).metadata()
-            const w = meta.width ?? 1000
-            const h = meta.height ?? 1500
-            const stretchedH = Math.round(h * 1.30)   // +30% de hauteur (augmenté après tests)
-            const stretchedBuf = await sharp(bodyBuf)
-              .resize({ width: w, height: stretchedH, fit: 'fill', kernel: 'lanczos3' })
-              .png()
-              .toBuffer()
-            bodyToSend = new File([new Uint8Array(stretchedBuf)], 'body_stretched.png', { type: 'image/png' })
-          } catch (e) {
-            console.warn('[free] body pre-stretch failed, using original:', e)
-          }
-
-          parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use this reference for IDENTITY (skin tone, ethnicity, hair color and style, face features) AND for MORPHOLOGY (height, proportions, leg length, silhouette). The reference has been pre-stretched to show the exact top-model proportions we want — reproduce them faithfully.` })
-          parts.push(await toInlinePart(bodyToSend))
+          // Note : le pré-stretch a été annulé car il déformait aussi la sortie finale
+          // (mannequin visiblement étiré / visage un peu forcé). On envoie l'image body
+          // telle quelle et on compte sur le prompt (10-heads ratio) pour la morphologie.
+          parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use this reference ONLY for IDENTITY : face features, skin tone, ethnicity, hair color and style. Do NOT reproduce the body proportions of this reference — instead follow the tall top-model morphology described in the user prompt above (10-heads ratio, elongated silhouette, very long legs).` })
+          parts.push(await toInlinePart(mannequinBody))
         }
         if (mannequinFace && opts.withFace) {
           parts.push({ text: `MODEL FACE — apply this exact face (features, hair, expression) on the body above. Synthetic AI mannequin, not a real person.` })

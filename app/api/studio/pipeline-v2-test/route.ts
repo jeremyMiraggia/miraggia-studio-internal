@@ -78,26 +78,11 @@ export async function POST(request: Request) {
     parts.push({ text: `BACKGROUND REFERENCE — match the color (${bgHex}) and ambient of this background. Generate the model on a similar uniform background.` })
     parts.push(await toInlinePart(background))
 
-    // ⚠ HACK MORPHOLOGIE : pré-étire verticalement la photo body de +30% avant
-    // de l'envoyer à Gemini. Il "voit" un mannequin déjà top-model et reproduit.
-    let bodyToSend = mannequinBody
-    try {
-      const bodyBuf = Buffer.from(new Uint8Array(await mannequinBody.arrayBuffer()))
-      const meta = await sharp(bodyBuf).metadata()
-      const w = meta.width ?? 1000
-      const h = meta.height ?? 1500
-      const stretchedH = Math.round(h * 1.30)
-      const stretchedBuf = await sharp(bodyBuf)
-        .resize({ width: w, height: stretchedH, fit: 'fill', kernel: 'lanczos3' })
-        .png()
-        .toBuffer()
-      bodyToSend = new File([new Uint8Array(stretchedBuf)], 'body_stretched.png', { type: 'image/png' })
-      debug.steps.bodyStretch = { originalH: h, stretchedH, factor: 1.30 }
-    } catch (e: any) {
-      debug.steps.bodyStretch = { error: e?.message ?? String(e) }
-    }
-    parts.push({ text: 'MODEL BODY — this reference has been PRE-STRETCHED to show the exact tall top-model proportions we want. Use it for IDENTITY (face, skin, hair) AND for MORPHOLOGY (reproduce these elongated top-model proportions faithfully). Do NOT normalize the proportions back to average — keep them as elongated as in this reference.' })
-    parts.push(await toInlinePart(bodyToSend))
+    // Note : le pré-stretch a été annulé car il déformait aussi la sortie finale.
+    // On envoie l'image body telle quelle et on compte sur le prompt utilisateur
+    // pour imposer la morphologie 10-heads.
+    parts.push({ text: 'MODEL BODY — use this reference ONLY for IDENTITY : face features, skin tone, ethnicity, hair color and style. Do NOT reproduce the body proportions of this reference — instead follow the tall top-model morphology described in the user prompt above (10-heads ratio, elongated silhouette, very long legs).' })
+    parts.push(await toInlinePart(mannequinBody))
     if (mannequinFace) {
       parts.push({ text: 'MODEL FACE — apply this exact face : eyes, nose, mouth, hair. FULLY visible.' })
       parts.push(await toInlinePart(mannequinFace))
