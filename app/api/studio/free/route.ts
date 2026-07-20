@@ -121,7 +121,7 @@ export async function POST(request: Request) {
             const meta = await sharp(bodyBuf).metadata()
             const w = meta.width ?? 1000
             const h = meta.height ?? 1500
-            const stretchedH = Math.round(h * 1.22)   // +22% de hauteur
+            const stretchedH = Math.round(h * 1.30)   // +30% de hauteur (augmenté après tests)
             const stretchedBuf = await sharp(bodyBuf)
               .resize({ width: w, height: stretchedH, fit: 'fill', kernel: 'lanczos3' })
               .png()

@@ -78,8 +78,26 @@ export async function POST(request: Request) {
     parts.push({ text: `BACKGROUND REFERENCE — match the color (${bgHex}) and ambient of this background. Generate the model on a similar uniform background.` })
     parts.push(await toInlinePart(background))
 
-    parts.push({ text: 'MODEL BODY — use THIS exact body : morphology, height, skin tone, posture base.' })
-    parts.push(await toInlinePart(mannequinBody))
+    // ⚠ HACK MORPHOLOGIE : pré-étire verticalement la photo body de +30% avant
+    // de l'envoyer à Gemini. Il "voit" un mannequin déjà top-model et reproduit.
+    let bodyToSend = mannequinBody
+    try {
+      const bodyBuf = Buffer.from(new Uint8Array(await mannequinBody.arrayBuffer()))
+      const meta = await sharp(bodyBuf).metadata()
+      const w = meta.width ?? 1000
+      const h = meta.height ?? 1500
+      const stretchedH = Math.round(h * 1.30)
+      const stretchedBuf = await sharp(bodyBuf)
+        .resize({ width: w, height: stretchedH, fit: 'fill', kernel: 'lanczos3' })
+        .png()
+        .toBuffer()
+      bodyToSend = new File([new Uint8Array(stretchedBuf)], 'body_stretched.png', { type: 'image/png' })
+      debug.steps.bodyStretch = { originalH: h, stretchedH, factor: 1.30 }
+    } catch (e: any) {
+      debug.steps.bodyStretch = { error: e?.message ?? String(e) }
+    }
+    parts.push({ text: 'MODEL BODY — this reference has been PRE-STRETCHED to show the exact tall top-model proportions we want. Use it for IDENTITY (face, skin, hair) AND for MORPHOLOGY (reproduce these elongated top-model proportions faithfully). Do NOT normalize the proportions back to average — keep them as elongated as in this reference.' })
+    parts.push(await toInlinePart(bodyToSend))
     if (mannequinFace) {
       parts.push({ text: 'MODEL FACE — apply this exact face : eyes, nose, mouth, hair. FULLY visible.' })
       parts.push(await toInlinePart(mannequinFace))
