@@ -488,25 +488,58 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
     `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence. Le fond est fourni en image de référence — utilise-le tel quel.`,
   )
   parts.push(
-    `⚠⚠⚠ MORPHOLOGIE DU MANNEQUIN — TRÈS IMPORTANT (impose-toi de sortir de ta zone de confort réaliste) ⚠⚠⚠`,
+    `⚠⚠⚠ MORPHOLOGIE — RATIO CORPS/TÊTE (technique d'illustration mode) ⚠⚠⚠`,
   )
   parts.push(
-    `Garde l'IDENTITÉ (visage, ethnicité, tonalité de peau, coiffure, couleur des yeux) du mannequin de référence — mais TRANSFORME COMPLÈTEMENT sa MORPHOLOGIE en top model de haute couture :`,
+    `Applique les proportions classiques d'une FASHION ILLUSTRATION haute couture, mesurées en TÊTES (head-to-body ratio) :`,
   )
   parts.push(
-    `  • HAUTEUR : au moins 1m88, idéalement 1m90-1m92 (comme un top model de podium type Balenciaga / Loewe / Chanel Haute Couture)`,
+    `  • Hauteur totale du corps = 10 TÊTES (une personne moyenne réelle fait 7 à 7.5 têtes → là on est SUR 10, c'est un top model exagéré, style illustration Vogue).`,
   )
   parts.push(
-    `  • JAMBES : EXCEPTIONNELLEMENT LONGUES — les jambes doivent faire 55% de la hauteur totale du corps (bien plus que le 48% moyen). Cuisses longues, tibias longs. C'est un signe distinctif : le personnage a de LONGUES LONGUES jambes qui étirent la silhouette.`,
+    `  • La tête est PETITE par rapport au corps. Ne pas grossir la tête pour "compenser" — au contraire, garde-la fine et proportionnellement petite.`,
   )
   parts.push(
-    `  • SILHOUETTE : ULTRA-LONGILIGNE, extrêmement élancée, fine, avec des lignes verticales étirées. Buste également allongé. Cou long. Épaules fines mais bien dessinées. Bassin étroit.`,
+    `  • Répartition détaillée en 10 têtes (à mesurer verticalement) :`,
   )
   parts.push(
-    `  • RENDU : silhouette de statue grecque élancée / silhouette Alaïa / silhouette défilé Vogue Paris. Cette morphologie DÉPASSE la norme humaine réaliste — c'est un top model exceptionnel, pas un·e passant·e ordinaire.`,
+    `    1. Sommet du crâne → menton : 1 tête (la tête)`,
   )
   parts.push(
-    `⚠ NE PAS produire un mannequin de taille moyenne (1m70-1m75). NE PAS produire des proportions "réalistes classiques". La silhouette doit être VISIBLEMENT plus haute, plus élancée, plus longiligne que la moyenne — au premier regard on doit comprendre "top model de podium".`,
+    `    2. Menton → tétons : ~1.3 tête (cou long + haut du buste)`,
+  )
+  parts.push(
+    `    3. Tétons → nombril : ~1 tête`,
+  )
+  parts.push(
+    `    4. Nombril → entrejambe (hanches) : ~1.7 tête (soit ~4 têtes du sommet à l'entrejambe = HAUT du corps)`,
+  )
+  parts.push(
+    `    5. Entrejambe → genoux : ~3 têtes (cuisses TRÈS longues)`,
+  )
+  parts.push(
+    `    6. Genoux → sol : ~3 têtes (tibias TRÈS longs)`,
+  )
+  parts.push(
+    `  → Résultat : les JAMBES font 6 TÊTES sur 10 = 60% du corps (les pieds sont ~loin en bas du cadre, les hanches sont largement AU-DESSUS du milieu de l'image).`,
+  )
+  parts.push(
+    `Ne prends de l'image de référence du mannequin QUE l'identité (visage, ethnicité, peau, cheveux, yeux). IGNORE ses proportions réelles — remplace-les par le ratio 10-têtes décrit ci-dessus.`,
+  )
+  parts.push(
+    `⚠ INTERDICTIONS :`,
+  )
+  parts.push(
+    `  ✗ 7-8 têtes (proportions humaines réalistes normales) — inacceptable, trop réaliste.`,
+  )
+  parts.push(
+    `  ✗ Jambes courtes (< 50% du corps) — inacceptable.`,
+  )
+  parts.push(
+    `  ✗ Reproduire les proportions visibles sur la photo de référence du mannequin.`,
+  )
+  parts.push(
+    `⚠ TEST DE VALIDATION : si tu comptes visuellement combien de "têtes" fait le corps du mannequin de haut en bas, tu dois trouver ~10. Si tu trouves 7-8, tu n'as PAS assez allongé — recommence en agrandissant les cuisses et les tibias.`,
   )
   parts.push(`⚠ ORIENTATION DU SUJET : ${orientationToPrompt(pose.orientation)}. C'est l'orientation du corps par rapport à la caméra — distincte du cadrage.`)
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
