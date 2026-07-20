@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { compressGeminiImage } from '@/lib/serverImageCompress'
 import { put } from '@vercel/blob'
+import sharp from 'sharp'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -107,13 +108,31 @@ export async function POST(request: Request) {
 
         // MANNEQUIN — corps puis visage
         if (mannequinBody) {
-          // ⚠ On demande à Gemini de garder l'IDENTITÉ du mannequin (visage,
-          // peau, cheveux, ethnicité) MAIS de suivre les instructions de
-          // morphologie données dans le prompt utilisateur (qui peut demander
-          // une silhouette top model élancée). L'ancien "Do not slim down or
-          // idealize" écrasait toutes les instructions de morphologie du client.
-          parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use this reference for IDENTITY : skin tone, ethnicity, hair color and style, face features. The MORPHOLOGY (height, proportions, leg length, silhouette) MUST follow the morphology instructions in the user prompt above — those override the reference photo's actual proportions. If the user prompt asks for a tall top-model silhouette, apply it while keeping the identity of this reference.` })
-          parts.push(await toInlinePart(mannequinBody))
+          // ⚠ HACK MORPHOLOGIE : on pré-étire verticalement la photo body de +22%
+          // avant de l'envoyer à Gemini. Comme ça il "voit" un mannequin déjà
+          // allongé (proportions top model 10-têtes) et reproduit ces proportions.
+          // Beaucoup plus efficace que de le convaincre par le texte.
+          //   - Original 1500×2000 → 1500×2440
+          //   - Ratio jambes/corps passe visuellement de ~48% à ~58%
+          //   - Gemini reproduit fidèlement ces proportions (image > texte)
+          let bodyToSend = mannequinBody
+          try {
+            const bodyBuf = Buffer.from(new Uint8Array(await mannequinBody.arrayBuffer()))
+            const meta = await sharp(bodyBuf).metadata()
+            const w = meta.width ?? 1000
+            const h = meta.height ?? 1500
+            const stretchedH = Math.round(h * 1.22)   // +22% de hauteur
+            const stretchedBuf = await sharp(bodyBuf)
+              .resize({ width: w, height: stretchedH, fit: 'fill', kernel: 'lanczos3' })
+              .png()
+              .toBuffer()
+            bodyToSend = new File([new Uint8Array(stretchedBuf)], 'body_stretched.png', { type: 'image/png' })
+          } catch (e) {
+            console.warn('[free] body pre-stretch failed, using original:', e)
+          }
+
+          parts.push({ text: `MODEL BODY (mannequin "${mannequinLabel}") — use this reference for IDENTITY (skin tone, ethnicity, hair color and style, face features) AND for MORPHOLOGY (height, proportions, leg length, silhouette). The reference has been pre-stretched to show the exact top-model proportions we want — reproduce them faithfully.` })
+          parts.push(await toInlinePart(bodyToSend))
         }
         if (mannequinFace && opts.withFace) {
           parts.push({ text: `MODEL FACE — apply this exact face (features, hair, expression) on the body above. Synthetic AI mannequin, not a real person.` })
