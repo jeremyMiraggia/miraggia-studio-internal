@@ -178,7 +178,7 @@ const VIEW_PROMPTS: Record<PoseView, string> = {
     'eye-level shot, plan américain 50mm, dos complet caméra, sujet vu de dos de la tête jusqu\'aux genoux, composition centrée éditoriale, focus net sur la silhouette de dos',
 
   'Back3Q':
-    'eye-level shot, plan américain 50mm, BACK THREE-QUARTER VIEW ONLY. The model is seen mostly from behind, with the back facing the camera and the body slightly turned to one side. The back remains the dominant visible view. Only a very slight side profile of the face may be visible. Never show the front of the body, the chest, the front torso, or the full face. The pose must clearly read as a rear 3/4 view, not a side view and not a frontal view. Composition centrée éditoriale, focus net sur la silhouette arrière 3/4.',
+    'eye-level shot, plan américain 50mm, RIGHT REAR 3/4 VIEW ONLY. The model is shown mostly from behind, with the back facing the camera and turned slightly toward the right side only. Only a minimal right-side facial profile may be visible. Never show the left rear 3/4 angle, the front of the body, the chest, the front torso, or the full face. The pose must clearly read as a right rear 3/4 view, not a left rear 3/4, not a side view, and not a frontal view. Composition centrée éditoriale, focus net sur la silhouette arrière 3/4 droite.',
 
   'CloseUpHaut':
     'eye-level shot, gros plan haut du corps 85mm, half-body shot (tête et épaules) ou bust shot, cadrage rapproché poitrine-tête, profondeur de champ très courte (f/1.8 ressenti), focus net sur le visage, fond légèrement flouté',
@@ -365,7 +365,7 @@ export function orientationToPrompt(o: PoseOrientation): string {
     case 'Front':  return 'le sujet est ORIENTÉ FACE CAMÉRA (de face)'
     case 'Side':   return 'le sujet est ORIENTÉ EN PROFIL STRICT (de côté, généralement profil gauche)'
     case 'Back':   return 'le sujet est ORIENTÉ DE DOS (dos complet à la caméra)'
-    case 'Back3Q': return 'le sujet est ORIENTÉ EN VUE ARRIÈRE 3/4 (mostly from behind, body slightly turned to one side, back remains dominant, only slight side profile of the face may be visible, never show the front, chest, or full face)'
+    case 'Back3Q': return 'le sujet est ORIENTÉ EN VUE ARRIÈRE 3/4 DROITE (right rear 3/4 only : mostly from behind, body slightly turned to the RIGHT side only, back remains dominant, only minimal right-side facial profile may be visible, never show the LEFT rear 3/4 angle, never show the front, chest, or full face)'
   }
 }
 
@@ -400,7 +400,7 @@ export function viewCropInstruction(view: PoseView): string {
     case 'Back':
       return '⚠ CADRAGE : plan américain dos complet caméra, sujet visible de la tête jusqu\'aux genoux. Reste fidèle au cadrage demandé.'
     case 'Back3Q':
-      return '⚠ CADRAGE : plan américain BACK THREE-QUARTER (dos-3/4), sujet visible de la tête jusqu\'aux genoux, corps légèrement tourné sur un côté mais le dos reste dominant. Ne montre JAMAIS la face avant, la poitrine ni le visage entier. Seul un très léger profil du visage peut être visible.'
+      return '⚠ CADRAGE : plan américain RIGHT REAR 3/4 (dos-3/4 côté DROIT uniquement), sujet visible de la tête jusqu\'aux genoux, corps légèrement tourné vers le côté DROIT (pas le gauche), le dos reste dominant. Ne montre JAMAIS la face avant, la poitrine ni le visage entier. Ne montre JAMAIS le côté gauche (left rear 3/4 interdit). Seul un léger profil du visage droit peut être visible.'
   }
 }
 
