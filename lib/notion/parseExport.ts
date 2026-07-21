@@ -456,6 +456,13 @@ function filesForOrientation(orientation: PoseOrientation, look: LookRow): { fil
       }
       break
 
+    case 'Back3Q':
+      // Vue arrière 3/4 : on montre majoritairement le dos + un léger côté.
+      // Priorité aux fichiers BACK, avec les FRONT en complément pour le léger profil.
+      files = [...look.filesBack, ...look.filesFront]
+      if (look.filesBack.length === 0) w.push('FILES (BACK) vide — vue 3/4 dos incomplète (fallback FRONT).')
+      break
+
     case 'Side':
       files = [...look.filesFront, ...look.filesBack]
       if (look.filesFront.length === 0) w.push('FILES (FRONT) vide — vue Side incomplète sans le devant.')

@@ -386,6 +386,10 @@ function filesForViewSombo(
       files = back
       if (back.length === 0) w.push('Aucun fichier dans image_back_files — vue Back impossible à habiller.')
       break
+    case 'Back3Q':
+      files = [...back, ...front]
+      if (back.length === 0) w.push('image_back_files vide — vue Back 3/4 incomplète (fallback FRONT).')
+      break
     case 'Side':
       files = [...front, ...back]
       if (front.length === 0) w.push('image_face_files vide — vue Side incomplète.')
