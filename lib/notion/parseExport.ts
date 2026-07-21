@@ -488,58 +488,74 @@ function buildPosePrompt(look: LookRow, pose: PoseLabel, model?: ModelDef): stri
     `Photographie de mode professionnelle du mannequin "${look.mannequinName}" (${modelRefDescription(model)}), portant les vêtements montrés en référence. Le fond est fourni en image de référence — utilise-le tel quel.`,
   )
   parts.push(
-    `⚠⚠⚠ MORPHOLOGIE — RATIO CORPS/TÊTE (technique d'illustration mode) ⚠⚠⚠`,
+    `⚠⚠⚠ MORPHOLOGIE DU MANNEQUIN — 5 LEVIERS À APPLIQUER SANS COMPROMIS ⚠⚠⚠`,
+  )
+
+  // LEVIER 1 : Ratio en têtes (le plus important)
+  parts.push(
+    `1) RATIO EN TÊTES (le levier n°1 — une image n'a pas d'échelle absolue, seule la proportion crée l'impression de grande taille) :`,
   )
   parts.push(
-    `Applique les proportions classiques d'une FASHION ILLUSTRATION haute couture, mesurées en TÊTES (head-to-body ratio) :`,
+    `   → Hauteur totale du corps = 9.5 TÊTES (une personne normale fait 7-7.5 têtes ; ici on demande 9.5 têtes de runway haute couture).`,
   )
   parts.push(
-    `  • Hauteur totale du corps = 10 TÊTES (une personne moyenne réelle fait 7 à 7.5 têtes → là on est SUR 10, c'est un top model exagéré, style illustration Vogue).`,
+    `   → La TÊTE doit paraître PETITE par rapport au corps. C'est le point que tu rates le plus souvent — je le répète : la TÊTE est PETITE. Une tête trop grosse rend instantanément la silhouette courte et écrasée, même avec de longues jambes. Réduis la taille de la tête proportionnellement au corps.`,
+  )
+
+  // LEVIER 2 : Jambes en pourcentage vérifiable
+  parts.push(
+    `2) JAMBES EN POURCENTAGE VÉRIFIABLE (critère géométrique mesurable) :`,
   )
   parts.push(
-    `  • La tête est PETITE par rapport au corps. Ne pas grossir la tête pour "compenser" — au contraire, garde-la fine et proportionnellement petite.`,
+    `   → Les jambes doivent faire au moins 58% de la hauteur totale du corps (mesurées du haut de la hanche jusqu'au sol).`,
   )
   parts.push(
-    `  • Répartition détaillée en 10 têtes (à mesurer verticalement) :`,
+    `   → Les jambes sont NETTEMENT PLUS LONGUES que le buste (buste + tête = 42%, jambes = 58%).`,
   )
   parts.push(
-    `    1. Sommet du crâne → menton : 1 tête (la tête)`,
+    `   → La ligne des HANCHES doit être placée LOIN au-dessus du milieu géométrique vertical de la silhouette. Si tu traces une ligne horizontale au milieu du personnage, elle doit tomber SOUS le nombril, dans le haut des cuisses, pas au niveau du pubis ou plus bas.`,
+  )
+
+  // LEVIER 3 : Cadrage et caméra
+  parts.push(
+    `3) CADRAGE ET CAMÉRA (allonge optiquement la silhouette) :`,
   )
   parts.push(
-    `    2. Menton → tétons : ~1.3 tête (cou long + haut du buste)`,
+    `   → La silhouette REMPLIT le cadre verticalement : sommet de la tête proche du bord haut de l'image (~3-5% de marge), pieds proches du bord bas (~3-5% de marge).`,
   )
   parts.push(
-    `    3. Tétons → nombril : ~1 tête`,
+    `   → Caméra positionnée à HAUTEUR DE TAILLE du mannequin (pas à hauteur de visage), en LÉGÈRE CONTRE-PLONGÉE. La contre-plongée allonge optiquement les jambes, comme en vrai shooting de mode.`,
+  )
+
+  // LEVIER 4 : Nommer le biais explicitement
+  parts.push(
+    `4) BIAIS DES MODÈLES D'IMAGE — À COMPENSER EXPLICITEMENT :`,
   )
   parts.push(
-    `    4. Nombril → entrejambe (hanches) : ~1.7 tête (soit ~4 têtes du sommet à l'entrejambe = HAUT du corps)`,
+    `   ⚠ Les modèles d'IA (comme toi) rendent SYSTÉMATIQUEMENT les personnes PLUS PETITES que demandé. Tu as un biais fort vers "personne moyenne réaliste 1m70-1m75".`,
   )
   parts.push(
-    `    5. Entrejambe → genoux : ~3 têtes (cuisses TRÈS longues)`,
+    `   ⚠ COMPENSE ce biais en EXAGÉRANT dans l'autre sens. Ici, "trop grand" N'EXISTE PAS.`,
   )
   parts.push(
-    `    6. Genoux → sol : ~3 têtes (tibias TRÈS longs)`,
+    `   ⚠ Une silhouette presque CARICATURALE de runway (top model podium Chanel Haute Couture) est la BONNE RÉPONSE. Une taille moyenne est un ÉCHEC.`,
   )
   parts.push(
-    `  → Résultat : les JAMBES font 6 TÊTES sur 10 = 60% du corps (les pieds sont ~loin en bas du cadre, les hanches sont largement AU-DESSUS du milieu de l'image).`,
+    `   ⚠ Ne prends de l'image de référence du mannequin QUE l'identité (visage, ethnicité, peau, cheveux, yeux). IGNORE complètement ses proportions — elles ne sont pas celles qu'on veut.`,
+  )
+
+  // LEVIER 5 : Self-check final (le plus important — les dernières consignes pèsent le plus)
+  parts.push(
+    `5) SELF-CHECK FINAL (fait-le AVANT de finaliser l'image) :`,
   )
   parts.push(
-    `Ne prends de l'image de référence du mannequin QUE l'identité (visage, ethnicité, peau, cheveux, yeux). IGNORE ses proportions réelles — remplace-les par le ratio 10-têtes décrit ci-dessus.`,
+    `   Regarde la silhouette que tu viens de générer. Pose-toi la question : "Est-ce que cette personne pourrait passer pour 1m75 ?"`,
   )
   parts.push(
-    `⚠ INTERDICTIONS :`,
+    `   → Si OUI : l'image est FAUSSE. Rallonge les jambes (agrandis cuisses et tibias), RÉDUIS la tête, replace la ligne des hanches plus haut, et REVÉRIFIE.`,
   )
   parts.push(
-    `  ✗ 7-8 têtes (proportions humaines réalistes normales) — inacceptable, trop réaliste.`,
-  )
-  parts.push(
-    `  ✗ Jambes courtes (< 50% du corps) — inacceptable.`,
-  )
-  parts.push(
-    `  ✗ Reproduire les proportions visibles sur la photo de référence du mannequin.`,
-  )
-  parts.push(
-    `⚠ TEST DE VALIDATION : si tu comptes visuellement combien de "têtes" fait le corps du mannequin de haut en bas, tu dois trouver ~10. Si tu trouves 7-8, tu n'as PAS assez allongé — recommence en agrandissant les cuisses et les tibias.`,
+    `   → Si NON (la silhouette fait clairement 1m85+, comme une top model exceptionnelle) : c'est bon.`,
   )
   parts.push(`⚠ ORIENTATION DU SUJET : ${orientationToPrompt(pose.orientation)}. C'est l'orientation du corps par rapport à la caméra — distincte du cadrage.`)
   parts.push(`POSE : ${poseToPrompt(pose)}.`)
