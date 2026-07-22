@@ -18,28 +18,41 @@ export const maxDuration = 300
 export const runtime = 'nodejs'
 
 const ANTI_HALLUCINATION_PROMPT = [
-  "TASK : Recreate the packshot from the REFERENCE image, but replace the garment with the one shown in the SOURCE image.",
+  "TASK : Take the GARMENT shown in IMAGE #2 (source photo) and present it in the exact FORMAT / ANGLE / COMPOSITION / STYLE of IMAGE #1 (reference packshot).",
+  "",
+  "⚠ IMPORTANT DISTINCTION — DO NOT CONFUSE THE TWO IMAGES :",
+  "  → IMAGE #1 = REFERENCE for HOW to present : the framing, the camera angle, the view (front / 3/4 / detail / etc.), the composition, the aspect ratio, the crop, the background, the lighting. DO NOT copy the actual garment of image #1 — it is only there to teach you the presentation style.",
+  "  → IMAGE #2 = SOURCE for WHAT to present : the garment itself. Its color, its material, its cut, its buttons, its collar, its label brand. This garment MUST appear in the final output, presented like image #1.",
+  "",
+  "⚠ COMMON MISTAKE TO AVOID :",
+  "The two images might both be shirts / garments that look similar at first glance. DO NOT take the easy path of copying image #1 as-is. The output MUST be the GARMENT OF IMAGE #2, presented in the STYLE OF IMAGE #1. If your output looks like image #1 unchanged, you have FAILED the task.",
+  "",
+  "⚠ ANGLE / VIEW TRANSFER :",
+  "The view and framing of image #1 are what matters. If image #1 shows a full-frame vertical folded shirt front-view, produce a full-frame vertical folded shirt front-view — even if image #2 shows a close-up on the collar or a different angle. IGNORE the angle / crop / zoom of image #2 and follow image #1 strictly.",
   "",
   "⚠ CRITICAL — GHOST PACKSHOT, ONE GARMENT ONLY :",
-  "This is a GHOST MANNEQUIN packshot of ONE folded garment (shirt, t-shirt, polo, pullover, top, jumper, etc. — whatever is in the source image).",
+  "This is a GHOST MANNEQUIN packshot of ONE folded garment (shirt, t-shirt, polo, pullover, top, jumper, etc.).",
   "There is EXACTLY ONE garment in the output. NOT two. NOT a duplicate. NOT a ghost / reflection / mirror image behind it.",
   "There is NO human, NO model, NO head, NO body, NO neck, NO hands, NO face, NO buste, NO silhouette.",
-  "The background is 100% CLEAN and UNIFORM — no additional garment silhouette in the background, no faded copy of the garment behind, no double exposure effect.",
-  "If you see any of these artifacts in your generation (double garment, ghost silhouette, human element, background garment), REMOVE THEM.",
+  "The background is 100% CLEAN and UNIFORM.",
   "",
-  "⚠ COPY FROM THE REFERENCE IMAGE (the 1st attached image):",
-  "  • the exact same composition (garment centered, same crop, same aspect ratio)",
+  "⚠ FROM IMAGE #1 (reference packshot) — COPY the presentation :",
+  "  • the exact same composition, framing, aspect ratio, crop",
+  "  • the exact same view/angle (if front full-frame, keep front full-frame; if 3/4 angle, keep 3/4 angle; etc.)",
   "  • the exact same folding style (collar visible, cuff visible, buttons visible if any, size label visible)",
-  "  • the exact same pose of the folded garment",
   "  • the exact same background color and texture (uniform light grey/white studio background)",
   "  • the exact same lighting (soft, even, no harsh shadows)",
-  "  • the exact same subtle drop shadow underneath the garment (nothing more, nothing less)",
+  "  • the exact same subtle drop shadow underneath the garment",
   "  • the exact same sharpness and professional quality (very piqué, e-commerce catalog quality)",
+  "  • ⚠ DO NOT copy the garment itself of image #1 (color, material, brand label of image #1 are IRRELEVANT — they must NOT appear in the output).",
   "",
-  "⚠ REPLACE THE GARMENT with the one from the SOURCE image (the 2nd attached image):",
-  "  • Reproduce faithfully : the exact color, the exact material/texture, the exact cut, the exact stitching, the exact buttons (if any), the exact collar shape (if shirt/polo), the exact neckline (if t-shirt), the exact label brand.",
-  "  • The garment must be RECOGNIZABLE as the same one from the source photo, just presented as a professional packshot.",
-  "  • If the source photo is an iPhone snapshot (bad lighting, wrinkles, casual background) : IGNORE the environment, just extract the garment identity.",
+  "⚠ FROM IMAGE #2 (source garment) — EXTRACT ONLY the garment :",
+  "  • the exact garment color, exact material/texture (velvet, corduroy, linen, cotton, etc.)",
+  "  • the exact cut, exact stitching, exact buttons",
+  "  • the exact collar shape (if shirt/polo), exact neckline (if t-shirt)",
+  "  • the exact brand label (name, colors, format on the label)",
+  "  • The garment must be RECOGNIZABLE as the one from image #2, just re-presented in the style of image #1.",
+  "  • ⚠ IGNORE the framing, angle, zoom, background, lighting of image #2 — only the garment itself matters. If image #2 is a close-up on the collar, DO NOT produce a close-up on the collar — produce the same full view as image #1.",
   "",
   "⚠ FABRIC MUST BE PERFECTLY IRONED, SMOOTH AND CRISP :",
   "  • The garment must appear FRESHLY IRONED and STEAMED — 100% smooth, wrinkle-free, crease-free, fold-free (except the intentional folding of the packshot).",
@@ -87,13 +100,13 @@ export async function POST(request: Request) {
     const parts: any[] = []
     parts.push({ text: `[SESSION ${sessionId}]\n${prompt}` })
 
-    parts.push({ text: '=== IMAGE #1 : REFERENCE PACKSHOT ===\nThis is the reference packshot to reproduce (composition, lighting, background, style). Copy EVERYTHING from this image except the garment.' })
+    parts.push({ text: '=== IMAGE #1 : REFERENCE PACKSHOT (style teacher) ===\n⚠ This image teaches you HOW to present a garment (composition, angle, view, framing, background, lighting). Copy the PRESENTATION STYLE of this image. But the GARMENT SHOWN in this image is IRRELEVANT — do NOT reproduce this specific garment. It is not the one we want in the output. Look at HOW the garment is shot, not WHAT it is.' })
     parts.push(await toInlinePart(reference))
 
-    parts.push({ text: '=== IMAGE #2 : SOURCE GARMENT ===\nThis is the actual garment to reproduce (an iPhone photo). Extract only the garment identity (color, material, cut, buttons, details). Ignore the iPhone photo\'s background, lighting, and wrinkles. Present this garment IN THE STYLE OF IMAGE #1.' })
+    parts.push({ text: '=== IMAGE #2 : SOURCE GARMENT (the actual garment for the output) ===\n⚠ This is the ACTUAL garment that MUST appear in the output. Extract only its identity : color, material/texture (e.g. corduroy, linen, velvet), cut, stitching, buttons, collar shape, neckline, brand label. IGNORE the framing / angle / zoom / background / lighting of this image #2 — those are wrong. Present this garment WITH THE PRESENTATION STYLE of image #1 (same framing, same angle, same view, same background, same lighting as image #1).' })
     parts.push(await toInlinePart(source))
 
-    parts.push({ text: 'FINAL REMINDER : Output = a professional GHOST packshot (folded shirt only, NO human, NO head, NO buste). Style = image #1. Garment = image #2. Nothing else.' })
+    parts.push({ text: '⚠ FINAL SELF-CHECK before producing the output — answer these questions honestly :\n  1) Is the FRAMING / ANGLE / VIEW of my output the same as image #1 ? (If image #1 is a full-frame vertical front view, my output must be a full-frame vertical front view too. If image #1 is a 3/4 view, my output must be a 3/4 view.)\n  2) Is the GARMENT in my output the one from image #2 (color, material, brand label) ? Not the one from image #1.\n  3) If someone compared my output side-by-side with image #1, would they say they are DIFFERENT garments ? (Yes = success. No = failure — you copied image #1 unchanged, redo.)\n\nOutput = a professional GHOST packshot, single folded garment, NO human. Presentation style = image #1. Garment identity = image #2.' })
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiBody = JSON.stringify({
