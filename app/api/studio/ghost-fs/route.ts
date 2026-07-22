@@ -18,68 +18,31 @@ export const maxDuration = 300
 export const runtime = 'nodejs'
 
 const ANTI_HALLUCINATION_PROMPT = [
-  "TASK : Take the GARMENT shown in IMAGE #2 (source photo) and present it in the exact FORMAT / ANGLE / COMPOSITION / STYLE of IMAGE #1 (reference packshot).",
+  "Utilise le packshot de l'image 1 comme référence stricte et unique pour la vue.",
+  "À partir du produit de l'image 2, recrée exactement :",
+  "  • le même angle de prise de vue ;",
+  "  • la même orientation du produit ;",
+  "  • le même niveau de rotation ;",
+  "  • la même perspective ;",
+  "  • le même cadrage ;",
+  "  • la même position dans l'image ;",
+  "  • la même échelle et les mêmes proportions visibles que sur l'image 1.",
   "",
-  "⚠ IMPORTANT DISTINCTION — DO NOT CONFUSE THE TWO IMAGES :",
-  "  → IMAGE #1 = REFERENCE for HOW to present : the framing, the camera angle, the view (front / 3/4 / detail / etc.), the composition, the aspect ratio, the crop, the background, the lighting. DO NOT copy the actual garment of image #1 — it is only there to teach you the presentation style.",
-  "  → IMAGE #2 = SOURCE for WHAT to present : the garment itself. Its color, its material, its cut, its buttons, its collar, its label brand. This garment MUST appear in the final output, presented like image #1.",
+  "La silhouette et les contours du produit généré doivent s'aligner avec ceux de l'image 1. Ne crée pas une vue similaire ou approximative : reproduis précisément la vue de l'image 1.",
   "",
-  "⚠ COMMON MISTAKE TO AVOID :",
-  "The two images might both be shirts / garments that look similar at first glance. DO NOT take the easy path of copying image #1 as-is. The output MUST be the GARMENT OF IMAGE #2, presented in the STYLE OF IMAGE #1. If your output looks like image #1 unchanged, you have FAILED the task.",
+  "L'image 1 sert uniquement de référence pour la vue, l'angle et le cadrage.",
   "",
-  "⚠ ANGLE / VIEW / FRAMING TRANSFER — REPRODUCE THE EXACT FRAMING OF IMAGE #1 :",
-  "  • Look CAREFULLY at image #1 and identify its framing : is it a wide full-body shot, a tight close-up, a 3/4 angled view, a top-down view, a side view, a zoomed detail on the collar or cuff, or something else ?",
-  "  • Whatever the framing of image #1 is, YOU MUST reproduce it EXACTLY in your output.",
-  "  • Examples : if image #1 is a tight close-up on the collar area + cuff at a 3/4 angle → your output must also be a tight close-up on the collar area + cuff at a 3/4 angle. If image #1 is a top-down full-shirt shot → your output must also be a top-down full-shirt shot.",
-  "  • DO NOT default to a standard flat vertical packshot unless image #1 is a standard flat vertical packshot.",
-  "  • The angle, the zoom level, the crop, the aspect ratio, the visible parts of the garment, the perspective — ALL must match image #1.",
-  "  • IGNORE the framing / angle / zoom of image #2 completely. Even if image #2 is laid flat on a bed and image #1 is a tight zoomed 3/4 shot, your output must be a tight zoomed 3/4 shot.",
+  "Le produit doit rester strictement celui de l'image 2. Ne modifie ni sa forme, ni sa coupe, ni sa longueur, ni ses volumes, ni ses détails, ni ses coutures, ni sa matière, ni sa texture, ni sa couleur, ni ses finitions.",
   "",
-  "⚠ CRITICAL — GHOST PACKSHOT, ONE GARMENT ONLY :",
-  "This is a GHOST MANNEQUIN packshot of ONE folded garment (shirt, t-shirt, polo, pullover, top, jumper, etc.).",
-  "There is EXACTLY ONE garment in the output. NOT two. NOT a duplicate. NOT a ghost / reflection / mirror image behind it.",
-  "There is NO human, NO model, NO head, NO body, NO neck, NO hands, NO face, NO buste, NO silhouette.",
-  "The background is 100% CLEAN and UNIFORM.",
+  "Ne mélange jamais les caractéristiques des deux produits.",
   "",
-  "⚠ FROM IMAGE #1 (reference packshot) — COPY the presentation :",
-  "  • the exact same composition, framing, aspect ratio, crop",
-  "  • the exact same view/angle (if front full-frame, keep front full-frame; if 3/4 angle, keep 3/4 angle; etc.)",
-  "  • the exact same folding style (collar visible, cuff visible, buttons visible if any, size label visible)",
-  "  • the exact same background color and texture (uniform light grey/white studio background)",
-  "  • the exact same lighting (soft, even, no harsh shadows)",
-  "  • the exact same subtle drop shadow underneath the garment",
-  "  • the exact same sharpness and professional quality (very piqué, e-commerce catalog quality)",
-  "  • ⚠ DO NOT copy the garment itself of image #1 (color, material, brand label of image #1 are IRRELEVANT — they must NOT appear in the output).",
-  "",
-  "⚠ FROM IMAGE #2 (source garment) — EXTRACT ONLY the garment :",
-  "  • the exact garment color, exact material/texture (velvet, corduroy, linen, cotton, etc.)",
-  "  • the exact cut, exact stitching, exact buttons",
-  "  • the exact collar shape (if shirt/polo), exact neckline (if t-shirt)",
-  "  • the exact brand label (name, colors, format on the label)",
-  "  • The garment must be RECOGNIZABLE as the one from image #2, just re-presented in the style of image #1.",
-  "  • ⚠ IGNORE the framing, angle, zoom, background, lighting of image #2 — only the garment itself matters. If image #2 is a close-up on the collar, DO NOT produce a close-up on the collar — produce the same full view as image #1.",
-  "",
-  "⚠ FABRIC MUST BE PERFECTLY IRONED, SMOOTH AND CRISP :",
-  "  • The garment must appear FRESHLY IRONED and STEAMED — 100% smooth, wrinkle-free, crease-free, fold-free (except the intentional folding of the packshot).",
-  "  • The fabric is PULLED TAUT / PULLED TIGHT — no waviness, no ripples, no loose fabric, no folds inside the fabric surface.",
-  "  • For linen, cotton, hemp : keep the natural fabric weave texture visible but ELIMINATE all wrinkles and creases.",
-  "  • Ignore any wrinkles present in the source iPhone photo — the packshot must show a perfectly ironed, crisp garment.",
-  "",
-  "⚠ FOLDING MUST BE MILLIMETRIC AND SYMMETRIC (this is critical for professional look) :",
-  "  • The garment is folded with PERFECT SYMMETRY — the left side and right side are mirror-perfect.",
-  "  • ALL edges are STRAIGHT LINES (no curves, no waves, no crooked edges). Rectangular / square shape overall.",
-  "  • ALL corners are SHARP and CRISP (90° angles, no rounded corners).",
-  "  • The center line (button placket / center fold) is a perfectly VERTICAL straight line.",
-  "  • The collar is centered and symmetric.",
-  "  • The visible cuff is aligned with a straight bottom edge.",
-  "  • The size label is centered and readable.",
-  "  • Zero wobble, zero asymmetry, zero misalignment — pin-sharp precision like a pro fashion catalog folding.",
-  "",
-  "⚠ PIQUÉ / SHARPNESS :",
-  "  • The output is razor-sharp, ultra-crisp, extremely piqué. Every detail (fabric weave, stitching, button holes, brand label text) is perfectly focused.",
-  "  • Brand label text must be legible and accurate — if the source shows 'FATHER & SONS', reproduce it EXACTLY (not 'TATHER' or 'FAT HER' or similar hallucination). Copy the label lettering pixel-perfect.",
-  "",
-  "OUTPUT : a single professional packshot with ONE garment (no ghosts, no doubles), perfectly ironed AND perfectly folded (straight lines, sharp corners, mirror symmetry), pin-sharp, indistinguishable from the reference in style, but with the source garment.",
+  "⚠ Contraintes techniques (à respecter en plus) :",
+  "  • Packshot GHOST : UN SEUL produit, sans doublure/fantôme/reflet, sans humain, sans mannequin, sans tête, sans corps.",
+  "  • Fond identique à l'image 1 (couleur, texture, uniformité).",
+  "  • Lumière identique à l'image 1.",
+  "  • Vêtement PARFAITEMENT REPASSÉ : tissu lisse, tendu, sans plis ni froissements (garde la texture naturelle du tissu mais élimine les plis).",
+  "  • Étiquette de marque reproduite avec précision (texte exact, pas d'hallucination du type 'TATHER' au lieu de 'FATHER').",
+  "  • Rendu ultra piqué, netteté maximale, qualité catalogue e-commerce professionnel.",
 ].join('\n')
 
 export async function POST(request: Request) {
@@ -105,13 +68,13 @@ export async function POST(request: Request) {
     const parts: any[] = []
     parts.push({ text: `[SESSION ${sessionId}]\n${prompt}` })
 
-    parts.push({ text: '=== IMAGE #1 : REFERENCE PACKSHOT (style teacher) ===\n⚠ This image teaches you HOW to present a garment (composition, angle, view, framing, background, lighting). Copy the PRESENTATION STYLE of this image. But the GARMENT SHOWN in this image is IRRELEVANT — do NOT reproduce this specific garment. It is not the one we want in the output. Look at HOW the garment is shot, not WHAT it is.' })
+    parts.push({ text: '=== IMAGE 1 — RÉFÉRENCE VUE / ANGLE / CADRAGE ===\nCopie EXACTEMENT la vue, l\'angle, l\'orientation, la rotation, la perspective, le cadrage, la position, l\'échelle et les proportions de cette image. Le produit montré ici sert UNIQUEMENT à te donner ces informations — ne le reproduis PAS dans l\'output.' })
     parts.push(await toInlinePart(reference))
 
-    parts.push({ text: '=== IMAGE #2 : SOURCE GARMENT (the actual garment for the output) ===\n⚠ This is the ACTUAL garment that MUST appear in the output. Extract only its identity : color, material/texture (e.g. corduroy, linen, velvet), cut, stitching, buttons, collar shape, neckline, brand label. IGNORE the framing / angle / zoom / background / lighting of this image #2 — those are wrong. Present this garment WITH THE PRESENTATION STYLE of image #1 (same framing, same angle, same view, same background, same lighting as image #1).' })
+    parts.push({ text: '=== IMAGE 2 — PRODUIT À REPRODUIRE ===\nC\'est LE produit qui doit apparaître dans l\'output. Reproduis-le à l\'identique : forme, coupe, longueur, volumes, détails, coutures, matière, texture, couleur, finitions, étiquette de marque. Ignore complètement le cadrage / angle / fond / lumière de cette image — utilise UNIQUEMENT ceux de l\'image 1.' })
     parts.push(await toInlinePart(source))
 
-    parts.push({ text: '⚠ FINAL SELF-CHECK before producing the output — answer these questions honestly :\n  1) FRAMING match : if I place my output next to image #1, do they have the same framing/angle/zoom/crop ? (Same tight close-up if #1 is tight ; same wide shot if #1 is wide ; same 3/4 angle if #1 is 3/4 ; same top-down if #1 is top-down.) If the framings differ, my output is WRONG — I copied a generic packshot instead of matching image #1\'s actual framing.\n  2) GARMENT identity : is the garment in my output the one from image #2 (color, material, brand label of image #2) ? NOT the one from image #1.\n  3) Comparison test : if someone compared my output side-by-side with image #1, would they say : "same presentation style but DIFFERENT garments" ? Yes = success. No (they look like the same shirt) = failure, redo.\n\nOutput = a professional GHOST packshot, single folded garment, NO human. Presentation style / framing / angle = COPY EXACTLY from image #1. Garment identity = COPY EXACTLY from image #2.' })
+    parts.push({ text: '⚠ SELF-CHECK final avant de produire l\'output — répond honnêtement :\n  1) VUE / CADRAGE : si je place mon output à côté de l\'image 1, est-ce qu\'ils ont EXACTEMENT le même angle, la même rotation, le même cadrage, la même échelle ? Si les vues diffèrent, mon output est FAUX — je n\'ai pas reproduit précisément la vue de l\'image 1.\n  2) PRODUIT : est-ce que le produit dans mon output est celui de l\'image 2 (couleur, matière, coupe, coutures, étiquette) et PAS celui de l\'image 1 ?\n  3) MÉLANGE : est-ce que j\'ai bien évité de mélanger les caractéristiques des deux produits ?\n\nOutput = un packshot ghost pro, UN SEUL produit, sans humain. Vue = image 1. Produit = image 2. Pas de mélange.' })
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiBody = JSON.stringify({

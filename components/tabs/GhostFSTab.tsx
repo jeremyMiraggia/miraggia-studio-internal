@@ -26,21 +26,28 @@ type Task = {
   error?:    string
 }
 
-// Prompt éditable côté client (le serveur a un fallback anti-hallucination
-// robuste si tu laisses ce champ tel quel). Générique = fonctionne pour
-// chemise, t-shirt, polo, pull, top, etc.
+// Prompt éditable côté client. Si tu le laisses tel quel, c'est ce prompt-là
+// qui est envoyé au serveur. Sinon, le serveur a un prompt par défaut similaire.
 const STYLE_TRANSFER_PROMPT = [
-  "PACKSHOT GHOST : UN SEUL vêtement plié, SEUL. Aucun humain, aucune tête, aucun buste.",
-  "Fond 100% propre : pas de doublon, pas de fantôme, pas de reflet, pas de silhouette derrière.",
+  "Utilise le packshot de l'image 1 comme référence stricte et unique pour la vue.",
+  "À partir du produit de l'image 2, recrée exactement :",
+  "  • le même angle de prise de vue ;",
+  "  • la même orientation du produit ;",
+  "  • le même niveau de rotation ;",
+  "  • la même perspective ;",
+  "  • le même cadrage ;",
+  "  • la même position dans l'image ;",
+  "  • la même échelle et les mêmes proportions visibles que sur l'image 1.",
   "",
-  "IMAGE #1 = référence packshot : copie exactement sa composition, son fond, sa lumière, son cadrage, sa qualité.",
-  "IMAGE #2 = photo source du vêtement (chemise, t-shirt, polo, pull...) : reproduis fidèlement le vêtement (couleur, matière, coupe, coutures, boutons/encolure, étiquette de marque exacte) mais présente-le dans le style de l'image #1.",
+  "La silhouette et les contours du produit généré doivent s'aligner avec ceux de l'image 1. Ne crée pas une vue similaire ou approximative : reproduis précisément la vue de l'image 1.",
   "",
-  "⚠ REPASSAGE : Vêtement PARFAITEMENT REPASSÉ, tissu TIRÉ TENDU, aucun pli, aucun froissement, aucune ondulation dans le tissu.",
-  "⚠ PLIAGE : symétrie parfaite (miroir gauche/droite), coins nets à 90°, arêtes rigoureusement droites (aucune vague, aucune ligne courbée), pli central vertical parfait — précision millimétrique comme un pliage pro de catalogue mode.",
-  "⚠ PIQUÉ : résultat ultra piqué, chaque détail net (tissage, coutures, boutons, texte de l'étiquette de marque doit être lisible et exact).",
+  "L'image 1 sert uniquement de référence pour la vue, l'angle et le cadrage.",
   "",
-  "Résultat : un packshot pro avec UN SEUL vêtement parfaitement plié et repassé, dans le style de l'image #1, avec le vêtement de l'image #2. Rien d'autre.",
+  "Le produit doit rester strictement celui de l'image 2. Ne modifie ni sa forme, ni sa coupe, ni sa longueur, ni ses volumes, ni ses détails, ni ses coutures, ni sa matière, ni sa texture, ni sa couleur, ni ses finitions.",
+  "",
+  "Ne mélange jamais les caractéristiques des deux produits.",
+  "",
+  "⚠ Contraintes techniques : packshot ghost (UN SEUL produit, sans humain, sans doublon), vêtement parfaitement repassé, fond identique à l'image 1, rendu ultra piqué.",
 ].join('\n')
 
 function sanitizeFilename(s: string): string {
