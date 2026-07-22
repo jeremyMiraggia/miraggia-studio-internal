@@ -27,8 +27,13 @@ const ANTI_HALLUCINATION_PROMPT = [
   "⚠ COMMON MISTAKE TO AVOID :",
   "The two images might both be shirts / garments that look similar at first glance. DO NOT take the easy path of copying image #1 as-is. The output MUST be the GARMENT OF IMAGE #2, presented in the STYLE OF IMAGE #1. If your output looks like image #1 unchanged, you have FAILED the task.",
   "",
-  "⚠ ANGLE / VIEW TRANSFER :",
-  "The view and framing of image #1 are what matters. If image #1 shows a full-frame vertical folded shirt front-view, produce a full-frame vertical folded shirt front-view — even if image #2 shows a close-up on the collar or a different angle. IGNORE the angle / crop / zoom of image #2 and follow image #1 strictly.",
+  "⚠ ANGLE / VIEW / FRAMING TRANSFER — REPRODUCE THE EXACT FRAMING OF IMAGE #1 :",
+  "  • Look CAREFULLY at image #1 and identify its framing : is it a wide full-body shot, a tight close-up, a 3/4 angled view, a top-down view, a side view, a zoomed detail on the collar or cuff, or something else ?",
+  "  • Whatever the framing of image #1 is, YOU MUST reproduce it EXACTLY in your output.",
+  "  • Examples : if image #1 is a tight close-up on the collar area + cuff at a 3/4 angle → your output must also be a tight close-up on the collar area + cuff at a 3/4 angle. If image #1 is a top-down full-shirt shot → your output must also be a top-down full-shirt shot.",
+  "  • DO NOT default to a standard flat vertical packshot unless image #1 is a standard flat vertical packshot.",
+  "  • The angle, the zoom level, the crop, the aspect ratio, the visible parts of the garment, the perspective — ALL must match image #1.",
+  "  • IGNORE the framing / angle / zoom of image #2 completely. Even if image #2 is laid flat on a bed and image #1 is a tight zoomed 3/4 shot, your output must be a tight zoomed 3/4 shot.",
   "",
   "⚠ CRITICAL — GHOST PACKSHOT, ONE GARMENT ONLY :",
   "This is a GHOST MANNEQUIN packshot of ONE folded garment (shirt, t-shirt, polo, pullover, top, jumper, etc.).",
@@ -106,7 +111,7 @@ export async function POST(request: Request) {
     parts.push({ text: '=== IMAGE #2 : SOURCE GARMENT (the actual garment for the output) ===\n⚠ This is the ACTUAL garment that MUST appear in the output. Extract only its identity : color, material/texture (e.g. corduroy, linen, velvet), cut, stitching, buttons, collar shape, neckline, brand label. IGNORE the framing / angle / zoom / background / lighting of this image #2 — those are wrong. Present this garment WITH THE PRESENTATION STYLE of image #1 (same framing, same angle, same view, same background, same lighting as image #1).' })
     parts.push(await toInlinePart(source))
 
-    parts.push({ text: '⚠ FINAL SELF-CHECK before producing the output — answer these questions honestly :\n  1) Is the FRAMING / ANGLE / VIEW of my output the same as image #1 ? (If image #1 is a full-frame vertical front view, my output must be a full-frame vertical front view too. If image #1 is a 3/4 view, my output must be a 3/4 view.)\n  2) Is the GARMENT in my output the one from image #2 (color, material, brand label) ? Not the one from image #1.\n  3) If someone compared my output side-by-side with image #1, would they say they are DIFFERENT garments ? (Yes = success. No = failure — you copied image #1 unchanged, redo.)\n\nOutput = a professional GHOST packshot, single folded garment, NO human. Presentation style = image #1. Garment identity = image #2.' })
+    parts.push({ text: '⚠ FINAL SELF-CHECK before producing the output — answer these questions honestly :\n  1) FRAMING match : if I place my output next to image #1, do they have the same framing/angle/zoom/crop ? (Same tight close-up if #1 is tight ; same wide shot if #1 is wide ; same 3/4 angle if #1 is 3/4 ; same top-down if #1 is top-down.) If the framings differ, my output is WRONG — I copied a generic packshot instead of matching image #1\'s actual framing.\n  2) GARMENT identity : is the garment in my output the one from image #2 (color, material, brand label of image #2) ? NOT the one from image #1.\n  3) Comparison test : if someone compared my output side-by-side with image #1, would they say : "same presentation style but DIFFERENT garments" ? Yes = success. No (they look like the same shirt) = failure, redo.\n\nOutput = a professional GHOST packshot, single folded garment, NO human. Presentation style / framing / angle = COPY EXACTLY from image #1. Garment identity = COPY EXACTLY from image #2.' })
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiBody = JSON.stringify({
