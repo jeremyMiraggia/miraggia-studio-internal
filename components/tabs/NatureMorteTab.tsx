@@ -7,6 +7,7 @@
  *   - Le prompt Gemini s'adapte automatiquement
  */
 import { useMemo, useRef, useState } from 'react'
+import JSZip from 'jszip'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
 import { parseNatureMorteExport, type NatureMorteTask, type NatureMorteExport } from '@/lib/notion/parseNatureMorteExport'
@@ -54,6 +55,7 @@ export default function NatureMorteTab() {
   const [quality, setQuality]     = useState('2K')
   const [concurrency, setConcurrency] = useState(2)
   const [running, setRunning]     = useState(false)
+  const [zipping, setZipping]     = useState(false)
 
   // Dossier sortie
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -121,6 +123,51 @@ export default function NatureMorteTab() {
     } catch (e: any) {
       console.warn('[NatureMorte] write failed', e?.message)
       return false
+    }
+  }
+
+  /* ----------- ZIP download (toutes les images générées) ----------- */
+  const downloadZip = async () => {
+    const doneStates = statesRef.current.filter(s => (s.status === 'done' || s.status === 'saved') && s.imageUrl)
+    if (doneStates.length === 0) {
+      setError('Aucun visuel généré à empaqueter.')
+      return
+    }
+    setZipping(true)
+    setError(null)
+    try {
+      const zip = new JSZip()
+      const usedNames = new Set<string>()
+      for (const s of doneStates) {
+        try {
+          const resp = await fetch(s.imageUrl!)
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const blob = await resp.blob()
+          const ext = (blob.type.match(/^image\/(\w+)/) ?? [])[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+          const baseName = `${sanitizeFilename(s.task.sku)}_${s.task.id}`
+          let filename = `${baseName}.${ext}`
+          let n = 2
+          while (usedNames.has(filename)) {
+            filename = `${baseName}_${n}.${ext}`
+            n++
+          }
+          usedNames.add(filename)
+          zip.file(filename, blob)
+        } catch (e: any) {
+          console.warn('[NatureMorte] zip skip', s.task.sku, e)
+        }
+      }
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `nature_morte_${Date.now()}.zip`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+    } catch (e: any) {
+      setError(`ZIP : ${e?.message ?? e}`)
+    } finally {
+      setZipping(false)
     }
   }
 
@@ -363,6 +410,11 @@ export default function NatureMorteTab() {
                       style={{ ...btn(running || stats.toRun === 0 ? '#9CA3AF' : '#0D4A5C'),
                                cursor: running || stats.toRun === 0 ? 'not-allowed' : 'pointer' }}>
                 {running ? `⏳ ${progress || 'Génération…'}` : `🍃 Générer ${stats.toRun}`}
+              </button>
+              <button onClick={downloadZip} disabled={zipping || stats.done === 0}
+                      style={{ ...btn(zipping || stats.done === 0 ? '#9CA3AF' : '#10B981'),
+                               cursor: zipping || stats.done === 0 ? 'not-allowed' : 'pointer' }}>
+                {zipping ? '⏳ ZIP…' : `📦 ZIP (${stats.done})`}
               </button>
             </div>
           </div>
