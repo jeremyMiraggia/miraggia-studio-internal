@@ -16,6 +16,7 @@ import PipelineTab       from '@/components/tabs/PipelineTab'
 import PipelineV2TestTab from '@/components/tabs/PipelineV2TestTab'
 import ECommerceNewTechTab from '@/components/tabs/ECommerceNewTechTab'
 import GhostFSTab from '@/components/tabs/GhostFSTab'
+import NatureMorteTab from '@/components/tabs/NatureMorteTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'lookbook',        label: '👗 Lookbook' },
   { id: 'ghost',           label: '👻 Ghost' },
   { id: 'ghost-fs',        label: '👻 Ghost F&S' },
+  { id: 'nature-morte',    label: '🍃 Nature Morte' },
   { id: 'lin',             label: '🧺 Lin' },
   { id: 'lifestyle',       label: '🌴 Lifestyle' },
   { id: 'video',           label: '🎬 Video' },
@@ -72,6 +74,7 @@ export default function StudioPage() {
         {tab === 'lookbook'        && <LookbookTab />}
         {tab === 'ghost'           && <GhostTab />}
         {tab === 'ghost-fs'        && <GhostFSTab />}
+        {tab === 'nature-morte'    && <NatureMorteTab />}
         {tab === 'lin'             && <LinTab />}
         {tab === 'lifestyle'       && <LifestyleTab />}
         {tab === 'video'           && <VideoTab />}
