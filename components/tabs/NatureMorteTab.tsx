@@ -218,32 +218,45 @@ export default function NatureMorteTab() {
       })
 
       try {
-        // Compression AGRESSIVE : Nature Morte envoie souvent 5-10 images
-        // dans la même requête (produits + refs + decor + model). Il faut
-        // rester bien sous la limite 4.5 MB de Vercel.
-        //   - maxSide 1400px : suffisant pour que Gemini reconnaisse les détails
-        //   - quality 0.80 : JPEG bien compressé, artefacts invisibles pour Gemini
-        //   - Résultat : ~150-350 KB par image → 3-5 MB total pour 10 images
+        // Compression très agressive : Nature Morte envoie parfois 10+ images.
+        // Il faut rester SOUS 4.5 MB (limite Vercel non modifiable).
+        //   - maxSide 1200px : suffisant pour Gemini (il downscale à 1024 en interne)
+        //   - quality 0.75 : JPEG compressé, artefacts invisibles pour la génération
+        //   - Résultat : ~100-250 KB par image
         const compress = async (f: File) => {
-          try { return await compressImage(f, { maxSide: 1400, quality: 0.80 }) }
+          try { return await compressImage(f, { maxSide: 1200, quality: 0.75 }) }
           catch { return f }
         }
         const fd = new FormData()
         for (const p of t.productFiles) fd.append('products', await compress(p))
-        // Reference peut être multi (0, 1 ou N images)
-        for (const r of t.referenceFiles) fd.append('references', await compress(r))
+
+        // Limite à MAX 3 refs (si plus, garde les 3 premières).
+        // Au-delà, ça ne change plus la synthèse d'ambiance mais dépasse Vercel.
+        const MAX_REFS = 3
+        const refsToSend = t.referenceFiles.slice(0, MAX_REFS)
+        if (t.referenceFiles.length > MAX_REFS) {
+          console.warn(`[NatureMorte] ${t.referenceFiles.length} refs > ${MAX_REFS} — envoi des ${MAX_REFS} premières seulement`)
+        }
+        for (const r of refsToSend) fd.append('references', await compress(r))
         if (t.decorsFile)     fd.append('decors',     await compress(t.decorsFile))
         if (t.modelBodyFile)  fd.append('modelBody',  await compress(t.modelBodyFile))
         if (t.modelFaceFile)  fd.append('modelFace',  await compress(t.modelFaceFile))
 
-        // Vérif de sécurité : calcul de la taille totale envoyée
+        // Vérif de sécurité : payload > 4.2 MB = quasi-sûr d'échouer côté Vercel.
+        // On ne fait pas le call (économie de temps) et on remonte une erreur claire.
         let totalBytes = 0
         for (const [, value] of fd.entries()) {
           if (value instanceof Blob) totalBytes += value.size
         }
-        if (totalBytes > 4 * 1024 * 1024) {
-          console.warn(`[NatureMorte] Payload ${(totalBytes / 1024 / 1024).toFixed(1)} MB — proche de la limite Vercel 4.5 MB`)
+        const totalMB = totalBytes / 1024 / 1024
+        if (totalMB > 4.2) {
+          throw new Error(
+            `Payload ${totalMB.toFixed(1)} MB > limite Vercel 4.5 MB. ` +
+            `Réduis le nombre de produits (${t.productFiles.length}) ou de références (${refsToSend.length}) dans ce look.`,
+          )
         }
+        const totalImgs = t.productFiles.length + refsToSend.length + (t.decorsFile ? 1 : 0) + (t.modelBodyFile ? 1 : 0) + (t.modelFaceFile ? 1 : 0)
+        console.log(`[NatureMorte] Payload ${totalMB.toFixed(2)} MB, ${totalImgs} images`)
         if (t.modelName)      fd.set('modelName',  t.modelName)
         if (t.decorsName)     fd.set('decorsName', t.decorsName)
         if (t.description)    fd.set('description', t.description)
