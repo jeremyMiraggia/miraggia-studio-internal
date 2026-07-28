@@ -8,6 +8,7 @@
  */
 import { useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
+import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
 import { parseNatureMorteExport, type NatureMorteTask, type NatureMorteExport } from '@/lib/notion/parseNatureMorteExport'
@@ -218,48 +219,40 @@ export default function NatureMorteTab() {
       })
 
       try {
-        // ⚠ Compression FORCÉE : compressImage skip par défaut les images déjà
-        // sous 1.5 MB — ce qui laissait passer 7 × 1.5 MB = 10 MB de payload.
-        // On passe maxBytes: 200_000 pour forcer la recompression de TOUTE image
-        // > 200 KB, peu importe sa résolution.
-        //   - maxSide 1200px : Gemini downscale à ~1024 en interne, inutile d'envoyer plus
-        //   - quality 0.75 : artefacts invisibles pour la génération
-        //   - Résultat garanti : ~100-250 KB par image
+        // === UPLOAD DIRECT VERS VERCEL BLOB (aucune limite de taille) ===
+        // Le navigateur upload chaque image directement vers Blob storage,
+        // puis on envoie SEULEMENT les URLs à l'API (payload JSON de ~2 KB).
+        // → Plus jamais d'erreur 413, peu importe le nombre/poids des images.
         const compress = async (f: File) => {
-          try {
-            return await compressImage(f, { maxSide: 1200, quality: 0.75, maxBytes: 200_000 })
-          } catch { return f }
+          try { return await compressImage(f, { maxSide: 1600, quality: 0.85, maxBytes: 500_000 }) }
+          catch { return f }
         }
-        const fd = new FormData()
-        for (const p of t.productFiles) fd.append('products', await compress(p))
-
-        // Toutes les refs sont envoyées (plus de limite) — la compression forcée
-        // garantit qu'on reste sous 4.5 MB même avec 15+ images.
-        for (const r of t.referenceFiles) fd.append('references', await compress(r))
-        if (t.decorsFile)     fd.append('decors',     await compress(t.decorsFile))
-        if (t.modelBodyFile)  fd.append('modelBody',  await compress(t.modelBodyFile))
-        if (t.modelFaceFile)  fd.append('modelFace',  await compress(t.modelFaceFile))
-
-        // Log de debug (pas de blocage — la compression forcée devrait suffire)
-        let totalBytes = 0
-        for (const [, value] of fd.entries()) {
-          if (value instanceof Blob) totalBytes += value.size
+        const uploadToBlob = async (f: File): Promise<string> => {
+          const compressed = await compress(f)
+          const blob = await upload(`nature-morte-inputs/${Date.now()}-${compressed.name}`, compressed, {
+            access: 'public',
+            handleUploadUrl: '/api/blob-upload',
+          })
+          return blob.url
         }
-        const totalMB = totalBytes / 1024 / 1024
-        const totalImgs = t.productFiles.length + t.referenceFiles.length
-                        + (t.decorsFile ? 1 : 0) + (t.modelBodyFile ? 1 : 0) + (t.modelFaceFile ? 1 : 0)
-        console.log(`[NatureMorte] ${t.sku} : ${totalImgs} images → ${totalMB.toFixed(2)} MB`)
-        if (totalMB > 4.2) {
-          console.warn(`[NatureMorte] ⚠ ${totalMB.toFixed(1)} MB — risque de 413. Compression insuffisante ?`)
-        }
-        if (t.modelName)      fd.set('modelName',  t.modelName)
-        if (t.decorsName)     fd.set('decorsName', t.decorsName)
-        if (t.description)    fd.set('description', t.description)
-        fd.set('sku',     t.sku)
-        fd.set('ratio',   ratio)
-        fd.set('quality', quality)
 
-        const resp = await fetch('/api/studio/nature-morte', { method: 'POST', body: fd })
+        const productUrls = await Promise.all(t.productFiles.map(uploadToBlob))
+        const referenceUrls = await Promise.all(t.referenceFiles.map(uploadToBlob))
+        const decorsUrl    = t.decorsFile    ? await uploadToBlob(t.decorsFile)    : null
+        const modelBodyUrl = t.modelBodyFile ? await uploadToBlob(t.modelBodyFile) : null
+        const modelFaceUrl = t.modelFaceFile ? await uploadToBlob(t.modelFaceFile) : null
+
+        const resp = await fetch('/api/studio/nature-morte', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            productUrls, referenceUrls, decorsUrl, modelBodyUrl, modelFaceUrl,
+            modelName:  t.modelName  ?? '',
+            decorsName: t.decorsName ?? '',
+            description: t.description ?? '',
+            sku: t.sku, ratio, quality,
+          }),
+        })
         // Réponse pas forcément JSON en cas d'erreur Vercel (413, 502, etc.)
         const rawText = await resp.text()
         let json: any

@@ -15,23 +15,55 @@ import sharp from 'sharp'
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
+/** Source d'image : File (multipart legacy) ou URL string (mode Blob, sans limite de taille) */
+type ImgSrc = File | string
+
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData()
-    const products     = formData.getAll('products').filter((v): v is File => v instanceof File)
-    // "references" (nouveau, multi) + fallback "reference" (ancien, single) pour compat
-    const references   = formData.getAll('references').filter((v): v is File => v instanceof File)
-    const legacyRef    = formData.get('reference') as File | null
-    if (legacyRef) references.push(legacyRef)
-    const decors       = formData.get('decors')       as File | null
-    const modelBody    = formData.get('modelBody')    as File | null
-    const modelFace    = formData.get('modelFace')    as File | null
-    const modelName    = (formData.get('modelName')   as string | null) ?? ''
-    const decorsName   = (formData.get('decorsName')  as string | null) ?? ''
-    const description  = (formData.get('description') as string | null) ?? ''
-    const ratio        = (formData.get('ratio')       as string | null) ?? '3:4'
-    const quality      = (formData.get('quality')     as string | null) ?? '2K'
-    const sku          = (formData.get('sku')         as string | null) ?? 'Nature Morte'
+    let products:    ImgSrc[] = []
+    let references:  ImgSrc[] = []
+    let decors:      ImgSrc | null = null
+    let modelBody:   ImgSrc | null = null
+    let modelFace:   ImgSrc | null = null
+    let modelName    = ''
+    let decorsName   = ''
+    let description  = ''
+    let ratio        = '3:4'
+    let quality      = '2K'
+    let sku          = 'Nature Morte'
+
+    const contentType = request.headers.get('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      // === MODE URLs (recommandé — pas de limite de taille) ===
+      const body = await request.json()
+      products    = (body.productUrls   ?? []) as string[]
+      references  = (body.referenceUrls ?? []) as string[]
+      decors      = (body.decorsUrl     ?? null) as string | null
+      modelBody   = (body.modelBodyUrl  ?? null) as string | null
+      modelFace   = (body.modelFaceUrl  ?? null) as string | null
+      modelName   = body.modelName   ?? ''
+      decorsName  = body.decorsName  ?? ''
+      description = body.description ?? ''
+      ratio       = body.ratio       ?? '3:4'
+      quality     = body.quality     ?? '2K'
+      sku         = body.sku         ?? 'Nature Morte'
+    } else {
+      // === MODE multipart (legacy) ===
+      const formData = await request.formData()
+      products    = formData.getAll('products').filter((v): v is File => v instanceof File)
+      references  = formData.getAll('references').filter((v): v is File => v instanceof File)
+      const legacyRef = formData.get('reference') as File | null
+      if (legacyRef) references.push(legacyRef)
+      decors      = formData.get('decors')    as File | null
+      modelBody   = formData.get('modelBody') as File | null
+      modelFace   = formData.get('modelFace') as File | null
+      modelName   = (formData.get('modelName')   as string | null) ?? ''
+      decorsName  = (formData.get('decorsName')  as string | null) ?? ''
+      description = (formData.get('description') as string | null) ?? ''
+      ratio       = (formData.get('ratio')       as string | null) ?? '3:4'
+      quality     = (formData.get('quality')     as string | null) ?? '2K'
+      sku         = (formData.get('sku')         as string | null) ?? 'Nature Morte'
+    }
 
     if (products.length === 0) {
       return NextResponse.json({ error: 'Au moins un produit requis (champ "products").' }, { status: 400 })
@@ -229,7 +261,15 @@ export async function POST(request: Request) {
   }
 }
 
-async function toInlinePart(file: File) {
-  const buf = Buffer.from(new Uint8Array(await file.arrayBuffer())).toString('base64')
-  return { inlineData: { mimeType: file.type || 'image/jpeg', data: buf } }
+/** Convertit une source (File multipart OU URL Vercel Blob) en inline part Gemini. */
+async function toInlinePart(src: File | string) {
+  if (typeof src === 'string') {
+    const res = await fetch(src)
+    if (!res.ok) throw new Error(`Fetch image URL failed (${res.status}) : ${src.slice(0, 80)}`)
+    const mime = res.headers.get('content-type') ?? 'image/jpeg'
+    const buf = Buffer.from(new Uint8Array(await res.arrayBuffer())).toString('base64')
+    return { inlineData: { mimeType: mime, data: buf } }
+  }
+  const buf = Buffer.from(new Uint8Array(await src.arrayBuffer())).toString('base64')
+  return { inlineData: { mimeType: src.type || 'image/jpeg', data: buf } }
 }
