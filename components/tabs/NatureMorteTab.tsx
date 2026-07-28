@@ -224,7 +224,8 @@ export default function NatureMorteTab() {
         }
         const fd = new FormData()
         for (const p of t.productFiles) fd.append('products', await compress(p))
-        if (t.referenceFile)  fd.append('reference',  await compress(t.referenceFile))
+        // Reference peut être multi (0, 1 ou N images)
+        for (const r of t.referenceFiles) fd.append('references', await compress(r))
         if (t.decorsFile)     fd.append('decors',     await compress(t.decorsFile))
         if (t.modelBodyFile)  fd.append('modelBody',  await compress(t.modelBodyFile))
         if (t.modelFaceFile)  fd.append('modelFace',  await compress(t.modelFaceFile))
@@ -446,7 +447,7 @@ export default function NatureMorteTab() {
                   {/* Indicateurs de ce qui est présent */}
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
                     <span style={pill('#0D4A5C')}>{t.productFiles.length} prod</span>
-                    {t.referenceFile && <span style={pill('#7C3AED')}>ref</span>}
+                    {t.referenceFiles.length > 0 && <span style={pill('#7C3AED')}>{t.referenceFiles.length} ref</span>}
                     {t.decorsFile    && <span style={pill('#059669')}>decor</span>}
                     {t.modelBodyFile && <span style={pill('#DC2626')}>model</span>}
                     {t.description   && <span style={pill('#F59E0B')}>desc</span>}
@@ -459,12 +460,18 @@ export default function NatureMorteTab() {
                     </div>
                   )}
 
-                  {/* Preview mini : reference + result */}
+                  {/* Preview mini : 1ère reference + result */}
                   <div style={{ display: 'flex', gap: 4 }}>
-                    {t.referenceFile && (
-                      <div style={{ flex: 1, aspectRatio: '3/4', background: '#F3F4F6', borderRadius: 4, overflow: 'hidden' }}>
-                        <img src={URL.createObjectURL(t.referenceFile)} alt="ref"
+                    {t.referenceFiles[0] && (
+                      <div style={{ flex: 1, aspectRatio: '3/4', background: '#F3F4F6', borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
+                        <img src={URL.createObjectURL(t.referenceFiles[0])} alt="ref"
                              style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        {t.referenceFiles.length > 1 && (
+                          <span style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(124,58,237,0.9)',
+                                         color: '#fff', fontSize: 9, fontWeight: 700, padding: '1px 4px', borderRadius: 3 }}>
+                            +{t.referenceFiles.length - 1}
+                          </span>
+                        )}
                       </div>
                     )}
                     <div style={{ flex: 1, aspectRatio: '3/4', background: '#fff',

@@ -19,7 +19,10 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData()
     const products     = formData.getAll('products').filter((v): v is File => v instanceof File)
-    const reference    = formData.get('reference')    as File | null
+    // "references" (nouveau, multi) + fallback "reference" (ancien, single) pour compat
+    const references   = formData.getAll('references').filter((v): v is File => v instanceof File)
+    const legacyRef    = formData.get('reference') as File | null
+    if (legacyRef) references.push(legacyRef)
     const decors       = formData.get('decors')       as File | null
     const modelBody    = formData.get('modelBody')    as File | null
     const modelFace    = formData.get('modelFace')    as File | null
@@ -39,7 +42,7 @@ export async function POST(request: Request) {
 
     const debug: any = { steps: { present: {
       products: products.length,
-      reference: !!reference,
+      references: references.length,
       decors: !!decors,
       modelBody: !!modelBody,
       modelFace: !!modelFace,
@@ -59,12 +62,18 @@ export async function POST(request: Request) {
       ``,
     ]
 
-    // ★ Reference (inspiration)
-    if (reference) {
+    // ★ Reference (inspiration) — 0, 1 ou N images
+    if (references.length === 1) {
       intro.push(
-        `⚠ IMAGE DE RÉFÉRENCE (inspiration — image 1 attachée) : cette image te donne L'ESPRIT / L'AMBIANCE / LA COMPOSITION à recréer. ` +
+        `⚠ IMAGE DE RÉFÉRENCE (inspiration — 1 image attachée) : cette image te donne L'ESPRIT / L'AMBIANCE / LA COMPOSITION à recréer. ` +
         `Copie sa mise en scène, sa lumière, son cadrage, son mood. ` +
         `⚠ MAIS le/les produit(s) montré(s) dans cette référence sont IRRELEVANT — remplace-les par le(s) produit(s) fourni(s) plus bas dans le prompt.`,
+      )
+    } else if (references.length > 1) {
+      intro.push(
+        `⚠ IMAGES DE RÉFÉRENCE (${references.length} images d'inspiration attachées) : ces ${references.length} images t'inspirent l'ambiance / le mood / la palette / la composition à créer. ` +
+        `Fais la SYNTHÈSE de ces références : combine leurs points communs (lumière, ambiance, style de composition, palette de couleurs), pas nécessairement un détail précis d'une seule. ` +
+        `⚠ Les produits montrés dans ces références sont IRRELEVANT — remplace-les par le(s) produit(s) fourni(s) plus bas dans le prompt. Utilise les références uniquement pour l'esprit/mood.`,
       )
     }
 
@@ -74,9 +83,9 @@ export async function POST(request: Request) {
         `⚠ DÉCOR IMPOSÉ ("${decorsName}" — image jointe) : utilise ce fond EXACTEMENT tel qu'il est. Ne le modifie pas, ne le régénère pas, ` +
         `préserve sa couleur / texture / lumière pixel-perfect. Compose les produits DESSUS.`,
       )
-    } else if (reference) {
+    } else if (references.length > 0) {
       intro.push(
-        `⚠ FOND : puisque aucun décor n'est imposé, reproduis fidèlement le fond / l'ambiance de la référence d'inspiration.`,
+        `⚠ FOND : puisque aucun décor n'est imposé, reproduis fidèlement le fond / l'ambiance des références d'inspiration.`,
       )
     } else {
       intro.push(
@@ -115,10 +124,13 @@ export async function POST(request: Request) {
     // === Construction des parts (images étiquetées) ===
     const parts: any[] = [{ text: intro.join('\n') }]
 
-    // Reference (inspiration) EN PREMIER (Gemini l'ancre le plus)
-    if (reference) {
-      parts.push({ text: `=== IMAGE 1 : RÉFÉRENCE D'INSPIRATION (mood, composition, ambiance à recréer) ===` })
-      parts.push(await toInlinePart(reference))
+    // References (inspiration) EN PREMIER (Gemini les ancre le plus)
+    for (let i = 0; i < references.length; i++) {
+      const label = references.length === 1
+        ? `=== IMAGE DE RÉFÉRENCE (inspiration : mood, composition, ambiance à recréer) ===`
+        : `=== RÉFÉRENCE D'INSPIRATION ${i + 1}/${references.length} (fais la synthèse de toutes les références pour l'ambiance) ===`
+      parts.push({ text: label })
+      parts.push(await toInlinePart(references[i]))
     }
 
     // Decors (fond)
@@ -144,9 +156,9 @@ export async function POST(request: Request) {
     // Final self-check
     parts.push({ text:
       `⚠ SELF-CHECK final :\n` +
-      `  1) Composition = ambiance/mood de la référence d'inspiration ${reference ? '(image 1)' : '(à imaginer selon les produits)'}\n` +
+      `  1) Composition = ambiance/mood ${references.length > 1 ? `synthèse des ${references.length} références d'inspiration` : references.length === 1 ? 'de la référence d\'inspiration' : '(à imaginer selon les produits)'}\n` +
       `  2) Produits = ceux fournis dans les images "PRODUIT" (couleur/matière exactes, sans hallucinations)\n` +
-      `  3) Fond = ${decors ? 'décor imposé (pixel-perfect)' : reference ? 'ambiance de la référence' : 'fond neutre studio'}\n` +
+      `  3) Fond = ${decors ? 'décor imposé (pixel-perfect)' : references.length > 0 ? 'ambiance des références' : 'fond neutre studio'}\n` +
       `  4) Mannequin = ${(modelBody || modelFace) ? 'oui, partie visible selon la référence' : 'ABSENT — pure nature morte, aucun humain'}\n` +
       `Output = un visuel Nature Morte éditorial premium.`
     })

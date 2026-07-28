@@ -16,7 +16,7 @@ export type NatureMorteTask = {
   id:            string
   sku:           string
   productFiles:  File[]      // FILES — produits (obligatoires)
-  referenceFile?: File       // REFERENCE — image d'inspiration (optionnel)
+  referenceFiles: File[]     // REFERENCE — images d'inspiration (0, 1 ou N, séparées par ',')
   decorsFile?:   File        // Decors definition → Référence image (optionnel)
   modelBodyFile?: File       // Model → FRONT-model (optionnel)
   modelFaceFile?: File       // Model → FACE PHOTO (optionnel)
@@ -198,10 +198,9 @@ export async function parseNatureMorteExport(
       continue
     }
 
-    // REFERENCE (image d'inspiration) — optionnel
+    // REFERENCE (image(s) d'inspiration) — optionnel, peut être multiple séparé par ","
     const refRaw = refCol ? String(row[refCol] ?? '').trim() : ''
-    const refFiles = await resolveFileList(refRaw, baseToKey, extractAsFile)
-    const referenceFile = refFiles[0]
+    const referenceFiles = await resolveFileList(refRaw, baseToKey, extractAsFile)
 
     // Decors — optionnel
     let decorsFile: File | undefined
@@ -235,7 +234,7 @@ export async function parseNatureMorteExport(
     tasks.push({
       id, sku,
       productFiles,
-      referenceFile,
+      referenceFiles,
       decorsFile,
       modelBodyFile,
       modelFaceFile,
