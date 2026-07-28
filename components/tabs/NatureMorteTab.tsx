@@ -218,8 +218,14 @@ export default function NatureMorteTab() {
       })
 
       try {
+        // Compression AGRESSIVE : Nature Morte envoie souvent 5-10 images
+        // dans la même requête (produits + refs + decor + model). Il faut
+        // rester bien sous la limite 4.5 MB de Vercel.
+        //   - maxSide 1400px : suffisant pour que Gemini reconnaisse les détails
+        //   - quality 0.80 : JPEG bien compressé, artefacts invisibles pour Gemini
+        //   - Résultat : ~150-350 KB par image → 3-5 MB total pour 10 images
         const compress = async (f: File) => {
-          try { return await compressImage(f, { maxSide: 2048, quality: 0.9 }) }
+          try { return await compressImage(f, { maxSide: 1400, quality: 0.80 }) }
           catch { return f }
         }
         const fd = new FormData()
@@ -229,6 +235,15 @@ export default function NatureMorteTab() {
         if (t.decorsFile)     fd.append('decors',     await compress(t.decorsFile))
         if (t.modelBodyFile)  fd.append('modelBody',  await compress(t.modelBodyFile))
         if (t.modelFaceFile)  fd.append('modelFace',  await compress(t.modelFaceFile))
+
+        // Vérif de sécurité : calcul de la taille totale envoyée
+        let totalBytes = 0
+        for (const [, value] of fd.entries()) {
+          if (value instanceof Blob) totalBytes += value.size
+        }
+        if (totalBytes > 4 * 1024 * 1024) {
+          console.warn(`[NatureMorte] Payload ${(totalBytes / 1024 / 1024).toFixed(1)} MB — proche de la limite Vercel 4.5 MB`)
+        }
         if (t.modelName)      fd.set('modelName',  t.modelName)
         if (t.decorsName)     fd.set('decorsName', t.decorsName)
         if (t.description)    fd.set('description', t.description)
@@ -237,7 +252,16 @@ export default function NatureMorteTab() {
         fd.set('quality', quality)
 
         const resp = await fetch('/api/studio/nature-morte', { method: 'POST', body: fd })
-        const json = await resp.json()
+        // Réponse pas forcément JSON en cas d'erreur Vercel (413, 502, etc.)
+        const rawText = await resp.text()
+        let json: any
+        try { json = JSON.parse(rawText) }
+        catch {
+          // HTML brut de Vercel : "Request Entity Too Large" (413), "Bad Gateway" (502), etc.
+          const shortMsg = rawText.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)
+          if (resp.status === 413) throw new Error(`413 Trop volumineux : la requête dépasse 4.5 MB (Vercel). Baisse le nombre d'images ou compresse davantage. ${shortMsg}`)
+          throw new Error(`HTTP ${resp.status} : ${shortMsg}`)
+        }
         if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
         const url = json.imageUrl
         if (!url) throw new Error('Réponse sans URL.')
