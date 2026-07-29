@@ -261,15 +261,36 @@ export async function POST(request: Request) {
   }
 }
 
-/** Convertit une source (File multipart OU URL Vercel Blob) en inline part Gemini. */
+/** Formats supportés nativement par Gemini Image. */
+const GEMINI_SUPPORTED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
+
+/**
+ * Convertit une source (File multipart OU URL Vercel Blob) en inline part Gemini.
+ * Si le format n'est pas supporté par Gemini (TIFF, BMP, GIF...), conversion
+ * JPEG automatique via sharp.
+ */
 async function toInlinePart(src: File | string) {
+  let buf: Buffer
+  let mime: string
   if (typeof src === 'string') {
     const res = await fetch(src)
     if (!res.ok) throw new Error(`Fetch image URL failed (${res.status}) : ${src.slice(0, 80)}`)
-    const mime = res.headers.get('content-type') ?? 'image/jpeg'
-    const buf = Buffer.from(new Uint8Array(await res.arrayBuffer())).toString('base64')
-    return { inlineData: { mimeType: mime, data: buf } }
+    mime = res.headers.get('content-type') ?? 'image/jpeg'
+    buf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
+  } else {
+    mime = src.type || 'image/jpeg'
+    buf = Buffer.from(new Uint8Array(await src.arrayBuffer()))
   }
-  const buf = Buffer.from(new Uint8Array(await src.arrayBuffer())).toString('base64')
-  return { inlineData: { mimeType: src.type || 'image/jpeg', data: buf } }
+
+  // Conversion JPEG si format non supporté par Gemini (TIFF, BMP, AVIF, octet-stream...)
+  if (!GEMINI_SUPPORTED_MIMES.has(mime)) {
+    try {
+      buf = await sharp(buf).jpeg({ quality: 88 }).toBuffer()
+      mime = 'image/jpeg'
+    } catch (e) {
+      console.warn(`[nature-morte] conversion JPEG échouée pour mime=${mime}, envoi tel quel`, e)
+    }
+  }
+
+  return { inlineData: { mimeType: mime, data: buf.toString('base64') } }
 }

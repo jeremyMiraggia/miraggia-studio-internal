@@ -18,7 +18,14 @@ export async function POST(request: Request): Promise<NextResponse> {
       request,
       onBeforeGenerateToken: async () => {
         return {
-          allowedContentTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic'],
+          // Large liste — le client convertit normalement tout en JPEG, mais si
+          // la conversion échoue (TIFF, BMP exotiques...) on accepte quand même
+          // l'upload plutôt que de bloquer le batch.
+          allowedContentTypes: [
+            'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+            'image/tiff', 'image/bmp', 'image/gif', 'image/avif',
+            'application/octet-stream',
+          ],
           addRandomSuffix: true,
           tokenPayload: '',
         }

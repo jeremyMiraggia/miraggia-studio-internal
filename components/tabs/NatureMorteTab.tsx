@@ -224,14 +224,26 @@ export default function NatureMorteTab() {
         // puis on envoie SEULEMENT les URLs à l'API (payload JSON de ~2 KB).
         // → Plus jamais d'erreur 413, peu importe le nombre/poids des images.
         const compress = async (f: File) => {
-          try { return await compressImage(f, { maxSide: 1600, quality: 0.85, maxBytes: 500_000 }) }
-          catch { return f }
+          try {
+            const out = await compressImage(f, { maxSide: 1600, quality: 0.85, maxBytes: 500_000 })
+            // Vérifie que la conversion JPEG a bien eu lieu. Si le fichier ressort
+            // avec un type non-standard (TIFF, BMP — non décodables par le canvas),
+            // on le signale mais on le laisse passer (le serveur le re-convertira).
+            if (out.type !== 'image/jpeg' && out.type !== 'image/png' && out.type !== 'image/webp') {
+              console.warn(`[NatureMorte] ${f.name} : conversion JPEG échouée (type=${out.type}) — envoi tel quel`)
+            }
+            return out
+          } catch (e) {
+            console.warn(`[NatureMorte] compress failed pour ${f.name}, envoi original`, e)
+            return f
+          }
         }
         const uploadToBlob = async (f: File): Promise<string> => {
           const compressed = await compress(f)
           const blob = await upload(`nature-morte-inputs/${Date.now()}-${compressed.name}`, compressed, {
             access: 'public',
             handleUploadUrl: '/api/blob-upload',
+            contentType: compressed.type || 'application/octet-stream',
           })
           return blob.url
         }
