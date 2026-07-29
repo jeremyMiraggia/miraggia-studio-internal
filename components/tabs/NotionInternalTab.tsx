@@ -226,7 +226,7 @@ export default function NotionInternalTab() {
                 <div>
                   <label style={styles.label}>Format</label>
                   <select value={ratio} onChange={e => setRatio(e.target.value)} style={styles.select}>
-                    {['9:16','3:4','1:1','16:9','4:3'].map(r => <option key={r}>{r}</option>)}
+                    {['9:16','3:4','4:5','2:3','1:1','16:9','4:3'].map(r => <option key={r}>{r}</option>)}
                   </select>
                 </div>
                 <div>

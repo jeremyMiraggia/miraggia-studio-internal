@@ -346,6 +346,7 @@ export default function GhostFSTab() {
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
             <select value={ratio} onChange={e => setRatio(e.target.value)} style={inp}>
               <option value="3:4">3:4</option>
+              <option value="4:5">4:5 (Insta feed)</option>
               <option value="2:3">2:3</option>
               <option value="1:1">1:1</option>
               <option value="9:16">9:16</option>

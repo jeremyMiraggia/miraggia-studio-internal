@@ -439,6 +439,7 @@ export default function LinTab() {
             <select value={ratio} onChange={e => setRatio(e.target.value)} style={input}>
               <option value="9:16">9:16</option>
               <option value="3:4">3:4</option>
+              <option value="4:5">4:5 (Insta feed)</option>
               <option value="2:3">2:3</option>
               <option value="1:1">1:1 (carré)</option>
               <option value="4:3">4:3</option>
