@@ -22,7 +22,7 @@ type Task = {
   id:        string
   source:    File          // photo iPhone du vêtement
   status:    TaskStatus
-  imageUrl?: string
+  imageUrls: string[]      // historique des versions (dernier = courant, jamais effacé)
   error?:    string
 }
 
@@ -94,9 +94,10 @@ export default function GhostFSTab() {
   const handleSourcesChange = (files: File[]) => {
     setSources(files)
     const newTasks: Task[] = files.map((f, i) => ({
-      id:     `${i}-${f.name}-${f.lastModified}`,
-      source: f,
-      status: 'pending',
+      id:        `${i}-${f.name}-${f.lastModified}`,
+      source:    f,
+      status:    'pending',
+      imageUrls: [],
     }))
     setTasks(newTasks)
     tasksRef.current = newTasks
@@ -123,19 +124,39 @@ export default function GhostFSTab() {
     setSavedCount(0)
   }
 
-  const writeTaskToOutputDir = async (task: Task): Promise<boolean> => {
+  /** Trouve un nom de fichier libre : base.png, base_2.png, base_3.png, ... */
+  const findFreeFilename = async (handle: any, base: string, ext: string): Promise<string> => {
+    let candidate = `${base}.${ext}`
+    let n = 2
+    // getFileHandle SANS create → throw NotFoundError si le fichier n'existe pas = nom libre
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        await handle.getFileHandle(candidate)   // existe → collision
+        candidate = `${base}_${n}.${ext}`
+        n++
+      } catch {
+        return candidate   // n'existe pas → libre
+      }
+    }
+  }
+
+  const writeUrlToOutputDir = async (task: Task, url: string): Promise<boolean> => {
     const handle = outputDirHandleRef.current
-    if (!handle || !task.imageUrl) return false
+    if (!handle || !url) return false
     try {
-      const resp = await fetch(task.imageUrl)
+      const resp = await fetch(url)
       if (!resp.ok) throw new Error(`Fetch HTTP ${resp.status}`)
       const blob = await resp.blob()
       const base = sanitizeFilename(task.source.name.replace(/\.[^.]+$/, ''))
-      const filename = `${base}_ghost.png`
+      // ⚠ Jamais d'écrasement : si "base_ghost.png" existe déjà (ancienne version),
+      // on sauve en "base_ghost_2.png", puis _3, etc.
+      const filename = await findFreeFilename(handle, `${base}_ghost`, 'png')
       const fileHandle = await handle.getFileHandle(filename, { create: true })
       const writable = await fileHandle.createWritable()
       await writable.write(blob)
       await writable.close()
+      console.log(`[Ghost F&S] Saved ${filename}`)
       return true
     } catch (e: any) {
       console.warn('[Ghost F&S] write failed', e?.message)
@@ -143,7 +164,89 @@ export default function GhostFSTab() {
     }
   }
 
-  /* ----------- Génération ----------- */
+  /* ----------- Génération (1 task) ----------- */
+  const generateTask = async (idx: number, refCompressed: File) => {
+    const task = tasksRef.current[idx]
+    if (!task) return
+    setTasks(prev => {
+      const next = [...prev]
+      next[idx] = { ...next[idx], status: 'running', error: undefined }
+      tasksRef.current = next
+      return next
+    })
+    try {
+      // Compress source iPhone
+      let source: File
+      try { source = await compressImage(task.source, { maxSide: 2048, quality: 0.9 }) }
+      catch { source = task.source }
+
+      const fd = new FormData()
+      if (customPrompt && customPrompt.trim() !== STYLE_TRANSFER_PROMPT.trim()) {
+        fd.set('prompt', customPrompt)
+      }
+      fd.set('ratio', ratio)
+      fd.set('quality', quality)
+      fd.append('reference', refCompressed)   // packshot pro (composition à copier)
+      fd.append('source',    source)          // photo iPhone (vêtement à extraire)
+
+      const resp = await fetch('/api/studio/ghost-fs', { method: 'POST', body: fd })
+      const json = await resp.json()
+      if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
+      const url = json.imageUrl ?? json.url
+      if (!url) throw new Error('Réponse sans URL.')
+
+      // ★ Ajoute la nouvelle version à l'HISTORIQUE (pas d'écrasement)
+      setTasks(prev => {
+        const next = [...prev]
+        next[idx] = { ...next[idx], status: 'done', imageUrls: [...next[idx].imageUrls, url] }
+        tasksRef.current = next
+        return next
+      })
+
+      if (outputDirHandleRef.current) {
+        const saved = await writeUrlToOutputDir(task, url)
+        if (saved) {
+          setSavedCount(c => c + 1)
+          setTasks(prev => {
+            const next = [...prev]
+            next[idx] = { ...next[idx], status: 'saved' }
+            tasksRef.current = next
+            return next
+          })
+        }
+      }
+    } catch (e: any) {
+      setTasks(prev => {
+        const next = [...prev]
+        next[idx] = { ...next[idx], status: 'error', error: e?.message ?? String(e) }
+        tasksRef.current = next
+        return next
+      })
+    }
+  }
+
+  const compressRef = async (): Promise<File> => {
+    try { return await compressImage(reference[0], { maxSide: 2048, quality: 0.9 }) }
+    catch { return reference[0] }
+  }
+
+  /** Regénère UNE task (nouvelle version ajoutée à l'historique, l'ancienne reste) */
+  const regenerateOne = async (taskId: string) => {
+    if (running) return
+    if (reference.length !== 1) { setError('Ajoute UNE image de référence.'); return }
+    const idx = tasksRef.current.findIndex(t => t.id === taskId)
+    if (idx < 0) return
+    setRunning(true)
+    setError(null)
+    try {
+      const refCompressed = await compressRef()
+      await generateTask(idx, refCompressed)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  /* ----------- Génération batch ----------- */
   const runGeneration = async () => {
     if (running) return
     if (reference.length !== 1) { setError('Ajoute UNE image de référence (packshot pro).'); return }
@@ -163,75 +266,8 @@ export default function GhostFSTab() {
       .map((t, idx) => ({ t, idx }))
       .filter(({ t }) => t.status !== 'done' && t.status !== 'saved')
 
-    // Compresse la référence une fois pour toutes
-    let refCompressed: File
-    try {
-      refCompressed = await compressImage(reference[0], { maxSide: 2048, quality: 0.9 })
-    } catch {
-      refCompressed = reference[0]
-    }
-
-    const runOne = async ({ idx }: { idx: number }) => {
-      const task = tasksRef.current[idx]
-      if (!task) return
-      setTasks(prev => {
-        const next = [...prev]
-        next[idx] = { ...next[idx], status: 'running', error: undefined }
-        tasksRef.current = next
-        return next
-      })
-      try {
-        // Compress source iPhone
-        let source: File
-        try { source = await compressImage(task.source, { maxSide: 2048, quality: 0.9 }) }
-        catch { source = task.source }
-
-        const fd = new FormData()
-        // Optionnel : le user peut overrider le prompt (sinon le serveur utilise
-        // son prompt anti-hallucination par défaut). On envoie que si non-vide.
-        if (customPrompt && customPrompt.trim() !== STYLE_TRANSFER_PROMPT.trim()) {
-          fd.set('prompt', customPrompt)
-        }
-        fd.set('ratio', ratio)
-        fd.set('quality', quality)
-        // Labels EXPLICITES côté serveur → pas de confusion possible
-        fd.append('reference', refCompressed)   // packshot pro (composition à copier)
-        fd.append('source',    source)          // photo iPhone (vêtement à extraire)
-
-        const resp = await fetch('/api/studio/ghost-fs', { method: 'POST', body: fd })
-        const json = await resp.json()
-        if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
-        const url = json.imageUrl ?? json.url
-        if (!url) throw new Error('Réponse sans URL.')
-
-        setTasks(prev => {
-          const next = [...prev]
-          next[idx] = { ...next[idx], status: 'done', imageUrl: url }
-          tasksRef.current = next
-          return next
-        })
-
-        if (outputDirHandleRef.current) {
-          const saved = await writeTaskToOutputDir({ ...task, status: 'done', imageUrl: url })
-          if (saved) {
-            setSavedCount(c => c + 1)
-            setTasks(prev => {
-              const next = [...prev]
-              next[idx] = { ...next[idx], status: 'saved' }
-              tasksRef.current = next
-              return next
-            })
-          }
-        }
-      } catch (e: any) {
-        setTasks(prev => {
-          const next = [...prev]
-          next[idx] = { ...next[idx], status: 'error', error: e?.message ?? String(e) }
-          tasksRef.current = next
-          return next
-        })
-      }
-    }
+    const refCompressed = await compressRef()
+    const runOne = async ({ idx }: { idx: number }) => generateTask(idx, refCompressed)
 
     const pool = Math.max(1, Math.min(concurrency, 6))
     let cursor = 0
@@ -245,9 +281,9 @@ export default function GhostFSTab() {
     setRunning(false)
   }
 
-  /* ----------- ZIP download ----------- */
+  /* ----------- ZIP download (TOUTES les versions de chaque visuel) ----------- */
   const downloadZip = async () => {
-    const doneTasks = tasksRef.current.filter(t => (t.status === 'done' || t.status === 'saved') && t.imageUrl)
+    const doneTasks = tasksRef.current.filter(t => (t.status === 'done' || t.status === 'saved') && t.imageUrls.length > 0)
     if (doneTasks.length === 0) { setError('Aucun visuel terminé.'); return }
     setZipping(true)
     setError(null)
@@ -255,16 +291,19 @@ export default function GhostFSTab() {
       const zip = new JSZip()
       const used = new Set<string>()
       for (const t of doneTasks) {
-        try {
-          const resp = await fetch(t.imageUrl!)
-          const blob = await resp.blob()
-          const base = sanitizeFilename(t.source.name.replace(/\.[^.]+$/, ''))
-          let name = `${base}_ghost.png`
-          let n = 2
-          while (used.has(name)) { name = `${base}_ghost_${n}.png`; n++ }
-          used.add(name)
-          zip.file(name, blob)
-        } catch { /* skip */ }
+        const base = sanitizeFilename(t.source.name.replace(/\.[^.]+$/, ''))
+        // Inclut TOUTES les versions générées : base_ghost.png, base_ghost_2.png, ...
+        for (let v = 0; v < t.imageUrls.length; v++) {
+          try {
+            const resp = await fetch(t.imageUrls[v])
+            const blob = await resp.blob()
+            let name = v === 0 ? `${base}_ghost.png` : `${base}_ghost_${v + 1}.png`
+            let n = 2
+            while (used.has(name)) { name = `${base}_ghost_${v + 1}_${n}.png`; n++ }
+            used.add(name)
+            zip.file(name, blob)
+          } catch { /* skip */ }
+        }
       }
       const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
       const url = URL.createObjectURL(blob)
@@ -426,11 +465,24 @@ export default function GhostFSTab() {
                     {t.status === 'done'    && <span style={pill('#3B82F6')}>✓</span>}
                     {t.status === 'saved'   && <span style={pill('#10B981')}>💾</span>}
                     {t.status === 'error'   && <span style={pill('#EF4444')}>✕</span>}
-                    <span style={{ fontSize: 11, color: '#6B7280',
+                    {t.imageUrls.length > 1 && <span style={pill('#7C3AED')}>v{t.imageUrls.length}</span>}
+                    <span style={{ fontSize: 11, color: '#6B7280', flex: 1,
                                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                           title={t.source.name}>
                       {t.source.name}
                     </span>
+                    {/* ↻ Regénérer : nouvelle version ajoutée, l'ancienne est conservée */}
+                    {(t.status === 'done' || t.status === 'saved' || t.status === 'error') && (
+                      <button
+                        onClick={() => regenerateOne(t.id)}
+                        disabled={running}
+                        title="Regénérer (garde l'ancienne version, ajoute une _2)"
+                        style={{ background: running ? '#E5E7EB' : '#0D4A5C', color: '#fff',
+                                 border: 'none', borderRadius: 6, padding: '2px 8px',
+                                 fontSize: 12, cursor: running ? 'not-allowed' : 'pointer' }}>
+                        ↻
+                      </button>
+                    )}
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <div style={{ flex: 1, aspectRatio: '3/4', background: '#F3F4F6',
@@ -440,15 +492,28 @@ export default function GhostFSTab() {
                     <div style={{ flex: 1, aspectRatio: '3/4', background: '#fff',
                                   border: '1px solid #E5E7EB', borderRadius: 4, overflow: 'hidden',
                                   display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {t.imageUrl
-                        ? <a href={t.imageUrl} target="_blank" rel="noreferrer" style={{ display: 'block', width: '100%', height: '100%' }}>
-                            <img src={t.imageUrl} alt="out" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      {t.imageUrls.length > 0
+                        ? <a href={t.imageUrls[t.imageUrls.length - 1]} target="_blank" rel="noreferrer" style={{ display: 'block', width: '100%', height: '100%' }}>
+                            <img src={t.imageUrls[t.imageUrls.length - 1]} alt="out" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                           </a>
                         : <span style={{ fontSize: 10, color: '#9CA3AF' }}>
                             {t.status === 'running' ? '⏳' : t.status === 'error' ? '✕' : '–'}
                           </span>}
                     </div>
                   </div>
+                  {/* Miniatures des versions précédentes */}
+                  {t.imageUrls.length > 1 && (
+                    <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
+                      {t.imageUrls.slice(0, -1).map((u, vi) => (
+                        <a key={vi} href={u} target="_blank" rel="noreferrer"
+                           title={`Version ${vi + 1}`}
+                           style={{ width: 32, height: 42, borderRadius: 3, overflow: 'hidden',
+                                    border: '1px solid #E5E7EB', display: 'block' }}>
+                          <img src={u} alt={`v${vi + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        </a>
+                      ))}
+                    </div>
+                  )}
                   {t.error && (
                     <div style={{ fontSize: 10, color: '#EF4444', marginTop: 4 }} title={t.error}>
                       {t.error.slice(0, 60)}
