@@ -577,22 +577,34 @@ export default function NotionTab() {
     const ok = states.filter(s => s.status === 'done' && s.imageUrl)
     if (!ok.length) return
     const zip = new JSZip()
+    const used = new Set<string>()
     for (const s of ok) {
-      const blob = await dataUrlToBlob(s.imageUrl!)
-      const ext  = blob.type.includes('png') ? 'png' : 'jpg'
-      const safeName = s.task.taskType === 'detail'
-        ? `look_${s.task.numeroLook}_detail${(s.task.detailIndex ?? 0) + 1}_${slug(s.task.detailName ?? '')}.${ext}`
-        : `look_${s.task.numeroLook}_vue${(s.task.vueIndex ?? 0) + 1}_${slug(s.task.vueRaw ?? '')}.${ext}`
-      zip.file(safeName, blob)
+      try {
+        const blob = await dataUrlToBlob(s.imageUrl!)
+        const ext  = blob.type.includes('png') ? 'png' : 'jpg'
+        let name = buildFileName(s.task, ext)
+        // Sécurité anti-collision supplémentaire : suffixe _2, _3 si doublon
+        let n = 2
+        while (used.has(name)) {
+          name = name.replace(new RegExp(`\\.${ext}$`), `_${n}.${ext}`)
+          n++
+        }
+        used.add(name)
+        zip.file(name, blob)
+      } catch (e) {
+        console.warn('[NotionTab] ZIP skip', s.task.id, e)
+      }
     }
-    const blob = await zip.generateAsync({ type: 'blob' })
+    console.log(`[NotionTab] ZIP : ${used.size} fichier(s) sur ${ok.length} visuels`)
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
     a.href = url
     a.download = `miraggia_notion_${new Date().toISOString().slice(0, 10)}.zip`
     a.click()
-    URL.revokeObjectURL(url)
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
   }
+
 
   /* ----------- Render ----------- */
   return (
@@ -955,8 +967,11 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
               <img src={imageUrlStep1} alt={`${task.id}-step1`} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
               <div style={{ fontSize: 9, color: '#6B7A8A', fontWeight: 600 }}>Step 1 · fond blanc</div>
               <div style={{ display: 'flex', gap: 4 }}>
-                <a href={imageUrlStep1} download={`look_${task.numeroLook}_vue${(task.vueIndex ?? 0) + 1}_step1.png`} style={styles.linkBtnDark}>⬇</a>
-                <a href={imageUrlStep1} target="_blank" rel="noreferrer" style={styles.linkBtnLight}>↗</a>
+                <button
+                  onClick={() => forceDownload(imageUrlStep1, buildFileName(task, 'png').replace(/\.png$/, '_step1.png'))}
+                  style={{ ...styles.linkBtnDark, border: 'none', cursor: 'pointer' }}
+                  title="Télécharger">⬇</button>
+                <a href={imageUrlStep1} target="_blank" rel="noreferrer" style={styles.linkBtnLight} title="Ouvrir dans un nouvel onglet">↗</a>
               </div>
             </div>
           )}
@@ -965,12 +980,11 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
               <img src={imageUrl} alt={task.id} style={{ width: 110, borderRadius: 6, border: '1px solid rgba(13,74,92,0.1)' }} />
               {imageUrlStep1 && <div style={{ fontSize: 9, color: '#1F7A35', fontWeight: 700 }}>Step 2 · fond final</div>}
               <div style={{ display: 'flex', gap: 4 }}>
-                <a href={imageUrl} download={
-                  task.taskType === 'detail'
-                    ? `look_${task.numeroLook}_detail${(task.detailIndex ?? 0) + 1}.png`
-                    : `look_${task.numeroLook}_vue${(task.vueIndex ?? 0) + 1}.png`
-                } style={styles.linkBtnDark}>⬇</a>
-                <a href={imageUrl} target="_blank" rel="noreferrer" style={styles.linkBtnLight}>↗</a>
+                <button
+                  onClick={() => forceDownload(imageUrl, buildFileName(task, 'png'))}
+                  style={{ ...styles.linkBtnDark, border: 'none', cursor: 'pointer' }}
+                  title="Télécharger">⬇</button>
+                <a href={imageUrl} target="_blank" rel="noreferrer" style={styles.linkBtnLight} title="Ouvrir dans un nouvel onglet">↗</a>
               </div>
             </div>
           )}
@@ -1097,6 +1111,47 @@ function modeBtnStyle(active: boolean): React.CSSProperties {
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const res = await fetch(dataUrl)
   return await res.blob()
+}
+
+/**
+ * Construit un nom de fichier UNIQUE pour une task.
+ * ⚠ En mode inspi, vueIndex/vueRaw sont undefined → sans le lookId dans le nom,
+ * toutes les tasks produisaient "look_X_vue1_.jpg" et JSZip les écrasait
+ * (d'où le ZIP qui ne contenait qu'une seule image).
+ */
+function buildFileName(task: GenerationTask, ext: string): string {
+  const base = slug(task.numeroLook || task.lookId || 'look')
+  if (task.taskType === 'detail') {
+    return `${base}_detail${(task.detailIndex ?? 0) + 1}_${slug(task.detailName ?? '')}.${ext}`
+  }
+  if (task.taskType === 'inspi') {
+    // Mode inspiration : pas de vueIndex → lookId (unique) pour éviter les collisions
+    return `${base}_inspi_${slug(task.lookId)}.${ext}`
+  }
+  return `${base}_vue${(task.vueIndex ?? 0) + 1}_${slug(task.vueRaw ?? '')}.${ext}`
+}
+
+/**
+ * Download FORCÉ via fetch + Blob URL.
+ * ⚠ L'attribut <a download> est IGNORÉ pour les URLs cross-origin (Vercel Blob) :
+ * le navigateur navigue vers l'image au lieu de la télécharger (on perd la page).
+ */
+async function forceDownload(url: string, filename: string) {
+  try {
+    const resp = await fetch(url)
+    const blob = await resp.blob()
+    const objUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(objUrl), 2000)
+  } catch (e) {
+    console.warn('[NotionTab] download failed, ouverture nouvel onglet', e)
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
 }
 
 async function dataUrlToFile(dataUrl: string, filename: string): Promise<File> {
