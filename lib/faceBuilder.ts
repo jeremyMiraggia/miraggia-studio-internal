@@ -602,47 +602,148 @@ export function buildAnalysisPrompt(): string {
   ].join('\n')
 }
 
-/** Parse la réponse JSON de Gemini et la fusionne avec une sélection existante. */
-export function mergeAnalysis(current: FaceSelection, raw: any): FaceSelection {
-  const validId = (list: FaceOption[], v: any, fallback: string): string =>
-    (typeof v === 'string' && list.some(o => o.id === v)) ? v : fallback
-  const validMulti = (list: FaceOption[], v: any): string[] =>
-    Array.isArray(v) ? v.filter((x: any) => typeof x === 'string' && list.some(o => o.id === x)) : []
+export type AnalysisReport = {
+  applied:  { key: string; label: string; value: string }[]   // critères effectivement appliqués
+  rejected: { key: string; received: any; reason: string }[]  // valeurs renvoyées mais non reconnues
+  missing:  string[]                                          // clés absentes du JSON
+  skipped:  string[]                                          // volontairement non analysés
+}
 
-  const gender = validId(GENDERS, raw?.gender, current.gender)
+/**
+ * Résout une valeur renvoyée par Gemini vers un ID valide.
+ * Matching TOLÉRANT (Gemini renvoie parfois le label, une casse différente,
+ * un pluriel, ou une variante anglaise) :
+ *   1. id exact          → "blond-dore"
+ *   2. id insensible casse
+ *   3. label exact       → "Blond doré"
+ *   4. inclusion partielle → "blond" matche "blond-dore"
+ */
+function resolveId(list: FaceOption[], v: any): string | null {
+  if (typeof v !== 'string') return null
+  const raw = v.trim()
+  if (!raw) return null
+  const norm = raw.toLowerCase()
+  const deaccent = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+
+  // 1 & 2 — par id
+  let hit = list.find(o => o.id === raw) ?? list.find(o => o.id.toLowerCase() === norm)
+  if (hit) return hit.id
+  // 3 — par label (avec et sans accents)
+  hit = list.find(o => o.label.toLowerCase() === norm)
+       ?? list.find(o => deaccent(o.label) === deaccent(raw))
+  if (hit) return hit.id
+  // 4 — inclusion partielle sur l'id
+  hit = list.find(o => o.id.toLowerCase().includes(norm) || norm.includes(o.id.toLowerCase()))
+  if (hit) return hit.id
+  // 5 — inclusion partielle sur le label désaccentué
+  hit = list.find(o => deaccent(o.label).includes(deaccent(raw)))
+  if (hit) return hit.id
+  return null
+}
+
+/**
+ * Parse la réponse JSON de Gemini et la fusionne avec une sélection existante.
+ * Retourne aussi un RAPPORT détaillé pour que l'UI puisse afficher ce qui a
+ * réellement été appliqué (et ce qui a été rejeté).
+ */
+export function mergeAnalysis(
+  current: FaceSelection,
+  rawInput: any,
+): { selection: FaceSelection; report: AnalysisReport } {
+  // Gemini renvoie parfois { analysis: {...} } ou { result: {...} } → on déballe
+  const raw = rawInput?.analysis ?? rawInput?.result ?? rawInput?.data ?? rawInput ?? {}
+
+  const report: AnalysisReport = { applied: [], rejected: [], missing: [], skipped: [] }
+
+  const take = (key: keyof FaceSelection, list: FaceOption[], fallback: string, title: string): string => {
+    const v = (raw as any)[key]
+    if (v === undefined || v === null || v === '') { report.missing.push(title); return fallback }
+    const id = resolveId(list, v)
+    if (!id) {
+      report.rejected.push({ key: title, received: v, reason: 'valeur non reconnue' })
+      return fallback
+    }
+    report.applied.push({ key: title, label: list.find(o => o.id === id)?.label ?? id, value: id })
+    return id
+  }
+
+  const takeMulti = (key: keyof FaceSelection, list: FaceOption[], fallback: string[], title: string): string[] => {
+    const v = (raw as any)[key]
+    if (!Array.isArray(v)) {
+      if (v === undefined || v === null) { report.missing.push(title); return fallback }
+      report.rejected.push({ key: title, received: v, reason: 'tableau attendu' })
+      return fallback
+    }
+    const ids = v.map(x => resolveId(list, x)).filter((x): x is string => !!x)
+    const bad = v.filter(x => !resolveId(list, x))
+    if (bad.length) report.rejected.push({ key: title, received: bad, reason: 'valeurs non reconnues' })
+    if (!ids.length && !bad.length) {
+      // tableau vide volontaire (ex : pas de trait distinctif) → c'est une réponse valide
+      report.applied.push({ key: title, label: '(aucun)', value: '' })
+      return []
+    }
+    if (ids.length) {
+      report.applied.push({ key: title, label: ids.map(i => list.find(o => o.id === i)?.label).join(', '), value: ids.join(',') })
+      return ids
+    }
+    return fallback
+  }
+
+  const gender = take('gender', GENDERS, current.gender, 'Genre')
   const cuts = gender === 'homme' ? HAIR_CUTS_M : HAIR_CUTS_F
+  // Pour la coupe, Gemini peut renvoyer un id de l'autre genre → on cherche dans les deux listes
+  const allCuts = [...HAIR_CUTS_F, ...HAIR_CUTS_M]
 
-  return {
+  const selection: FaceSelection = {
     gender,
-    ageRange:      validId(AGE_RANGES,   raw?.ageRange,   current.ageRange),
-    range:         validId(RANGES,       raw?.range,      current.range),
-    undertone:     validId(UNDERTONES,   raw?.undertone,  current.undertone),
-    skinTone:      validId(SKIN_TONES,   raw?.skinTone,   current.skinTone),
-    faceShape:     validId(FACE_SHAPES,  raw?.faceShape,  current.faceShape),
-    boneStructure: validMulti(BONE_STRUCTURES, raw?.boneStructure).length
-                     ? validMulti(BONE_STRUCTURES, raw?.boneStructure) : current.boneStructure,
-    target:        validId(TARGETS,      raw?.target,     current.target),
-    eyeColor:      validId(EYE_COLORS,   raw?.eyeColor,   current.eyeColor),
-    eyeShape:      validId(EYE_SHAPES,   raw?.eyeShape,   current.eyeShape),
-    eyebrows:      validId(EYEBROWS,     raw?.eyebrows,   current.eyebrows),
-    hairColor:     validId(HAIR_COLORS,  raw?.hairColor,  current.hairColor),
-    hairCut:       validId(cuts,         raw?.hairCut,    cuts[0].id),
-    facialHair:    validId(FACIAL_HAIR,  raw?.facialHair, current.facialHair),
-    skinFinish:    validId(SKIN_FINISHES,raw?.skinFinish, current.skinFinish),
-    distinctive:   validMulti(DISTINCTIVE_FEATURES, raw?.distinctive),
-    tattoo:        validId(TATTOOS,      raw?.tattoo,     'aucun'),
-    piercing:      validId(PIERCINGS,    raw?.piercing,   'aucun'),
-    asymmetry:     validId(ASYMMETRIES,  raw?.asymmetry,  current.asymmetry),
-    gaze:          validId(GAZES,        raw?.gaze,       current.gaze),
-    mouth:         validId(MOUTHS,       raw?.mouth,      current.mouth),
-    bodyType:      validId(BODY_TYPES,   raw?.bodyType,   current.bodyType),
-    headRatio:     current.headRatio,     // non analysable depuis un portrait → on garde le choix user
-    shoulders:     validId(SHOULDERS,    raw?.shoulders,  current.shoulders),
-    musculature:   validId(MUSCULATURES, raw?.musculature,current.musculature),
-    legLength:     current.legLength,     // non analysable depuis un portrait
-    posture:       current.posture,       // choix artistique, pas une donnée du visage
+    ageRange:      take('ageRange',    AGE_RANGES,    current.ageRange,    'Âge'),
+    range:         take('range',       RANGES,        current.range,       'Gamme'),
+    undertone:     take('undertone',   UNDERTONES,    current.undertone,   'Sous-ton'),
+    skinTone:      take('skinTone',    SKIN_TONES,    current.skinTone,    'Couleur de peau'),
+    faceShape:     take('faceShape',   FACE_SHAPES,   current.faceShape,   'Forme du visage'),
+    boneStructure: takeMulti('boneStructure', BONE_STRUCTURES, current.boneStructure, 'Structure osseuse'),
+    target:        take('target',      TARGETS,       current.target,      'Cible casting'),
+    eyeColor:      take('eyeColor',    EYE_COLORS,    current.eyeColor,    'Couleur des yeux'),
+    eyeShape:      take('eyeShape',    EYE_SHAPES,    current.eyeShape,    'Forme des yeux'),
+    eyebrows:      take('eyebrows',    EYEBROWS,      current.eyebrows,    'Sourcils'),
+    hairColor:     take('hairColor',   HAIR_COLORS,   current.hairColor,   'Couleur de cheveux'),
+    hairCut:       (() => {
+      const id = resolveId(allCuts, (raw as any).hairCut)
+      // on ne garde que si la coupe existe dans la liste du genre détecté
+      if (id && cuts.some(c => c.id === id)) {
+        report.applied.push({ key: 'Coupe', label: cuts.find(c => c.id === id)?.label ?? id, value: id })
+        return id
+      }
+      if (id) {
+        report.rejected.push({ key: 'Coupe', received: (raw as any).hairCut, reason: `"${id}" n'existe pas pour ce genre` })
+      } else if ((raw as any).hairCut === undefined) {
+        report.missing.push('Coupe')
+      } else {
+        report.rejected.push({ key: 'Coupe', received: (raw as any).hairCut, reason: 'valeur non reconnue' })
+      }
+      return cuts.some(c => c.id === current.hairCut) ? current.hairCut : cuts[0].id
+    })(),
+    facialHair:    take('facialHair',  FACIAL_HAIR,   current.facialHair,  'Pilosité faciale'),
+    skinFinish:    take('skinFinish',  SKIN_FINISHES, current.skinFinish,  'Fini de peau'),
+    distinctive:   takeMulti('distinctive', DISTINCTIVE_FEATURES, [], 'Traits distinctifs'),
+    tattoo:        take('tattoo',      TATTOOS,       'aucun',             'Tatouages'),
+    piercing:      take('piercing',    PIERCINGS,     'aucun',             'Piercings'),
+    asymmetry:     take('asymmetry',   ASYMMETRIES,   current.asymmetry,   'Asymétrie'),
+    gaze:          take('gaze',        GAZES,         current.gaze,        'Regard'),
+    mouth:         take('mouth',       MOUTHS,        current.mouth,       'Bouche'),
+    bodyType:      take('bodyType',    BODY_TYPES,    current.bodyType,    'Morphologie'),
+    shoulders:     take('shoulders',   SHOULDERS,     current.shoulders,   'Carrure'),
+    musculature:   take('musculature', MUSCULATURES,  current.musculature, 'Musculature'),
+    chestSize:     take('chestSize',   CHEST_SIZES,   current.chestSize,   'Poitrine'),
+    // Non analysables depuis un portrait → on conserve les choix utilisateur
+    headRatio:     current.headRatio,
+    legLength:     current.legLength,
+    posture:       current.posture,
     hands:         current.hands,
-    chestSize:     validId(CHEST_SIZES,  raw?.chestSize,  current.chestSize),
     extraNotes:    current.extraNotes,
   }
+
+  report.skipped = ['Proportions (têtes)', 'Longueur de jambes', 'Posture', 'Mains']
+
+  return { selection, report }
 }

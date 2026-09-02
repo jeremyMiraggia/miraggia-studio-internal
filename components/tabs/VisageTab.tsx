@@ -17,7 +17,7 @@ import {
   buildFacePrompt, buildProfilePrompt, buildFullBodyPrompt,
   buildAnalysisPrompt, mergeAnalysis,
   randomSelection, defaultSelection,
-  type FaceSelection, type FaceOption,
+  type FaceSelection, type FaceOption, type AnalysisReport,
 } from '@/lib/faceBuilder'
 
 type Result = {
@@ -47,6 +47,9 @@ export default function VisageTab() {
   const [refImage, setRefImage]   = useState<File[]>([])
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzed, setAnalyzed]   = useState(false)
+  const [report, setReport]       = useState<AnalysisReport | null>(null)
+  const [rawJson, setRawJson]     = useState<string>('')
+  const [usedModel, setUsedModel] = useState<string>('')
 
   const isMale = sel.gender === 'homme'
   const hairCuts = isMale ? HAIR_CUTS_M : HAIR_CUTS_F
@@ -78,6 +81,8 @@ export default function VisageTab() {
     setAnalyzing(true)
     setError(null)
     setAnalyzed(false)
+    setReport(null)
+    setRawJson('')
     try {
       let img = refImage[0]
       try { img = await compressImage(img, { maxSide: 1400, quality: 0.85, maxBytes: 400_000 }) } catch { /* */ }
@@ -89,10 +94,19 @@ export default function VisageTab() {
       const resp = await fetch('/api/studio/visage-analyse', { method: 'POST', body: fd })
       const json = await resp.json()
       if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
-      if (!json.analysis) throw new Error('Analyse vide.')
+      if (!json.analysis) throw new Error('Analyse vide (aucun champ "analysis" dans la réponse).')
 
-      setSel(prev => mergeAnalysis(prev, json.analysis))
+      setRawJson(JSON.stringify(json.analysis, null, 2))
+      setUsedModel(json.model ?? '')
+
+      const { selection, report: rep } = mergeAnalysis(sel, json.analysis)
+      setSel(selection)
+      setReport(rep)
       setAnalyzed(true)
+
+      if (rep.applied.length === 0) {
+        setError('Aucun critère n\'a pu être appliqué — regarde le JSON brut ci-dessous pour comprendre le format renvoyé.')
+      }
     } catch (e: any) {
       setError(`Analyse : ${e?.message ?? e}`)
     } finally {
@@ -274,18 +288,86 @@ export default function VisageTab() {
                              cursor: analyzing || refImage.length === 0 ? 'not-allowed' : 'pointer' }}>
               {analyzing ? '⏳ Analyse en cours…' : '🔍 Analyser et pré-remplir'}
             </button>
-            {analyzed && (
-              <div style={{ marginTop: 8, fontSize: 12, color: '#059669', background: '#ECFDF5',
-                            padding: 8, borderRadius: 6 }}>
-                ✓ Critères pré-remplis. <strong>Vérifie et ajuste ci-dessous</strong> — le sous-ton, la structure
-                osseuse et la cible casting sont les moins fiables à détecter.
+            {analyzed && report && (
+              <div style={{ marginTop: 8 }}>
+                {/* Résumé chiffré */}
+                <div style={{
+                  fontSize: 12, padding: 8, borderRadius: 6,
+                  background: report.applied.length > 0 ? '#ECFDF5' : '#FEF2F2',
+                  color:      report.applied.length > 0 ? '#059669' : '#991B1B',
+                }}>
+                  {report.applied.length > 0 ? '✓' : '❌'} <strong>{report.applied.length}</strong> critère(s) appliqué(s)
+                  {report.rejected.length > 0 && <> · <strong style={{ color: '#B45309' }}>{report.rejected.length}</strong> rejeté(s)</>}
+                  {report.missing.length > 0  && <> · <strong style={{ color: '#6B7280' }}>{report.missing.length}</strong> absent(s)</>}
+                  {usedModel && <span style={{ marginLeft: 8, fontSize: 10, opacity: 0.7 }}>({usedModel})</span>}
+                </div>
+
+                {/* Détail des critères appliqués */}
+                {report.applied.length > 0 && (
+                  <details open style={{ marginTop: 6 }}>
+                    <summary style={{ fontSize: 11, color: '#059669', cursor: 'pointer', fontWeight: 600 }}>
+                      ✓ Critères détectés ({report.applied.length})
+                    </summary>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                      {report.applied.map((a, i) => (
+                        <span key={i} style={{ fontSize: 10, background: '#ECFDF5', color: '#065F46',
+                                               border: '1px solid #A7F3D0', borderRadius: 4, padding: '2px 6px' }}>
+                          <strong>{a.key}</strong> : {a.label}
+                        </span>
+                      ))}
+                    </div>
+                  </details>
+                )}
+
+                {/* Rejets */}
+                {report.rejected.length > 0 && (
+                  <details style={{ marginTop: 6 }}>
+                    <summary style={{ fontSize: 11, color: '#B45309', cursor: 'pointer', fontWeight: 600 }}>
+                      ⚠ Valeurs rejetées ({report.rejected.length}) — valeurs actuelles conservées
+                    </summary>
+                    <ul style={{ fontSize: 10, color: '#92400E', margin: '4px 0', paddingLeft: 18 }}>
+                      {report.rejected.map((r, i) => (
+                        <li key={i}><strong>{r.key}</strong> : reçu «{JSON.stringify(r.received)}» — {r.reason}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+
+                {/* Manquants + volontairement ignorés */}
+                {(report.missing.length > 0 || report.skipped.length > 0) && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ fontSize: 11, color: '#6B7280', cursor: 'pointer' }}>
+                      Non renseignés ({report.missing.length + report.skipped.length})
+                    </summary>
+                    <div style={{ fontSize: 10, color: '#6B7280', marginTop: 4, lineHeight: 1.6 }}>
+                      {report.missing.length > 0 && <div><strong>Absents du JSON :</strong> {report.missing.join(', ')}</div>}
+                      {report.skipped.length > 0 && <div><strong>Non analysables depuis un portrait :</strong> {report.skipped.join(', ')} — à régler à la main.</div>}
+                    </div>
+                  </details>
+                )}
+
+                {/* JSON brut pour debug */}
+                {rawJson && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ fontSize: 11, color: '#6B7280', cursor: 'pointer' }}>JSON brut renvoyé par Gemini</summary>
+                    <pre style={{ fontSize: 9, background: '#F9FAFB', padding: 8, borderRadius: 6,
+                                  overflow: 'auto', maxHeight: 220, marginTop: 4 }}>{rawJson}</pre>
+                  </details>
+                )}
+
+                <div style={{ marginTop: 6, fontSize: 11, color: '#6B7280' }}>
+                  <strong>À vérifier en priorité</strong> : sous-ton, structure osseuse, gamme et cible casting
+                  (les plus subjectifs / dépendants de la lumière).
+                </div>
               </div>
             )}
-            <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280', lineHeight: 1.5 }}>
-              Gemini analyse la photo et remplit automatiquement les catégories.
-              Fiable sur : genre, peau, yeux, cheveux, pilosité, piercings, taches de rousseur.
-              Moins fiable sur : sous-ton (dépend de la lumière de la photo), structure osseuse, gamme/cible.
-            </div>
+            {!analyzed && (
+              <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280', lineHeight: 1.5 }}>
+                Gemini analyse la photo et remplit automatiquement les catégories.
+                Fiable sur : genre, peau, yeux, cheveux, pilosité, piercings, taches de rousseur.
+                Moins fiable sur : sous-ton (dépend de la lumière de la photo), structure osseuse, gamme/cible.
+              </div>
+            )}
           </div>
         </div>
       </div>
