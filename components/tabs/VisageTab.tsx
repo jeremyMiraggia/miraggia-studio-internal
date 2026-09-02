@@ -4,6 +4,8 @@
  */
 import { useMemo, useState } from 'react'
 import JSZip from 'jszip'
+import Dropzone from '@/components/ui/Dropzone'
+import { compressImage } from '@/lib/compressImage'
 import {
   GENDERS, AGE_RANGES, RANGES, UNDERTONES, SKIN_TONES,
   FACE_SHAPES, BONE_STRUCTURES, TARGETS,
@@ -11,17 +13,21 @@ import {
   HAIR_COLORS, HAIR_CUTS_F, HAIR_CUTS_M, FACIAL_HAIR,
   SKIN_FINISHES, DISTINCTIVE_FEATURES, TATTOOS, PIERCINGS, ASYMMETRIES,
   GAZES, MOUTHS,
-  buildFacePrompt, buildProfilePrompt, randomSelection, defaultSelection,
+  BODY_TYPES, HEAD_RATIOS, SHOULDERS, MUSCULATURES, LEG_LENGTHS, POSTURES, HANDS, CHEST_SIZES,
+  buildFacePrompt, buildProfilePrompt, buildFullBodyPrompt,
+  buildAnalysisPrompt, mergeAnalysis,
+  randomSelection, defaultSelection,
   type FaceSelection, type FaceOption,
 } from '@/lib/faceBuilder'
 
 type Result = {
-  id:          string
-  faceUrl?:    string
-  profileUrl?: string
-  selection:   FaceSelection
-  createdAt:   number
-  error?:      string
+  id:           string
+  faceUrl?:     string
+  profileUrl?:  string
+  fullBodyUrl?: string
+  selection:    FaceSelection
+  createdAt:    number
+  error?:       string
 }
 
 export default function VisageTab() {
@@ -29,12 +35,18 @@ export default function VisageTab() {
   const [ratio, setRatio]     = useState('3:4')
   const [quality, setQuality] = useState('2K')
   const [onlyFace, setOnlyFace] = useState(false)
+  const [withFullBody, setWithFullBody] = useState(true)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState('')
   const [error, setError]     = useState<string | null>(null)
   const [results, setResults] = useState<Result[]>([])
   const [showPrompt, setShowPrompt] = useState(false)
   const [zipping, setZipping] = useState(false)
+
+  // Analyse d'un visage de référence
+  const [refImage, setRefImage]   = useState<File[]>([])
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzed, setAnalyzed]   = useState(false)
 
   const isMale = sel.gender === 'homme'
   const hairCuts = isMale ? HAIR_CUTS_M : HAIR_CUTS_F
@@ -60,6 +72,34 @@ export default function VisageTab() {
 
   const facePrompt = useMemo(() => buildFacePrompt(sel), [sel])
 
+  /* ----------- Analyse d'un visage de référence ----------- */
+  const analyzeReference = async () => {
+    if (analyzing || refImage.length === 0) return
+    setAnalyzing(true)
+    setError(null)
+    setAnalyzed(false)
+    try {
+      let img = refImage[0]
+      try { img = await compressImage(img, { maxSide: 1400, quality: 0.85, maxBytes: 400_000 }) } catch { /* */ }
+
+      const fd = new FormData()
+      fd.append('image', img)
+      fd.set('prompt', buildAnalysisPrompt())
+
+      const resp = await fetch('/api/studio/visage-analyse', { method: 'POST', body: fd })
+      const json = await resp.json()
+      if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
+      if (!json.analysis) throw new Error('Analyse vide.')
+
+      setSel(prev => mergeAnalysis(prev, json.analysis))
+      setAnalyzed(true)
+    } catch (e: any) {
+      setError(`Analyse : ${e?.message ?? e}`)
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   /* ----------- Génération ----------- */
   const generate = async () => {
     if (running) return
@@ -73,19 +113,22 @@ export default function VisageTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           facePrompt,
-          profilePrompt: buildProfilePrompt(),
+          profilePrompt:  buildProfilePrompt(),
+          fullBodyPrompt: buildFullBodyPrompt(sel),
           ratio, quality, onlyFace,
+          withFullBody: withFullBody && !onlyFace,
         }),
       })
       const json = await resp.json()
       if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
       setResults(prev => [{
         id,
-        faceUrl:    json.faceUrl,
-        profileUrl: json.profileUrl ?? undefined,
-        selection:  { ...sel },
-        createdAt:  Date.now(),
-        error:      json.profileError,
+        faceUrl:     json.faceUrl,
+        profileUrl:  json.profileUrl  ?? undefined,
+        fullBodyUrl: json.fullBodyUrl ?? undefined,
+        selection:   { ...sel },
+        createdAt:   Date.now(),
+        error:       json.profileError || json.fullBodyError,
       }, ...prev])
       setProgress('')
     } catch (e: any) {
@@ -130,8 +173,13 @@ export default function VisageTab() {
           const b = await fetch(r.profileUrl).then(x => x.blob())
           zip.file(`${folder}/profil.jpg`, b)
         }
-        // Fiche technique du mannequin
-        zip.file(`${folder}/fiche.txt`, buildFacePrompt(r.selection))
+        if (r.fullBodyUrl) {
+          const b = await fetch(r.fullBodyUrl).then(x => x.blob())
+          zip.file(`${folder}/plein-pied.jpg`, b)
+        }
+        // Fiche technique du mannequin (visage + corps)
+        zip.file(`${folder}/fiche.txt`,
+          buildFacePrompt(r.selection) + '\n\n\n===== SPÉCIFICATION CORPS =====\n\n' + buildFullBodyPrompt(r.selection))
       }
       const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
       const url = URL.createObjectURL(blob)
@@ -211,6 +259,35 @@ export default function VisageTab() {
           Configure tous les critères, puis génère un mannequin en <strong>2 vues cohérentes</strong> (face + profil, même session).
           Fond blanc studio, style casting polaroid. Utilise <strong>🎲 Aléatoire</strong> pour explorer rapidement.
         </p>
+      </div>
+
+      {/* ===== ANALYSE D'UN VISAGE DE RÉFÉRENCE ===== */}
+      <div style={{ ...card, borderColor: '#7C3AED', borderWidth: 1.5 }}>
+        <div style={{ ...label, color: '#7C3AED' }}>🔍 Optionnel — Partir d'un visage de référence</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 14, alignItems: 'start' }}>
+          <Dropzone files={refImage} onChange={f => { setRefImage(f); setAnalyzed(false) }}
+                    multiple={false} accept="image/*"
+                    label="Visage de référence" hint="Portrait du mannequin dont tu veux t'inspirer" />
+          <div>
+            <button onClick={analyzeReference} disabled={analyzing || refImage.length === 0}
+                    style={{ ...btn(analyzing || refImage.length === 0 ? '#9CA3AF' : '#7C3AED'),
+                             cursor: analyzing || refImage.length === 0 ? 'not-allowed' : 'pointer' }}>
+              {analyzing ? '⏳ Analyse en cours…' : '🔍 Analyser et pré-remplir'}
+            </button>
+            {analyzed && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#059669', background: '#ECFDF5',
+                            padding: 8, borderRadius: 6 }}>
+                ✓ Critères pré-remplis. <strong>Vérifie et ajuste ci-dessous</strong> — le sous-ton, la structure
+                osseuse et la cible casting sont les moins fiables à détecter.
+              </div>
+            )}
+            <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280', lineHeight: 1.5 }}>
+              Gemini analyse la photo et remplit automatiquement les catégories.
+              Fiable sur : genre, peau, yeux, cheveux, pilosité, piercings, taches de rousseur.
+              Moins fiable sur : sous-ton (dépend de la lumière de la photo), structure osseuse, gamme/cible.
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ===== IDENTITÉ ===== */}
@@ -295,9 +372,33 @@ export default function VisageTab() {
         </div>
       </div>
 
+      {/* ===== CORPS ===== */}
+      <div style={card}>
+        <div style={label}>
+          8 — Corps & morphologie
+          <span style={{ marginLeft: 8, fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: '#9CA3AF' }}>
+            (utilisé pour la vue plein-pied)
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
+          <Sel title="Morphologie"        options={BODY_TYPES}    value={sel.bodyType}    onChange={v => set('bodyType', v)} />
+          <Sel title="Proportions (têtes)" options={HEAD_RATIOS}  value={sel.headRatio}   onChange={v => set('headRatio', v)} />
+          <Sel title="Longueur de jambes" options={LEG_LENGTHS}   value={sel.legLength}   onChange={v => set('legLength', v)} />
+          <Sel title="Carrure"            options={SHOULDERS}     value={sel.shoulders}   onChange={v => set('shoulders', v)} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: isMale ? 'repeat(3, 1fr)' : 'repeat(4, 1fr)', gap: 12 }}>
+          <Sel title="Musculature" options={MUSCULATURES} value={sel.musculature} onChange={v => set('musculature', v)} />
+          <Sel title="Posture"     options={POSTURES}     value={sel.posture}     onChange={v => set('posture', v)} />
+          <Sel title="Mains"       options={HANDS}        value={sel.hands}       onChange={v => set('hands', v)} />
+          {!isMale && (
+            <Sel title="Poitrine" options={CHEST_SIZES} value={sel.chestSize} onChange={v => set('chestSize', v)} />
+          )}
+        </div>
+      </div>
+
       {/* ===== PARAMÈTRES + ACTIONS ===== */}
       <div style={card}>
-        <div style={label}>8 — Sortie</div>
+        <div style={label}>9 — Sortie</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
           <div>
             <div style={fieldLabel}>Ratio</div>
@@ -317,10 +418,17 @@ export default function VisageTab() {
               <option value="4K">4K (max)</option>
             </select>
           </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 6 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
               <input type="checkbox" checked={onlyFace} onChange={e => setOnlyFace(e.target.checked)} />
-              Face uniquement (sans profil)
+              Face uniquement
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+                            color: onlyFace ? '#9CA3AF' : '#374151',
+                            cursor: onlyFace ? 'not-allowed' : 'pointer' }}>
+              <input type="checkbox" checked={withFullBody && !onlyFace} disabled={onlyFace}
+                     onChange={e => setWithFullBody(e.target.checked)} />
+              + vue plein-pied
             </label>
           </div>
         </div>
@@ -369,14 +477,18 @@ export default function VisageTab() {
                     <span style={{ fontSize: 11, color: '#6B7280' }}>{gLabel} · {aLabel} · {tLabel}</span>
                     {r.error && <span style={{ fontSize: 10, color: '#EF4444' }}>⚠ profil : {r.error.slice(0, 60)}</span>}
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, maxWidth: 620 }}>
+                  <div style={{ display: 'grid',
+                                gridTemplateColumns: r.fullBodyUrl ? '1fr 1fr 1fr' : '1fr 1fr',
+                                gap: 10, maxWidth: r.fullBodyUrl ? 880 : 620 }}>
                     {[
-                      { url: r.faceUrl,    title: 'Face',   file: `mannequin_${num}_face.jpg` },
-                      { url: r.profileUrl, title: 'Profil', file: `mannequin_${num}_profil.jpg` },
+                      { url: r.faceUrl,     title: 'Face',       file: `mannequin_${num}_face.jpg` },
+                      { url: r.profileUrl,  title: 'Profil',     file: `mannequin_${num}_profil.jpg` },
+                      ...(r.fullBodyUrl ? [{ url: r.fullBodyUrl, title: 'Plein-pied', file: `mannequin_${num}_plein-pied.jpg` }] : []),
                     ].map((v, vi) => (
                       <div key={vi}>
                         <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, fontWeight: 600 }}>{v.title}</div>
-                        <div style={{ aspectRatio: '3/4', background: '#F3F4F6', borderRadius: 6, overflow: 'hidden',
+                        <div style={{ aspectRatio: v.title === 'Plein-pied' ? '9/16' : '3/4',
+                                      background: '#F3F4F6', borderRadius: 6, overflow: 'hidden',
                                       display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           {v.url
                             ? <a href={v.url} target="_blank" rel="noreferrer" style={{ display: 'block', width: '100%', height: '100%' }}>

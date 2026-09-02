@@ -18,11 +18,13 @@ const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemi
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const facePrompt:    string = body.facePrompt    ?? ''
-    const profilePrompt: string = body.profilePrompt ?? ''
-    const ratio:         string = body.ratio         ?? '3:4'
-    const quality:       string = body.quality       ?? '2K'
-    const onlyFace:      boolean = body.onlyFace === true
+    const facePrompt:     string  = body.facePrompt     ?? ''
+    const profilePrompt:  string  = body.profilePrompt  ?? ''
+    const fullBodyPrompt: string  = body.fullBodyPrompt ?? ''
+    const ratio:          string  = body.ratio          ?? '3:4'
+    const quality:        string  = body.quality        ?? '2K'
+    const onlyFace:       boolean = body.onlyFace === true
+    const withFullBody:   boolean = body.withFullBody === true
 
     if (!facePrompt) return NextResponse.json({ error: 'facePrompt requis.' }, { status: 400 })
 
@@ -91,7 +93,7 @@ export async function POST(request: Request) {
     debug.face = { bytes: faceBuf.length }
 
     if (onlyFace) {
-      return NextResponse.json({ faceUrl, profileUrl: null, debug })
+      return NextResponse.json({ faceUrl, profileUrl: null, fullBodyUrl: null, debug })
     }
 
     // ============= ÉTAPE 2 — PROFIL (avec la face en référence) =============
@@ -112,7 +114,27 @@ export async function POST(request: Request) {
       debug.profile = { error: profileError }
     }
 
-    return NextResponse.json({ faceUrl, profileUrl, profileError, debug })
+    // ============= ÉTAPE 3 — PLEIN-PIED (optionnel, face en référence) =============
+    let fullBodyUrl: string | null = null
+    let fullBodyError: string | undefined
+    if (withFullBody && fullBodyPrompt) {
+      try {
+        const bodyParts = [
+          { text: `[SESSION ${sessionId}]\n${fullBodyPrompt}` },
+          { inlineData: { mimeType: faceRes.mime, data: faceRes.b64 } },
+          { text: '⚠ FINAL REMINDER : the image above is the FACE of the model. Produce the FULL BODY standing shot of THE SAME PERSON, head to feet, same white background, same lighting. The head must look proportionally SMALL relative to the body (fashion model proportions). Count the heads : the total height must match the ratio specified above.' },
+        ]
+        const bodyRes = await callGemini(bodyParts)
+        const bodyBuf = Buffer.from(bodyRes.b64, 'base64')
+        fullBodyUrl = await uploadBlob(bodyBuf, 'fullbody')
+        debug.fullBody = { bytes: bodyBuf.length }
+      } catch (e: any) {
+        fullBodyError = e?.message ?? String(e)
+        debug.fullBody = { error: fullBodyError }
+      }
+    }
+
+    return NextResponse.json({ faceUrl, profileUrl, fullBodyUrl, profileError, fullBodyError, debug })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'Erreur inconnue', stack: error?.stack?.slice(0, 600) }, { status: 500 })
   }

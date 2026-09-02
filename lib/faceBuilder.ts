@@ -249,6 +249,64 @@ export const MOUTHS: FaceOption[] = [
   { id: 'pincees',     label: 'Lèvres pincées',     prompt: 'lips lightly pressed together' },
 ]
 
+/* ============================== CORPS ============================== */
+
+export const BODY_TYPES: FaceOption[] = [
+  { id: 'mince',       label: 'Mince / élancée',    prompt: 'slim slender build, lean frame' },
+  { id: 'athletique',  label: 'Athlétique',         prompt: 'athletic toned build with visible fitness' },
+  { id: 'musclee',     label: 'Sportive musclée',   prompt: 'muscular sporty build, well-developed musculature' },
+  { id: 'curvy',       label: 'Curvy',              prompt: 'curvy hourglass build with generous curves' },
+  { id: 'plus-size',   label: 'Plus size',          prompt: 'plus-size full-figured body, confident and proportionate' },
+  { id: 'androgyne',   label: 'Androgyne longiligne',prompt: 'androgynous elongated frame, minimal curves, linear silhouette' },
+  { id: 'normale',     label: 'Standard / normale', prompt: 'average natural body type, neither slim nor heavy' },
+]
+
+export const HEAD_RATIOS: FaceOption[] = [
+  { id: '8',   label: '8 têtes (réaliste)',            prompt: 'body height = 8 heads (realistic well-proportioned adult)' },
+  { id: '9',   label: '9 têtes (mannequin)',           prompt: 'body height = 9 heads (professional fashion model proportions, head noticeably small relative to body)' },
+  { id: '9.5', label: '9.5 têtes (top model)',         prompt: 'body height = 9.5 heads (elite runway top-model proportions, small head, very long legs, hip line well above the vertical midpoint)' },
+  { id: '10',  label: '10 têtes (fashion illustration)',prompt: 'body height = 10 heads (exaggerated fashion illustration proportions, very small head, extremely long legs — Vogue croquis style)' },
+]
+
+export const SHOULDERS: FaceOption[] = [
+  { id: 'etroites',  label: 'Étroites',   prompt: 'narrow shoulders' },
+  { id: 'moyennes',  label: 'Moyennes',   prompt: 'medium balanced shoulders' },
+  { id: 'larges',    label: 'Larges',     prompt: 'broad wide shoulders' },
+  { id: 'tombantes', label: 'Tombantes',  prompt: 'sloping soft shoulders' },
+]
+
+export const MUSCULATURES: FaceOption[] = [
+  { id: 'fine',      label: 'Fine',              prompt: 'minimal muscle definition, soft slender limbs' },
+  { id: 'tonique',   label: 'Tonique discrète',  prompt: 'subtle muscle tone, naturally fit without visible definition' },
+  { id: 'definie',   label: 'Définie',           prompt: 'clearly defined musculature, visible tone in arms and shoulders' },
+  { id: 'marquee',   label: 'Marquée',           prompt: 'strongly developed visible musculature' },
+]
+
+export const LEG_LENGTHS: FaceOption[] = [
+  { id: 'proportionnees', label: 'Proportionnées',   prompt: 'legs proportionate to the torso (~48% of total height)' },
+  { id: 'longues',        label: 'Longues',          prompt: 'long legs (~53% of total height), noticeably longer than the torso' },
+  { id: 'tres-longues',   label: 'Très longues',     prompt: 'exceptionally long legs (~58% of total height), hip line far above the vertical midpoint of the silhouette' },
+]
+
+export const POSTURES: FaceOption[] = [
+  { id: 'droite',      label: 'Droite naturelle',    prompt: 'standing straight, natural relaxed posture, arms at sides' },
+  { id: 'relachee',    label: 'Relâchée',            prompt: 'loose casual stance, weight slightly shifted' },
+  { id: 'dehanchee',   label: 'Hanche déhanchée',    prompt: 'contrapposto stance, weight on one leg, hip pushed out' },
+  { id: 'confiante',   label: 'Confiante',           prompt: 'shoulders back, chest open, confident commanding stance' },
+]
+
+export const HANDS: FaceOption[] = [
+  { id: 'fines-longues', label: 'Fines & longues',  prompt: 'slender elegant hands with long fingers' },
+  { id: 'moyennes',      label: 'Moyennes',         prompt: 'average proportioned hands' },
+  { id: 'larges',        label: 'Larges',           prompt: 'broad strong hands' },
+]
+
+export const CHEST_SIZES: FaceOption[] = [
+  { id: 'petite',    label: 'Petite',    prompt: 'small bust' },
+  { id: 'moyenne',   label: 'Moyenne',   prompt: 'medium bust' },
+  { id: 'genereuse', label: 'Généreuse', prompt: 'fuller bust' },
+]
+
 /* ============================== SÉLECTION COMPLÈTE ============================== */
 
 export type FaceSelection = {
@@ -273,6 +331,15 @@ export type FaceSelection = {
   asymmetry:    string
   gaze:         string
   mouth:        string
+  // ===== Corps =====
+  bodyType:     string
+  headRatio:    string
+  shoulders:    string
+  musculature:  string
+  legLength:    string
+  posture:      string
+  hands:        string
+  chestSize:    string        // femme uniquement
   extraNotes:   string        // texte libre
 }
 
@@ -375,6 +442,45 @@ export function buildProfilePrompt(): string {
   ].join('\n')
 }
 
+/**
+ * Prompt pour la vue PLEIN-PIED (silhouette entière), envoyé AVEC l'image de face
+ * générée en référence pour garantir la cohérence d'identité.
+ */
+export function buildFullBodyPrompt(sel: FaceSelection): string {
+  const isFemale = sel.gender === 'femme'
+  return [
+    'PROFESSIONAL MODEL CASTING PHOTOGRAPH — FULL BODY VIEW (digitals / polaroid style).',
+    '',
+    '⚠ The attached image is the FRONT PORTRAIT of this exact model, shot moments ago in the same casting session.',
+    'Produce the FULL BODY standing shot of THE SAME PERSON.',
+    '',
+    '=== ABSOLUTE IDENTITY CONSISTENCY (critical) ===',
+    'The face must be UNMISTAKABLY the same person as the reference : same facial features, same skin tone and texture, same freckles / marks / scars at the SAME positions, same hair color, same haircut and length, same eyebrows, same eye color and shape, same nose, same lips, same piercings and tattoos in the same spots.',
+    '',
+    '=== BODY SPECIFICATION ===',
+    `• Build : ${p(BODY_TYPES, sel.bodyType)}.`,
+    `• Proportions : ${p(HEAD_RATIOS, sel.headRatio)}.`,
+    `  ⚠ The head must look PROPORTIONALLY SMALL relative to the body. A head that is too large instantly makes the silhouette look short and stocky — this is the most common mistake, avoid it.`,
+    `• Legs : ${p(LEG_LENGTHS, sel.legLength)}.`,
+    `• Shoulders : ${p(SHOULDERS, sel.shoulders)}.`,
+    `• Musculature : ${p(MUSCULATURES, sel.musculature)}.`,
+    `• Hands : ${p(HANDS, sel.hands)}.`,
+    isFemale ? `• Bust : ${p(CHEST_SIZES, sel.chestSize)}.` : '',
+    `• Posture : ${p(POSTURES, sel.posture)}.`,
+    '',
+    '=== FRAMING / TECHNICAL (identical setup to the portrait) ===',
+    '• FRAMING : FULL BODY, head to feet, entire silhouette visible. 4-6% margin above the head and below the feet. The model fills the frame vertically.',
+    '• ANGLE : straight-on front view, camera at waist height with a very slight low angle (this optically lengthens the legs, standard casting practice).',
+    '• BACKGROUND : the exact same pure white seamless studio backdrop (#FFFFFF), uniform, no gradient, no props.',
+    '• LIGHTING : the exact same soft even studio lighting as the portrait.',
+    '• STYLING : plain fitted neutral basics that reveal the body line — a simple white or grey tank top / t-shirt and plain shorts or briefs (standard casting digitals outfit). Barefoot. No logos, no accessories beyond the specified piercings.',
+    '• EXPRESSION : neutral relaxed, looking straight at the camera.',
+    '• RENDERING : photorealistic, sharp, natural skin texture. Real casting digitals look, not a retouched ad.',
+    '',
+    '⚠ SELF-CHECK before output : count the heads from top of skull to feet. You must find the number specified above. If you find 7-8 when 9.5 was requested, the legs are too short and the head too big — redo with a smaller head and longer legs.',
+  ].filter(l => l !== '').join('\n')
+}
+
 /* ============================== ALÉATOIRE ============================== */
 
 function pick<T>(arr: T[]): T {
@@ -414,6 +520,15 @@ export function randomSelection(): FaceSelection {
     asymmetry:     pick(ASYMMETRIES).id,
     gaze:          pick(GAZES).id,
     mouth:         pick(MOUTHS).id,
+    // Corps
+    bodyType:      pick(BODY_TYPES).id,
+    headRatio:     pick(HEAD_RATIOS.slice(1)).id,   // évite le 8 têtes (trop réaliste pour de la mode)
+    shoulders:     pick(SHOULDERS).id,
+    musculature:   pick(MUSCULATURES).id,
+    legLength:     pick(LEG_LENGTHS).id,
+    posture:       pick(POSTURES).id,
+    hands:         pick(HANDS).id,
+    chestSize:     isMale ? 'moyenne' : pick(CHEST_SIZES).id,
     extraNotes:    '',
   }
 }
@@ -427,6 +542,107 @@ export function defaultSelection(): FaceSelection {
     eyeColor: 'marron-fonce', eyeShape: 'amande', eyebrows: 'fournis-struct',
     hairColor: 'brun', hairCut: 'long-ondule', facialHair: 'aucune',
     skinFinish: 'texturee', distinctive: [], tattoo: 'aucun', piercing: 'aucun',
-    asymmetry: 'legere', gaze: 'direct-doux', mouth: 'neutre', extraNotes: '',
+    asymmetry: 'legere', gaze: 'direct-doux', mouth: 'neutre',
+    bodyType: 'mince', headRatio: '9.5', shoulders: 'moyennes',
+    musculature: 'tonique', legLength: 'tres-longues', posture: 'droite',
+    hands: 'fines-longues', chestSize: 'moyenne',
+    extraNotes: '',
+  }
+}
+
+/* ============================== ANALYSE D'IMAGE ============================== */
+
+/**
+ * Construit le prompt d'analyse envoyé à Gemini Vision avec une photo de référence.
+ * Gemini doit retourner un JSON dont les valeurs sont les IDs de nos options.
+ */
+export function buildAnalysisPrompt(): string {
+  const listOf = (name: string, opts: FaceOption[]) =>
+    `"${name}": one of [${opts.map(o => `"${o.id}"`).join(', ')}]`
+
+  return [
+    'Analyse la photo de visage fournie et retourne UNIQUEMENT un objet JSON valide (aucun texte avant ou après, pas de bloc markdown).',
+    '',
+    'Le JSON doit avoir exactement ces clés, chaque valeur étant l\'un des IDs listés :',
+    '{',
+    `  ${listOf('gender', GENDERS)},`,
+    `  ${listOf('ageRange', AGE_RANGES)},`,
+    `  ${listOf('range', RANGES)},`,
+    `  ${listOf('undertone', UNDERTONES)},`,
+    `  ${listOf('skinTone', SKIN_TONES)},`,
+    `  ${listOf('faceShape', FACE_SHAPES)},`,
+    `  "boneStructure": array of 1 to 4 ids from [${BONE_STRUCTURES.map(o => `"${o.id}"`).join(', ')}],`,
+    `  ${listOf('target', TARGETS)},`,
+    `  ${listOf('eyeColor', EYE_COLORS)},`,
+    `  ${listOf('eyeShape', EYE_SHAPES)},`,
+    `  ${listOf('eyebrows', EYEBROWS)},`,
+    `  ${listOf('hairColor', HAIR_COLORS)},`,
+    `  "hairCut": one of [${[...HAIR_CUTS_F, ...HAIR_CUTS_M].map(o => `"${o.id}"`).filter((v, i, a) => a.indexOf(v) === i).join(', ')}],`,
+    `  ${listOf('facialHair', FACIAL_HAIR)},`,
+    `  ${listOf('skinFinish', SKIN_FINISHES)},`,
+    `  "distinctive": array of 0 to 3 ids from [${DISTINCTIVE_FEATURES.map(o => `"${o.id}"`).join(', ')}],`,
+    `  ${listOf('tattoo', TATTOOS)},`,
+    `  ${listOf('piercing', PIERCINGS)},`,
+    `  ${listOf('asymmetry', ASYMMETRIES)},`,
+    `  ${listOf('gaze', GAZES)},`,
+    `  ${listOf('mouth', MOUTHS)},`,
+    `  ${listOf('bodyType', BODY_TYPES)},`,
+    `  ${listOf('shoulders', SHOULDERS)},`,
+    `  ${listOf('musculature', MUSCULATURES)},`,
+    `  ${listOf('chestSize', CHEST_SIZES)}`,
+    '}',
+    '',
+    '⚠ Consignes :',
+    '  • Choisis TOUJOURS une valeur pour chaque clé, même si tu n\'es pas certain — prends l\'option la plus proche.',
+    '  • Si le corps n\'est pas visible sur la photo (portrait seul), déduis bodyType / shoulders / musculature / chestSize de la morphologie du visage, du cou et des épaules visibles.',
+    '  • "range" et "target" sont des interprétations marketing : juge le style général et l\'énergie du visage.',
+    '  • "undertone" : observe la nuance sous la peau (rosée = froid, dorée = chaud, équilibrée = neutre).',
+    '  • "distinctive" : ne liste QUE ce qui est réellement visible (taches de rousseur, grain de beauté, fossettes…). Tableau vide si rien de notable.',
+    '  • Réponds avec le JSON brut uniquement.',
+  ].join('\n')
+}
+
+/** Parse la réponse JSON de Gemini et la fusionne avec une sélection existante. */
+export function mergeAnalysis(current: FaceSelection, raw: any): FaceSelection {
+  const validId = (list: FaceOption[], v: any, fallback: string): string =>
+    (typeof v === 'string' && list.some(o => o.id === v)) ? v : fallback
+  const validMulti = (list: FaceOption[], v: any): string[] =>
+    Array.isArray(v) ? v.filter((x: any) => typeof x === 'string' && list.some(o => o.id === x)) : []
+
+  const gender = validId(GENDERS, raw?.gender, current.gender)
+  const cuts = gender === 'homme' ? HAIR_CUTS_M : HAIR_CUTS_F
+
+  return {
+    gender,
+    ageRange:      validId(AGE_RANGES,   raw?.ageRange,   current.ageRange),
+    range:         validId(RANGES,       raw?.range,      current.range),
+    undertone:     validId(UNDERTONES,   raw?.undertone,  current.undertone),
+    skinTone:      validId(SKIN_TONES,   raw?.skinTone,   current.skinTone),
+    faceShape:     validId(FACE_SHAPES,  raw?.faceShape,  current.faceShape),
+    boneStructure: validMulti(BONE_STRUCTURES, raw?.boneStructure).length
+                     ? validMulti(BONE_STRUCTURES, raw?.boneStructure) : current.boneStructure,
+    target:        validId(TARGETS,      raw?.target,     current.target),
+    eyeColor:      validId(EYE_COLORS,   raw?.eyeColor,   current.eyeColor),
+    eyeShape:      validId(EYE_SHAPES,   raw?.eyeShape,   current.eyeShape),
+    eyebrows:      validId(EYEBROWS,     raw?.eyebrows,   current.eyebrows),
+    hairColor:     validId(HAIR_COLORS,  raw?.hairColor,  current.hairColor),
+    hairCut:       validId(cuts,         raw?.hairCut,    cuts[0].id),
+    facialHair:    validId(FACIAL_HAIR,  raw?.facialHair, current.facialHair),
+    skinFinish:    validId(SKIN_FINISHES,raw?.skinFinish, current.skinFinish),
+    distinctive:   validMulti(DISTINCTIVE_FEATURES, raw?.distinctive),
+    tattoo:        validId(TATTOOS,      raw?.tattoo,     'aucun'),
+    piercing:      validId(PIERCINGS,    raw?.piercing,   'aucun'),
+    asymmetry:     validId(ASYMMETRIES,  raw?.asymmetry,  current.asymmetry),
+    gaze:          validId(GAZES,        raw?.gaze,       current.gaze),
+    mouth:         validId(MOUTHS,       raw?.mouth,      current.mouth),
+    bodyType:      validId(BODY_TYPES,   raw?.bodyType,   current.bodyType),
+    headRatio:     current.headRatio,     // non analysable depuis un portrait → on garde le choix user
+    shoulders:     validId(SHOULDERS,    raw?.shoulders,  current.shoulders),
+    musculature:   validId(MUSCULATURES, raw?.musculature,current.musculature),
+    legLength:     current.legLength,     // non analysable depuis un portrait
+    posture:       current.posture,       // choix artistique, pas une donnée du visage
+    hands:         current.hands,
+    chestSize:     validId(CHEST_SIZES,  raw?.chestSize,  current.chestSize),
+    extraNotes:    current.extraNotes,
   }
 }
