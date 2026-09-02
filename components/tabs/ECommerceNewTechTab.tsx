@@ -70,7 +70,8 @@ export default function ECommerceNewTechTab() {
   const [ratio, setRatio]         = useState('9:16')
   const [quality, setQuality]     = useState('2K')
   // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
-  const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('custom')
+  const [shadowMode, setShadowMode] = useState<'gemini' | 'photoroom-soft' | 'photoroom-hard' | 'custom'>('gemini')
+  const [shadowThreshold, setShadowThreshold] = useState(0.06)
   const [concurrency, setConcurrency] = useState(2)
   const [running, setRunning]     = useState(false)
   // Ligne du sol (mode custom) — 0 = auto-détection
@@ -269,6 +270,7 @@ export default function ECommerceNewTechTab() {
         fd.set('matteDecontaminate', matteDecontaminate ? '1' : '0')
         fd.set('matteErode', String(matteErode))
         fd.set('matteFeather', String(matteFeather))
+        fd.set('shadowThreshold', String(shadowThreshold))
         // Si le fond a déjà été adapté côté client (ex : bgCloseUpHaut sans sol),
         // on dit au serveur de NE PAS appliquer le crop final selon framing.
         if (bgAlreadyAdaptedToFraming) fd.set('skipFinalCrop', '1')
@@ -476,7 +478,8 @@ export default function ECommerceNewTechTab() {
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Mode ombre</div>
             <select value={shadowMode} onChange={e => setShadowMode(e.target.value as any)} style={inp}>
-              <option value="custom">Custom soft shadow ($0.003/img · recommandé)</option>
+              <option value="gemini">Gemini dans la scène ($0.003/img · recommandé)</option>
+              <option value="custom">Custom (ligne de sol + contact)</option>
               <option value="photoroom-soft">Photoroom AI soft ($0.02+/img)</option>
               <option value="photoroom-hard">Photoroom AI hard ($0.02+/img)</option>
             </select>
@@ -492,16 +495,27 @@ export default function ECommerceNewTechTab() {
           </div>
         </div>
         {/* ===== Réglages mode custom : sol + anti-liseré ===== */}
-        <div style={{ marginTop: 14, opacity: shadowMode === 'custom' ? 1 : 0.5,
+        <div style={{ marginTop: 14, opacity: (shadowMode === 'custom' || shadowMode === 'gemini') ? 1 : 0.5,
                       display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
-              Ligne du sol : <strong style={{ color: '#0D4A5C' }}>{horizonPct === 0 ? 'auto' : `${horizonPct}%`}</strong>
-              <span style={{ marginLeft: 6, fontSize: 10, color: '#9CA3AF' }}>(0 = détection auto · ex 85 pour BON_FOND_OFFICIEL)</span>
+          {shadowMode === 'gemini' ? (
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+                Seuil d'ombre : <strong style={{ color: '#0D4A5C' }}>{Math.round(shadowThreshold * 100)} %</strong>
+                <span style={{ marginLeft: 6, fontSize: 10, color: '#9CA3AF' }}>(monter si du bruit est pris, baisser si l'ombre est ratée)</span>
+              </div>
+              <input type="range" min={0.02} max={0.20} step={0.01} value={shadowThreshold}
+                     onChange={e => setShadowThreshold(parseFloat(e.target.value))} style={{ width: '100%' }} />
             </div>
-            <input type="range" min={0} max={95} step={1} value={horizonPct}
-                   onChange={e => setHorizonPct(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
-          </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+                Ligne du sol : <strong style={{ color: '#0D4A5C' }}>{horizonPct === 0 ? 'auto' : `${horizonPct}%`}</strong>
+                <span style={{ marginLeft: 6, fontSize: 10, color: '#9CA3AF' }}>(0 = détection auto · ex 85 pour BON_FOND_OFFICIEL)</span>
+              </div>
+              <input type="range" min={0} max={95} step={1} value={horizonPct}
+                     onChange={e => setHorizonPct(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
+            </div>
+          )}
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
               <strong style={{ color: '#0D4A5C' }}>Détourage — anti-liseré</strong>

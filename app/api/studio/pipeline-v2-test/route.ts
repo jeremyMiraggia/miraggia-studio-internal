@@ -16,6 +16,7 @@ import { put } from '@vercel/blob'
 import { fal } from '@fal-ai/client'
 import sharp from 'sharp'
 import { refineMatte } from '@/lib/matting'
+import { extractShadowRatio, applyRatio } from '@/lib/shadowExtract'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -52,6 +53,13 @@ export async function POST(request: Request) {
 
     const debug: any = { steps: {} }
 
+    // shadowMode : 'gemini' | 'custom' | 'photoroom-soft' | 'photoroom-hard'
+    //   gemini  → Gemini génère DANS la vraie scène ; on garde son placement et son ombre
+    //   custom  → Gemini sur fond uni ; placement par ligne de sol ; ombre de contact sharp
+    const shadowMode = (formData.get('shadowMode') as string | null) ?? 'custom'
+    debug.steps.shadowMode = shadowMode
+    const geminiInScene = shadowMode === 'gemini'
+
     // ============= ÉTAPE 1 — GEMINI (draft mannequin+tenue+pose) =============
     const sessionId = Date.now()
     // === Extraire la teinte dominante du fond user pour briefer Gemini ===
@@ -71,7 +79,21 @@ export async function POST(request: Request) {
       debug.steps.qualityAutoUpgrade = { from: quality, to: '4K', reason: `fond ${bgLongSide}px > 2K` }
     }
 
-    const intro = [
+    const intro = geminiInScene ? [
+      `[SESSION ${sessionId}]`,
+      'Generate a fashion e-commerce photograph of the model wearing the provided garments, PLACED INSIDE the exact scene shown as BACKGROUND REFERENCE below.',
+      '⚠ Output will be POST-PROCESSED : the model and her floor shadow will be cut out and composited back onto the ORIGINAL background pixels. So :',
+      '• Reproduce the BACKGROUND REFERENCE as faithfully as you can : same framing, same colors, same light direction, same floor line. Do not add or remove anything in the scene.',
+      '• The model must STAND ON THE FLOOR visible in the reference, feet clearly in contact with the ground, at a natural distance from the back wall.',
+      '• Produce a SOFT, SUBTLE CONTACT SHADOW under the feet, consistent with the scene lighting : a small pool of shadow directly beneath and slightly around the feet. No long cast shadow, no harsh shadow, no reflection.',
+      '• Lighting on the model must match the ambient of the reference (direction, softness, color temperature).',
+      '• Leave at least 8% empty space on left and right of the model, and never crop the feet or the top of the head.',
+      '',
+      'FABRIC : all fabrics MUST appear properly ironed and crisp, no wrinkles.',
+      '',
+      `Project prompt : ${userPrompt || '(none)'}`,
+      `FRAMING : ${describeFraming(framing)}`,
+    ].join('\n') : [
       `[SESSION ${sessionId}]`,
       'Generate a fashion editorial photograph of the model wearing the provided garments.',
       '⚠ Output will be POST-PROCESSED : the model will be cut out and placed on the EXACT background shown as REFERENCE below.',
@@ -95,7 +117,9 @@ export async function POST(request: Request) {
     const parts: any[] = [{ text: intro }]
 
     // ★ Image fond user passée en référence visuelle à Gemini
-    parts.push({ text: `BACKGROUND REFERENCE — match the color (${bgHex}) and ambient of this background. Generate the model on a similar uniform background.` })
+    parts.push({ text: geminiInScene
+      ? 'BACKGROUND REFERENCE — this is THE scene. Place the model inside it, standing on its floor, and reproduce it as faithfully as possible.'
+      : `BACKGROUND REFERENCE — match the color (${bgHex}) and ambient of this background. Generate the model on a similar uniform background.` })
     parts.push(await toInlinePart(background))
 
     // Note : le pré-stretch a été annulé car il déformait aussi la sortie finale.
@@ -113,11 +137,18 @@ export async function POST(request: Request) {
     }
 
     const imageSize = effectiveQuality === '4K' ? '4K' : effectiveQuality === '1K' ? '1K' : '2K'
+    // En mode gemini, le ratio demandé est celui du FOND (le plus proche supporté),
+    // pour que les coordonnées Gemini se reportent sur le fond sans déformation.
+    let geminiRatio = ratio
+    if (geminiInScene && bgMetaEarly.width && bgMetaEarly.height) {
+      geminiRatio = nearestGeminiRatio(bgMetaEarly.width / bgMetaEarly.height)
+      debug.steps.geminiRatio = { requested: ratio, used: geminiRatio, bg: `${bgMetaEarly.width}x${bgMetaEarly.height}` }
+    }
     const geminiBody = JSON.stringify({
       contents: [{ parts }],
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
-        imageConfig: { aspectRatio: ratio, imageSize },
+        imageConfig: { aspectRatio: geminiRatio, imageSize },
       },
       safetySettings: [
         { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_ONLY_HIGH' },
@@ -150,9 +181,7 @@ export async function POST(request: Request) {
     debug.steps.gemini = { mime: geminiMime, bytes: geminiBuf.length }
 
     // ============= ÉTAPE 2 — Choix de la méthode d'ombre =============
-    // shadowMode : 'photoroom-soft' (default) | 'photoroom-hard' | 'custom'
-    const shadowMode = (formData.get('shadowMode') as string | null) ?? 'photoroom-soft'
-    debug.steps.shadowMode = shadowMode
+    // (shadowMode lu en haut, avant le prompt)
 
     // ⚠ On ne crop PLUS le fond avant Photoroom. Le crop se fait sur l'image
     // finale (après composition Photoroom) selon le framing. Comme ça :
@@ -163,6 +192,113 @@ export async function POST(request: Request) {
     const bgBuf = Buffer.from(new Uint8Array(bgArrBuf))
     const bgMeta = await sharp(bgBuf).metadata()
     const bgW = bgMeta.width ?? 1024, bgH = bgMeta.height ?? 1536
+
+    // ============= MODE GEMINI — placement + ombre récupérés de Gemini =============
+    if (geminiInScene) {
+      // --- 1. Sortie Gemini mise à l'échelle EXACTE du fond (cover + centré) ---
+      // Le ratio demandé est le plus proche du fond : la différence résiduelle est
+      // absorbée par un léger crop centré. Sujet et ombre subissent la même transformée.
+      const geminiScaledPng = await sharp(geminiBuf)
+        .resize({ width: bgW, height: bgH, fit: 'cover', position: 'centre', kernel: 'lanczos3' })
+        .png().toBuffer()
+      const geminiMeta = await sharp(geminiBuf).metadata()
+      debug.steps.geminiScale = { from: `${geminiMeta.width}x${geminiMeta.height}`, to: `${bgW}x${bgH}` }
+
+      // --- 2. BiRefNet sur la sortie mise à l'échelle (mêmes coordonnées que le fond) ---
+      const gFile = new File([new Uint8Array(geminiScaledPng)], 'gemini.png', { type: 'image/png' })
+      const gUrl = await fal.storage.upload(gFile)
+      const rembg: any = await fal.subscribe('fal-ai/birefnet/v2', { input: { image_url: gUrl }, logs: false })
+      const rgbaUrl: string | undefined = rembg?.data?.image?.url ?? rembg?.image?.url
+      if (!rgbaUrl) return NextResponse.json({ error: 'BiRefNet sans image.' }, { status: 502 })
+      const rawMatteAb: ArrayBuffer = await fetch(rgbaUrl).then(r => r.arrayBuffer())
+      const rawMatte = Buffer.from(new Uint8Array(rawMatteAb))
+
+      const matteOpts = {
+        decontaminate: (formData.get('matteDecontaminate') ?? '1') !== '0',
+        erodePx:       parseFloatOr(formData.get('matteErode') as string | null, 1),
+        featherSigma:  parseFloatOr(formData.get('matteFeather') as string | null, 0.8),
+        minAlpha:      parseFloatOr(formData.get('matteMinAlpha') as string | null, 0.06),
+      }
+      let matte: Buffer = rawMatte
+      try {
+        const refined = await refineMatte(rawMatte, matteOpts)
+        matte = refined.png
+        debug.steps.matte = { ...refined.report, opts: matteOpts }
+      } catch (e: any) {
+        debug.steps.matte = { error: e?.message ?? String(e), fallback: 'birefnet raw' }
+      }
+      // Sécurité : le matte doit être aux dimensions du fond
+      const mMeta = await sharp(matte).metadata()
+      if (mMeta.width !== bgW || mMeta.height !== bgH) {
+        matte = await sharp(matte).resize({ width: bgW, height: bgH, fit: 'fill' }).png().toBuffer()
+        debug.steps.matteResized = { from: `${mMeta.width}x${mMeta.height}`, to: `${bgW}x${bgH}` }
+      }
+
+      // --- 3. Boîte du sujet (aux coordonnées finales) ---
+      const sbox = await findAlphaBoundingBox(matte, 20)
+      if (!sbox || sbox.width < 10) return NextResponse.json({ error: 'Sujet non détecté après détourage.', debug }, { status: 502 })
+      const touchesEdge = sbox.left <= 1 || sbox.top <= 1 || sbox.left + sbox.width >= bgW - 1
+      debug.steps.subjectBox = { ...sbox, touchesEdge, feetY: sbox.top + sbox.height, feetPct: +((sbox.top + sbox.height) / bgH).toFixed(3) }
+
+      // --- 4. Extraction de l'ombre Gemini → carte de ratio ---
+      const { data: alphaRaw } = await sharp(matte).ensureAlpha().extractChannel('alpha').raw().toBuffer({ resolveWithObject: true })
+      const alpha = new Uint8Array(alphaRaw)
+      const geminiRgb = await sharp(geminiScaledPng).removeAlpha().raw().toBuffer()
+      const bgRgb     = await sharp(bgBuf).toColourspace('srgb').removeAlpha().raw({ depth: 'uchar' }).toBuffer()
+      if (bgRgb.length !== bgW * bgH * 3) return NextResponse.json({ error: `Fond : buffer inattendu (${bgRgb.length} ≠ ${bgW}×${bgH}×3).`, debug }, { status: 500 })
+
+      const shadowOpts = {
+        threshold:    parseFloatOr(formData.get('shadowThreshold') as string | null, 0.06),
+        minRatio:     parseFloatOr(formData.get('shadowMinRatio')  as string | null, 0.35),
+      }
+      const { ratio, mask, report: shadowReport } = await extractShadowRatio(geminiRgb, bgRgb, alpha, bgW, bgH, sbox, shadowOpts)
+      debug.steps.shadowExtract = { ...shadowReport, opts: shadowOpts }
+
+      // --- 5. Composition : fond × ratio, puis sujet ---
+      let baseRgb = bgRgb
+      let shadowSource: 'gemini' | 'contact-fallback' | 'none' = 'none'
+      const composites: any[] = []
+      if (shadowReport.keptPixels > 0 && shadowReport.touchesSubject) {
+        baseRgb = applyRatio(bgRgb, ratio)
+        shadowSource = 'gemini'
+      } else {
+        // Fallback : ombre de contact sharp (Gemini n'a pas produit d'ombre exploitable)
+        try {
+          const sc = await buildContactShadow(matte, bgW, bgH, 0, 0, bgW, bgH)
+          if (sc.input) { composites.push({ input: sc.input, left: sc.left, top: sc.top, blend: 'over' }); shadowSource = 'contact-fallback' }
+        } catch (e: any) { debug.steps.shadowFallbackError = e?.message ?? String(e) }
+      }
+      debug.steps.shadowSource = shadowSource
+      composites.push({ input: matte, left: 0, top: 0, blend: 'over' })
+
+      const finalPng = await sharp(baseRgb, { raw: { width: bgW, height: bgH, channels: 3 } })
+        .composite(composites).png().toBuffer()
+
+      // --- 6. Uploads : final, ombre extraite (visualisation), cutout, brut Gemini ---
+      const up = async (buf: Buffer, label: string) => {
+        try {
+          const b = await put(`pipeline-v2-test/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${label}.png`, buf, {
+            access: 'public', contentType: 'image/png', cacheControlMaxAge: 60, token: process.env.BLOB_READ_WRITE_TOKEN,
+          })
+          return b.url
+        } catch { return undefined }
+      }
+      const imageUrl = (await up(finalPng, 'final')) ?? `data:image/png;base64,${finalPng.toString('base64')}`
+      // Visualisation de l'ombre extraite : masque en rouge sur le fond (réduit)
+      let shadowUrl: string | undefined
+      try {
+        const overlay = Buffer.alloc(bgW * bgH * 4)
+        for (let i = 0; i < bgW * bgH; i++) { overlay[i * 4] = 255; overlay[i * 4 + 3] = Math.round(mask[i] * 0.7) }
+        const vis = await sharp(bgBuf).removeAlpha()
+          .composite([{ input: await sharp(overlay, { raw: { width: bgW, height: bgH, channels: 4 } }).png().toBuffer(), blend: 'over' }])
+          .resize({ width: Math.min(1200, bgW) }).jpeg({ quality: 80 }).toBuffer()
+        shadowUrl = await up(vis, 'shadowvis')
+      } catch { /* ignore */ }
+      const cutoutUrl = await up(matte, 'cutout')
+      const geminiUrl = await up(geminiScaledPng, 'gemini')
+
+      return NextResponse.json({ imageUrl, compositeUrl: geminiUrl, cutoutUrl, shadowUrl, debug })
+    }
 
     // ============= MODE PHOTOROOM (recommandé) =============
     if (shadowMode === 'photoroom-soft' || shadowMode === 'photoroom-hard') {
@@ -571,6 +707,21 @@ async function extractDominantBackgroundColor(imgBuf: Buffer): Promise<{ r: numb
     g: Math.round(stats.channels[1].mean),
     b: Math.round(stats.channels[2].mean),
   }
+}
+
+/** Ratio Gemini supporté le plus proche d'un ratio w/h donné. */
+function nearestGeminiRatio(wh: number): string {
+  const supported: Array<[string, number]> = [
+    ['1:1', 1], ['2:3', 2 / 3], ['3:2', 3 / 2], ['3:4', 3 / 4], ['4:3', 4 / 3],
+    ['4:5', 4 / 5], ['5:4', 5 / 4], ['9:16', 9 / 16], ['16:9', 16 / 9], ['21:9', 21 / 9],
+  ]
+  let best = supported[0]
+  let bestD = Infinity
+  for (const s of supported) {
+    const d = Math.abs(Math.log(s[1] / wh))
+    if (d < bestD) { bestD = d; best = s }
+  }
+  return best[0]
 }
 
 function parseFloatOr(v: string | null, def: number): number {

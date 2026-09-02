@@ -17,6 +17,7 @@ type Result = {
   imageUrl?:    string
   compositeUrl?: string
   cutoutUrl?:   string
+  shadowUrl?:   string
   error?:       string
   debug?:       any
   icLightError?: string
@@ -34,7 +35,9 @@ export default function PipelineV2TestTab() {
   const [prompt, setPrompt]       = useState('')
   const [horizonPct, setHorizonPct] = useState(0)    // % de la hauteur du fond où est la ligne du sol (0 = auto)
   // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
-  const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('custom')
+  const [shadowMode, setShadowMode] = useState<'gemini' | 'photoroom-soft' | 'photoroom-hard' | 'custom'>('gemini')
+  // Mode gemini : seuil d'ombre (assombrissement minimal pour compter comme ombre)
+  const [shadowThreshold, setShadowThreshold] = useState(0.06)
   // Raffinement du matte (anti-liseré) — mode custom uniquement
   const [matteDecontaminate, setMatteDecontaminate] = useState(true)
   const [matteErode, setMatteErode]     = useState(1)
@@ -82,6 +85,7 @@ export default function PipelineV2TestTab() {
       fd.set('matteDecontaminate', matteDecontaminate ? '1' : '0')
       fd.set('matteErode', String(matteErode))
       fd.set('matteFeather', String(matteFeather))
+      fd.set('shadowThreshold', String(shadowThreshold))
 
       const resp = await fetch('/api/studio/pipeline-v2-test', { method: 'POST', body: fd })
       const json = await resp.json()
@@ -195,9 +199,10 @@ export default function PipelineV2TestTab() {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {[
-              { id: 'photoroom-soft', label: '✨ Photoroom AI soft (recommandé)', desc: 'Ombre subtile naturelle, qualité pro' },
-              { id: 'photoroom-hard', label: '🌑 Photoroom AI hard',              desc: 'Ombre plus marquée' },
-              { id: 'custom',         label: '⚙ Custom (BiRefNet + ellipse)',    desc: 'Ombre artisanale (test)' },
+              { id: 'gemini',         label: '🎯 Gemini dans la scène (nouveau)', desc: 'Gemini place le mannequin et fait l\'ombre ; on garde les deux, fond exact' },
+              { id: 'custom',         label: '⚙ Custom (ligne de sol + contact)', desc: 'Placement par ligne de sol, ombre de contact sharp' },
+              { id: 'photoroom-soft', label: '✨ Photoroom AI soft',               desc: 'Ombre AI, payant' },
+              { id: 'photoroom-hard', label: '🌑 Photoroom AI hard',               desc: 'Ombre plus marquée, payant' },
             ].map(m => (
               <label key={m.id} style={{
                 flex: 1, padding: 10, borderRadius: 8, cursor: 'pointer',
@@ -212,7 +217,19 @@ export default function PipelineV2TestTab() {
             ))}
           </div>
         </div>
-        <div style={{ marginTop: 16, opacity: shadowMode === 'custom' ? 1 : 0.5 }}>
+        {shadowMode === 'gemini' && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+              Seuil d'ombre : <strong style={{ color: '#0D4A5C' }}>{Math.round(shadowThreshold * 100)} %</strong>
+              <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
+                (assombrissement minimal Gemini vs fond pour compter comme ombre — monter si du bruit de fond est pris, baisser si l'ombre est ratée)
+              </span>
+            </div>
+            <input type="range" min={0.02} max={0.20} step={0.01} value={shadowThreshold}
+                   onChange={e => setShadowThreshold(parseFloat(e.target.value))} style={{ width: '100%' }} />
+          </div>
+        )}
+        <div style={{ marginTop: 16, opacity: shadowMode === 'custom' ? 1 : 0.5, display: shadowMode === 'gemini' ? 'none' : 'block' }}>
           <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
             Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct === 0 ? 'auto' : `${horizonPct}%`}</strong>
             <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
@@ -237,11 +254,11 @@ export default function PipelineV2TestTab() {
         </div>
 
         {/* ===== Raffinement du matte (anti-liseré) ===== */}
-        <div style={{ marginTop: 16, opacity: shadowMode === 'custom' ? 1 : 0.5 }}>
+        <div style={{ marginTop: 16, opacity: (shadowMode === 'custom' || shadowMode === 'gemini') ? 1 : 0.5 }}>
           <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>
             <strong style={{ color: '#0D4A5C' }}>Détourage — anti-liseré</strong>
             <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
-              (mode custom — décontamine les bords avec la couleur de fond Gemini mesurée, puis érode + adoucit)
+              (modes gemini / custom — décontamine les bords avec la couleur de fond Gemini mesurée, puis érode + adoucit)
             </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 12, alignItems: 'center' }}>
@@ -297,7 +314,15 @@ export default function PipelineV2TestTab() {
                 ? `✨ Photoroom ${result.debug.steps.photoroom.mode || ''} OK`
                 : result.debug.steps.photoroom?.error
                   ? `❌ Photoroom ÉCHEC : ${result.debug.steps.photoroom.error.slice(0, 100)}`
-                  : `⚙ Mode custom (BiRefNet + ombre sharp)`}
+                  : result.debug.steps.shadowMode === 'gemini'
+                    ? `🎯 Mode Gemini dans la scène · ombre : ${
+                        result.debug.steps.shadowSource === 'gemini' ? '✓ récupérée de Gemini'
+                        : result.debug.steps.shadowSource === 'contact-fallback' ? '⚠ fallback contact (Gemini n\'a pas produit d\'ombre exploitable)'
+                        : 'aucune'}${
+                        result.debug.steps.subjectBox ? ` · pieds à ${Math.round(result.debug.steps.subjectBox.feetPct * 100)} %` : ''}${
+                        result.debug.steps.subjectBox?.touchesEdge ? ' · ⚠ sujet touche le bord' : ''}${
+                        result.debug.steps.shadowExtract ? ` · ${result.debug.steps.shadowExtract.keptPixels.toLocaleString('fr-FR')} px d'ombre, assombrissement moyen ${Math.round(result.debug.steps.shadowExtract.meanDarkening * 100)} %, dérive globale ×${(result.debug.steps.shadowExtract.globalGain ?? 1).toFixed(2)}` : ''}`
+                    : `⚙ Mode custom (BiRefNet + ombre sharp)`}
               {result.debug.steps.qualityAutoUpgrade && (
                 <span style={{ marginLeft: 10 }}>· 🔼 Gemini passé en 4K ({result.debug.steps.qualityAutoUpgrade.reason})</span>
               )}
@@ -332,30 +357,42 @@ export default function PipelineV2TestTab() {
               </a>
             </details>
           )}
-          {(result.imageUrl || result.compositeUrl) && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              {result.compositeUrl && (
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', marginBottom: 4 }}>
-                    Étape 3 : Composite brut (avant IC-Light)
+          {result.imageUrl && (() => {
+            const isGemini = result.debug?.steps?.shadowMode === 'gemini'
+            const cols = isGemini ? (result.shadowUrl ? 3 : 2) : 1
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 }}>
+                {isGemini && result.compositeUrl && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', marginBottom: 4 }}>
+                      Brut Gemini (dans la scène)
+                    </div>
+                    <a href={result.compositeUrl} target="_blank" rel="noreferrer">
+                      <img src={result.compositeUrl} alt="gemini" style={{ width: '100%', borderRadius: 8 }} />
+                    </a>
                   </div>
-                  <a href={result.compositeUrl} target="_blank" rel="noreferrer">
-                    <img src={result.compositeUrl} alt="composite" style={{ width: '100%', borderRadius: 8 }} />
-                  </a>
-                </div>
-              )}
-              {result.imageUrl && (
+                )}
+                {isGemini && result.shadowUrl && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', marginBottom: 4 }}>
+                      Ombre extraite (en rouge)
+                    </div>
+                    <a href={result.shadowUrl} target="_blank" rel="noreferrer">
+                      <img src={result.shadowUrl} alt="ombre" style={{ width: '100%', borderRadius: 8 }} />
+                    </a>
+                  </div>
+                )}
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#10B981', marginBottom: 4 }}>
-                    Étape 4 : Final (après IC-Light) ⭐
+                    Final ⭐ {isGemini ? '(fond exact + sujet + ombre Gemini)' : ''}
                   </div>
                   <a href={result.imageUrl} target="_blank" rel="noreferrer">
-                    <img src={result.imageUrl} alt="final" style={{ width: '100%', borderRadius: 8 }} />
+                    <img src={result.imageUrl} alt="final" style={{ width: '100%', borderRadius: 8, maxWidth: cols === 1 ? 520 : undefined }} />
                   </a>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )
+          })()}
           {result.debug && (
             <details style={{ marginTop: 12 }}>
               <summary style={{ fontSize: 12, color: '#6B7280', cursor: 'pointer' }}>Debug</summary>
