@@ -249,6 +249,46 @@ export const MOUTHS: FaceOption[] = [
   { id: 'pincees',     label: 'Lèvres pincées',     prompt: 'lips lightly pressed together' },
 ]
 
+/* ============================== STYLE PHOTO ============================== */
+
+export const PHOTO_STYLES: FaceOption[] = [
+  {
+    id: 'mannequin',
+    label: 'Portrait mannequin (recommandé)',
+    prompt: [
+      'STYLE : professional model portrait — beautiful, flattering, magazine-quality.',
+      '• LIGHTING : soft beauty lighting (large softbox slightly above and in front, subtle fill below — clamshell setup). Gentle butterfly shadow under the nose. Soft modelling on the cheekbones that sculpts the face without harshness. Skin luminous but not oily.',
+      '• CATCHLIGHTS : clear bright catchlights in both eyes — this is essential, it gives life and depth to the gaze. Without catchlights the portrait looks dead.',
+      '• SKIN : healthy, well-cared-for skin. Natural texture preserved (pores visible) but even tone, no blemishes, no redness.',
+      '• GROOMING : hair clean, healthy and deliberately styled (even if the style is "undone"). Eyebrows groomed. Overall impression : a person who takes care of themselves.',
+      '• RENDERING : shot on a medium-format camera with an 85mm or 105mm portrait lens at f/2.8. Beautiful shallow depth of field, tack-sharp on the eyes, creamy falloff. Editorial magazine quality.',
+    ].join('\n'),
+  },
+  {
+    id: 'digitals',
+    label: 'Digitals bruts (casting agence)',
+    prompt: [
+      'STYLE : raw agency digitals / polaroids — deliberately unretouched and honest.',
+      '• LIGHTING : flat even frontal light, no dramatic shadows. The point is to show the face as it really is.',
+      '• SKIN : completely natural, visible pores, real texture, no retouching whatsoever. Minor imperfections are welcome and expected.',
+      '• GROOMING : NO makeup at all. Hair natural, not styled, exactly as it falls.',
+      '• RENDERING : straightforward documentary sharpness, no artistic depth of field. This is a record, not a beauty shot.',
+    ].join('\n'),
+  },
+  {
+    id: 'editorial',
+    label: 'Beauté éditoriale (lumière sculptée)',
+    prompt: [
+      'STYLE : high-fashion beauty editorial — dramatic and sculptural.',
+      '• LIGHTING : directional sculpted lighting that carves the bone structure. Strong but controlled contrast, deep defined shadows under the cheekbones and jaw, luminous highlights on the high points of the face.',
+      '• CATCHLIGHTS : distinct catchlights in both eyes, intense and precise.',
+      '• SKIN : flawless luminous skin with a subtle sheen on the high points, matte in the hollows. Texture still visible up close.',
+      '• GROOMING : editorial-level grooming. Hair sculpted or deliberately artistic. Skin prepped like a Vogue beauty shoot.',
+      '• RENDERING : shot on medium format, 105mm at f/4, razor-sharp detail on skin and eyes. Think Vogue / Numéro / i-D beauty page.',
+    ].join('\n'),
+  },
+]
+
 /* ============================== CORPS ============================== */
 
 export const BODY_TYPES: FaceOption[] = [
@@ -331,6 +371,7 @@ export type FaceSelection = {
   asymmetry:    string
   gaze:         string
   mouth:        string
+  photoStyle:   string        // rendu photo (mannequin / digitals / éditorial)
   // ===== Corps =====
   bodyType:     string
   headRatio:    string
@@ -362,9 +403,12 @@ export function buildFacePrompt(sel: FaceSelection): string {
   const distinct = pMulti(DISTINCTIVE_FEATURES, sel.distinctive)
 
   const lines: string[] = [
-    'PROFESSIONAL MODEL CASTING PHOTOGRAPH — FRONT VIEW (polaroid / digitals style).',
+    sel.photoStyle === 'digitals'
+      ? 'PROFESSIONAL MODEL CASTING PHOTOGRAPH — FRONT VIEW (raw agency digitals / polaroid style).'
+      : 'PROFESSIONAL FASHION MODEL PORTRAIT — FRONT VIEW, agency book quality.',
     '',
-    'Create a photorealistic head-and-shoulders portrait of a fashion model for a casting book.',
+    'Create a photorealistic head-and-shoulders portrait of a SIGNED PROFESSIONAL FASHION MODEL for their agency book.',
+    'This person is genuinely striking — the kind of face an agency signs. Not an average person photographed against a wall.',
     '',
     '=== SUBJECT ===',
     `• ${p(GENDERS, sel.gender)}, ${p(AGE_RANGES, sel.ageRange)}.`,
@@ -399,13 +443,24 @@ export function buildFacePrompt(sel: FaceSelection): string {
     `• Mouth : ${p(MOUTHS, sel.mouth)}.`,
     '',
     sel.extraNotes ? `=== ADDITIONAL NOTES ===\n${sel.extraNotes}\n` : '',
+    '=== MODEL PRESENCE (what separates a model from a random person) ===',
+    'This person is a WORKING PROFESSIONAL FASHION MODEL. It must be immediately readable in the image :',
+    '• POSTURE OF THE HEAD & NECK : long extended neck, chin slightly pushed forward and very slightly down (the classic model trick that defines the jawline and eliminates any softness under the chin). Head perfectly balanced on the spine.',
+    '• SHOULDERS : relaxed and DOWN, never hunched or lifted toward the ears. Collarbones visible and elegant.',
+    '• JAW : subtly engaged, giving a clean defined jawline without looking tense.',
+    '• GAZE : controlled and intentional. A model knows exactly where the camera is. The eyes are ALIVE — never vacant, never glassy. There is presence and self-possession behind the look.',
+    '• EXPRESSION : composed and effortless. No forced smile, no strained muscles, no awkwardness. The face is relaxed but switched on.',
+    '• OVERALL IMPRESSION : poise, confidence, quiet authority. This is someone comfortable in front of a lens, who has done this hundreds of times. Even in a simple portrait, they have PRESENCE — the kind of face that holds your attention.',
+    '',
+    `=== PHOTOGRAPHIC STYLE ===`,
+    p(PHOTO_STYLES, sel.photoStyle) || p(PHOTO_STYLES, 'mannequin'),
+    '',
     '=== TECHNICAL / SHOOTING SPEC (non-negotiable) ===',
     '• FRAMING : head and shoulders, centered, face fully visible. Top of head with 5-8% headroom. Crop at upper chest.',
     '• ANGLE : straight-on FRONT view, eyes level with the camera, face directly facing the lens (no tilt, no 3/4).',
     '• BACKGROUND : pure clean WHITE seamless studio backdrop (#FFFFFF), completely uniform, no gradient, no shadow on the wall, no props.',
-    '• LIGHTING : soft even frontal studio lighting (large softbox), no harsh shadows on the face, natural skin rendering.',
-    '• STYLING : NO makeup or minimal natural makeup only. Hair natural, not styled for a shoot. Plain neutral top (white or grey t-shirt / tank top), no logo, no jewelry beyond the specified piercings.',
-    '• RENDERING : photorealistic, ultra sharp, high detail on skin texture and eyes. This must look like a REAL casting polaroid, not a glossy retouched ad.',
+    '• WARDROBE : plain neutral top (white or grey t-shirt / tank top), no logo, no jewelry beyond the specified piercings. The clothing must never distract from the face.',
+    '• RENDERING : photorealistic. Skin must look like REAL SKIN — with pores, fine texture and natural variation. Absolutely no plastic, waxy, airbrushed or CGI-doll look. Eyes tack-sharp with visible iris detail.',
     '• The model is a SYNTHETIC AI-generated person, not a real identifiable individual.',
   ]
 
@@ -416,9 +471,12 @@ export function buildFacePrompt(sel: FaceSelection): string {
  * Prompt pour la vue de PROFIL, envoyé AVEC l'image de face générée en référence
  * pour garantir la cohérence d'identité.
  */
-export function buildProfilePrompt(): string {
+export function buildProfilePrompt(sel?: FaceSelection): string {
+  const raw = sel?.photoStyle === 'digitals'
   return [
-    'PROFESSIONAL MODEL CASTING PHOTOGRAPH — SIDE PROFILE VIEW (same model, same session).',
+    raw
+      ? 'PROFESSIONAL MODEL CASTING PHOTOGRAPH — SIDE PROFILE VIEW (same model, same session).'
+      : 'PROFESSIONAL FASHION MODEL PORTRAIT — SIDE PROFILE VIEW (same model, same session, same lighting setup).',
     '',
     '⚠ The attached image is the FRONT VIEW of this exact model, shot moments ago in the same casting session.',
     'Produce the SIDE PROFILE (90° left profile) of THE SAME PERSON.',
@@ -434,9 +492,13 @@ export function buildProfilePrompt(): string {
     '',
     '=== TECHNICAL (identical to the front shot) ===',
     '• BACKGROUND : the exact same pure white seamless studio backdrop (#FFFFFF), uniform, no gradient.',
-    '• LIGHTING : the exact same soft even studio lighting, same intensity and color temperature.',
-    '• EXPRESSION : neutral relaxed, mouth closed, calm — standard casting profile shot.',
-    '• RENDERING : photorealistic, ultra sharp, same skin texture rendering as the front view.',
+    raw
+      ? '• LIGHTING : the exact same flat even studio lighting, same intensity and color temperature.'
+      : '• LIGHTING : the exact same beautiful soft studio lighting, same intensity and color temperature. Keep a clear catchlight in the visible eye and gentle modelling along the cheekbone and jawline — the profile must be as flattering as the front view.',
+    '• EXPRESSION : neutral relaxed, mouth closed, calm. Long extended neck, chin slightly forward, shoulders down — the composed carriage of a professional model.',
+    raw
+      ? '• RENDERING : photorealistic, ultra sharp, same skin texture rendering as the front view.'
+      : '• RENDERING : photorealistic, ultra sharp on the eye and skin, same real skin texture as the front view. No plastic or waxy look.',
     '',
     'Output : one side-profile casting photograph, same person, same session, same setup.',
   ].join('\n')
@@ -449,7 +511,9 @@ export function buildProfilePrompt(): string {
 export function buildFullBodyPrompt(sel: FaceSelection): string {
   const isFemale = sel.gender === 'femme'
   return [
-    'PROFESSIONAL MODEL CASTING PHOTOGRAPH — FULL BODY VIEW (digitals / polaroid style).',
+    sel.photoStyle === 'digitals'
+      ? 'PROFESSIONAL MODEL CASTING PHOTOGRAPH — FULL BODY VIEW (raw agency digitals / polaroid style).'
+      : 'PROFESSIONAL FASHION MODEL PHOTOGRAPH — FULL BODY VIEW, agency book quality.',
     '',
     '⚠ The attached image is the FRONT PORTRAIT of this exact model, shot moments ago in the same casting session.',
     'Produce the FULL BODY standing shot of THE SAME PERSON.',
@@ -468,14 +532,24 @@ export function buildFullBodyPrompt(sel: FaceSelection): string {
     isFemale ? `• Bust : ${p(CHEST_SIZES, sel.chestSize)}.` : '',
     `• Posture : ${p(POSTURES, sel.posture)}.`,
     '',
+    '=== MODEL PRESENCE (this is a working professional, not a random person) ===',
+    '• STANCE : the confident, effortless stance of a signed fashion model. Weight settled naturally, spine long, ribcage lifted, shoulders relaxed and DOWN (never hunched toward the ears).',
+    '• NECK & HEAD : long extended neck, chin slightly forward and very slightly down. Head balanced, never jutting forward.',
+    '• ARMS & HANDS : arms relaxed along the body, hands soft and unclenched, fingers naturally separated — never stiff, never fists, never awkwardly flat against the thighs.',
+    '• GAZE : direct, calm and self-possessed. The model knows exactly where the camera is. Eyes alive, never vacant.',
+    '• ATTITUDE : composed, elegant, quietly confident. Someone who has stood in front of a camera hundreds of times and is completely at ease. Poise, not posing.',
+    '',
     '=== FRAMING / TECHNICAL (identical setup to the portrait) ===',
     '• FRAMING : FULL BODY, head to feet, entire silhouette visible. 4-6% margin above the head and below the feet. The model fills the frame vertically.',
     '• ANGLE : straight-on front view, camera at waist height with a very slight low angle (this optically lengthens the legs, standard casting practice).',
     '• BACKGROUND : the exact same pure white seamless studio backdrop (#FFFFFF), uniform, no gradient, no props.',
-    '• LIGHTING : the exact same soft even studio lighting as the portrait.',
+    sel.photoStyle === 'digitals'
+      ? '• LIGHTING : the exact same flat even studio lighting as the portrait.'
+      : '• LIGHTING : the exact same beautiful soft studio lighting as the portrait — a large key light that wraps the body and gently defines its lines, subtle fill to keep the shadows open, a soft grounded contact shadow at the feet so the model does not float. Skin luminous, never flat.',
     '• STYLING : plain fitted neutral basics that reveal the body line — a simple white or grey tank top / t-shirt and plain shorts or briefs (standard casting digitals outfit). Barefoot. No logos, no accessories beyond the specified piercings.',
-    '• EXPRESSION : neutral relaxed, looking straight at the camera.',
-    '• RENDERING : photorealistic, sharp, natural skin texture. Real casting digitals look, not a retouched ad.',
+    sel.photoStyle === 'digitals'
+      ? '• RENDERING : photorealistic, sharp, natural skin texture. Real casting digitals look, not a retouched ad.'
+      : '• RENDERING : photorealistic, shot on medium format, 50-85mm at f/4, sharp throughout. Real skin with real texture and pores — absolutely no plastic, waxy or CGI look. Editorial quality.',
     '',
     '⚠ SELF-CHECK before output : count the heads from top of skull to feet. You must find the number specified above. If you find 7-8 when 9.5 was requested, the legs are too short and the head too big — redo with a smaller head and longer legs.',
   ].filter(l => l !== '').join('\n')
@@ -529,6 +603,7 @@ export function randomSelection(): FaceSelection {
     posture:       pick(POSTURES).id,
     hands:         pick(HANDS).id,
     chestSize:     isMale ? 'moyenne' : pick(CHEST_SIZES).id,
+    photoStyle:    'mannequin',
     extraNotes:    '',
   }
 }
@@ -546,6 +621,7 @@ export function defaultSelection(): FaceSelection {
     bodyType: 'mince', headRatio: '9.5', shoulders: 'moyennes',
     musculature: 'tonique', legLength: 'tres-longues', posture: 'droite',
     hands: 'fines-longues', chestSize: 'moyenne',
+    photoStyle: 'mannequin',
     extraNotes: '',
   }
 }
@@ -740,10 +816,11 @@ export function mergeAnalysis(
     legLength:     current.legLength,
     posture:       current.posture,
     hands:         current.hands,
+    photoStyle:    current.photoStyle,
     extraNotes:    current.extraNotes,
   }
 
-  report.skipped = ['Proportions (têtes)', 'Longueur de jambes', 'Posture', 'Mains']
+  report.skipped = ['Proportions (têtes)', 'Longueur de jambes', 'Posture', 'Mains', 'Style photo']
 
   return { selection, report }
 }

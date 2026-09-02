@@ -14,6 +14,7 @@ import {
   SKIN_FINISHES, DISTINCTIVE_FEATURES, TATTOOS, PIERCINGS, ASYMMETRIES,
   GAZES, MOUTHS,
   BODY_TYPES, HEAD_RATIOS, SHOULDERS, MUSCULATURES, LEG_LENGTHS, POSTURES, HANDS, CHEST_SIZES,
+  PHOTO_STYLES,
   buildFacePrompt, buildProfilePrompt, buildFullBodyPrompt,
   buildAnalysisPrompt, mergeAnalysis,
   randomSelection, defaultSelection,
@@ -128,7 +129,7 @@ export default function VisageTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           facePrompt,
-          profilePrompt:  buildProfilePrompt(),
+          profilePrompt:  buildProfilePrompt(sel),
           fullBodyPrompt: buildFullBodyPrompt(sel),
           ratio, quality,
           withProfile:  outputMode === 'face-profil' || outputMode === 'face-profil-body',
@@ -155,7 +156,8 @@ export default function VisageTab() {
     }
   }
 
-  const randomize = () => setSel(randomSelection())
+  // L'aléatoire ne touche pas au style photo : c'est un choix de rendu, pas un critère du mannequin
+  const randomize = () => setSel({ ...randomSelection(), photoStyle: sel.photoStyle })
   const reset     = () => setSel(defaultSelection())
 
   /* ----------- Download ----------- */
@@ -510,6 +512,20 @@ export default function VisageTab() {
               <option value="face-body">Face + Plein-pied (~50s · ~$0.08)</option>
               <option value="face-profil-body">Face + Profil + Plein-pied (~75s · ~$0.12)</option>
             </select>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={fieldLabel}>Style photo / lumière</div>
+          <select value={sel.photoStyle} onChange={e => setSel({ ...sel, photoStyle: e.target.value })} style={inp}>
+            {PHOTO_STYLES.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+          <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 5, lineHeight: 1.5 }}>
+            {sel.photoStyle === 'digitals'
+              ? 'Lumière plate, zéro maquillage, peau brute — comme de vraies polaroids d\'agence. Honnête mais peu flatteur.'
+              : sel.photoStyle === 'editorial'
+              ? 'Lumière directionnelle qui sculpte les os du visage, contraste marqué, peau lumineuse. Très travaillé.'
+              : 'Lumière beauté douce (clamshell), catchlights dans les yeux, peau saine et texturée. Attitude et prestance de mannequin pro.'}
           </div>
         </div>
 
