@@ -37,6 +37,7 @@ export type MatteReport = {
   decontaminatedPixels: number
   erodePx: number
   featherSigma: number
+  featherChannels: number
   width: number
   height: number
 }
@@ -51,9 +52,12 @@ export async function refineMatte(rgbaPng: Buffer, opts: MatteOptions = {}): Pro
   const featherSigma  = Math.max(0, opts.featherSigma ?? 0.8)
   const minAlpha      = Math.max(0, Math.min(0.5, opts.minAlpha ?? 0.06))
 
-  const { data, info } = await sharp(rgbaPng).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+  const { data, info } = await sharp(rgbaPng)
+    .toColourspace('srgb').ensureAlpha()
+    .raw({ depth: 'uchar' }).toBuffer({ resolveWithObject: true })
   const w = info.width, h = info.height
   if (info.channels !== 4) throw new Error(`refineMatte: expected 4 channels, got ${info.channels}`)
+  if (data.length !== w * h * 4) throw new Error(`refineMatte: buffer ${data.length} ≠ ${w}×${h}×4 (profondeur ≠ 8 bits ?)`)
 
   const N = w * h
   const alpha = new Uint8Array(N)
@@ -109,11 +113,25 @@ export async function refineMatte(rgbaPng: Buffer, opts: MatteOptions = {}): Pro
   if (erodePx > 0) alphaOut = erodeAlpha(alpha, w, h, erodePx)
 
   // ---------- 4. Feather (flou gaussien sur l'alpha seul) ----------
+  let featherChannels = 1
   if (featherSigma > 0) {
-    const blurred = await sharp(Buffer.from(alphaOut), { raw: { width: w, height: h, channels: 1 } })
+    // ⚠ sharp ne garantit PAS 1 canal en sortie d'une image raw 1 canal
+    // (il peut renvoyer gris+alpha ou RGB). On lit info.channels et on
+    // ré-échantillonne avec le bon stride — sinon l'alpha est lu décalé
+    // (silhouette étirée ×2, rectangle semi-opaque, sujet translucide).
+    const { data: bl, info: bi } = await sharp(Buffer.from(alphaOut), { raw: { width: w, height: h, channels: 1 } })
       .blur(featherSigma)
-      .raw().toBuffer()
-    alphaOut = new Uint8Array(blurred)
+      .raw().toBuffer({ resolveWithObject: true })
+    featherChannels = bi.channels
+    if (bi.width !== w || bi.height !== h) throw new Error(`feather: dimensions inattendues ${bi.width}x${bi.height}`)
+    if (bi.channels === 1) {
+      alphaOut = new Uint8Array(bl)
+    } else {
+      const stride = bi.channels
+      const a = new Uint8Array(N)
+      for (let i = 0; i < N; i++) a[i] = bl[i * stride]
+      alphaOut = a
+    }
   }
 
   // ---------- Réassemblage ----------
@@ -125,7 +143,7 @@ export async function refineMatte(rgbaPng: Buffer, opts: MatteOptions = {}): Pro
     report: {
       bgEstimated: { ...bg, samples },
       decontaminatedPixels: decontaminated,
-      erodePx, featherSigma, width: w, height: h,
+      erodePx, featherSigma, featherChannels, width: w, height: h,
     },
   }
 }
