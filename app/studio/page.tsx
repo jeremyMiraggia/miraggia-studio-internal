@@ -17,9 +17,11 @@ import PipelineV2TestTab from '@/components/tabs/PipelineV2TestTab'
 import ECommerceNewTechTab from '@/components/tabs/ECommerceNewTechTab'
 import GhostFSTab from '@/components/tabs/GhostFSTab'
 import NatureMorteTab from '@/components/tabs/NatureMorteTab'
+import VisageTab from '@/components/tabs/VisageTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
+  { id: 'visage',          label: '🎭 Visage' },
   { id: 'notion',          label: '📥 Notion' },
   { id: 'notion-internal', label: '📥 Notion Internal' },
   { id: 'composite',       label: '🎯 Composite (Gemini)' },
@@ -65,6 +67,7 @@ export default function StudioPage() {
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         {tab === 'simple'          && <SimpleTab />}
+        {tab === 'visage'          && <VisageTab />}
         {tab === 'notion'          && <NotionTab />}
         {tab === 'notion-internal' && <NotionInternalTab />}
         {tab === 'composite'       && <CompositeTab />}
