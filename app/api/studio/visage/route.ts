@@ -23,8 +23,10 @@ export async function POST(request: Request) {
     const fullBodyPrompt: string  = body.fullBodyPrompt ?? ''
     const ratio:          string  = body.ratio          ?? '3:4'
     const quality:        string  = body.quality        ?? '2K'
+    // Nouveau : flags indépendants. `onlyFace` (legacy) force les deux à false.
     const onlyFace:       boolean = body.onlyFace === true
-    const withFullBody:   boolean = body.withFullBody === true
+    const withProfile:    boolean = onlyFace ? false : (body.withProfile !== false)
+    const withFullBody:   boolean = onlyFace ? false : (body.withFullBody === true)
 
     if (!facePrompt) return NextResponse.json({ error: 'facePrompt requis.' }, { status: 400 })
 
@@ -92,26 +94,29 @@ export async function POST(request: Request) {
     const faceUrl = await uploadBlob(faceBuf, 'face')
     debug.face = { bytes: faceBuf.length }
 
-    if (onlyFace) {
+    // Face seule demandée → on s'arrête là
+    if (!withProfile && !withFullBody) {
       return NextResponse.json({ faceUrl, profileUrl: null, fullBodyUrl: null, debug })
     }
 
-    // ============= ÉTAPE 2 — PROFIL (avec la face en référence) =============
+    // ============= ÉTAPE 2 — PROFIL (optionnel, avec la face en référence) =============
     let profileUrl: string | null = null
     let profileError: string | undefined
-    try {
-      const profileParts = [
-        { text: `[SESSION ${sessionId}]\n${profilePrompt || 'Generate the side profile of this exact model, same session, same lighting, same white background.'}` },
-        { inlineData: { mimeType: faceRes.mime, data: faceRes.b64 } },
-        { text: '⚠ FINAL REMINDER : the image above is the FRONT view of the model. Produce the strict 90° SIDE PROFILE of THE SAME PERSON — identical skin, hair, features, piercings, top, background and lighting. Same framing scale.' },
-      ]
-      const profRes = await callGemini(profileParts)
-      const profBuf = Buffer.from(profRes.b64, 'base64')
-      profileUrl = await uploadBlob(profBuf, 'profile')
-      debug.profile = { bytes: profBuf.length }
-    } catch (e: any) {
-      profileError = e?.message ?? String(e)
-      debug.profile = { error: profileError }
+    if (withProfile) {
+      try {
+        const profileParts = [
+          { text: `[SESSION ${sessionId}]\n${profilePrompt || 'Generate the side profile of this exact model, same session, same lighting, same white background.'}` },
+          { inlineData: { mimeType: faceRes.mime, data: faceRes.b64 } },
+          { text: '⚠ FINAL REMINDER : the image above is the FRONT view of the model. Produce the strict 90° SIDE PROFILE of THE SAME PERSON — identical skin, hair, features, piercings, top, background and lighting. Same framing scale.' },
+        ]
+        const profRes = await callGemini(profileParts)
+        const profBuf = Buffer.from(profRes.b64, 'base64')
+        profileUrl = await uploadBlob(profBuf, 'profile')
+        debug.profile = { bytes: profBuf.length }
+      } catch (e: any) {
+        profileError = e?.message ?? String(e)
+        debug.profile = { error: profileError }
+      }
     }
 
     // ============= ÉTAPE 3 — PLEIN-PIED (optionnel, face en référence) =============

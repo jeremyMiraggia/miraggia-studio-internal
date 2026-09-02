@@ -34,8 +34,9 @@ export default function VisageTab() {
   const [sel, setSel] = useState<FaceSelection>(defaultSelection())
   const [ratio, setRatio]     = useState('3:4')
   const [quality, setQuality] = useState('2K')
-  const [onlyFace, setOnlyFace] = useState(false)
-  const [withFullBody, setWithFullBody] = useState(true)
+  // Mode de sortie : quelles vues générer
+  type OutputMode = 'face' | 'face-profil' | 'face-body' | 'face-profil-body'
+  const [outputMode, setOutputMode] = useState<OutputMode>('face-profil-body')
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState('')
   const [error, setError]     = useState<string | null>(null)
@@ -129,8 +130,9 @@ export default function VisageTab() {
           facePrompt,
           profilePrompt:  buildProfilePrompt(),
           fullBodyPrompt: buildFullBodyPrompt(sel),
-          ratio, quality, onlyFace,
-          withFullBody: withFullBody && !onlyFace,
+          ratio, quality,
+          withProfile:  outputMode === 'face-profil' || outputMode === 'face-profil-body',
+          withFullBody: outputMode === 'face-body'   || outputMode === 'face-profil-body',
         }),
       })
       const json = await resp.json()
@@ -500,18 +502,14 @@ export default function VisageTab() {
               <option value="4K">4K (max)</option>
             </select>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 6 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-              <input type="checkbox" checked={onlyFace} onChange={e => setOnlyFace(e.target.checked)} />
-              Face uniquement
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-                            color: onlyFace ? '#9CA3AF' : '#374151',
-                            cursor: onlyFace ? 'not-allowed' : 'pointer' }}>
-              <input type="checkbox" checked={withFullBody && !onlyFace} disabled={onlyFace}
-                     onChange={e => setWithFullBody(e.target.checked)} />
-              + vue plein-pied
-            </label>
+          <div>
+            <div style={fieldLabel}>Vues à générer</div>
+            <select value={outputMode} onChange={e => setOutputMode(e.target.value as OutputMode)} style={inp}>
+              <option value="face">Face seule (~25s · ~$0.04)</option>
+              <option value="face-profil">Face + Profil (~50s · ~$0.08)</option>
+              <option value="face-body">Face + Plein-pied (~50s · ~$0.08)</option>
+              <option value="face-profil-body">Face + Profil + Plein-pied (~75s · ~$0.12)</option>
+            </select>
           </div>
         </div>
 
@@ -559,14 +557,18 @@ export default function VisageTab() {
                     <span style={{ fontSize: 11, color: '#6B7280' }}>{gLabel} · {aLabel} · {tLabel}</span>
                     {r.error && <span style={{ fontSize: 10, color: '#EF4444' }}>⚠ profil : {r.error.slice(0, 60)}</span>}
                   </div>
-                  <div style={{ display: 'grid',
-                                gridTemplateColumns: r.fullBodyUrl ? '1fr 1fr 1fr' : '1fr 1fr',
-                                gap: 10, maxWidth: r.fullBodyUrl ? 880 : 620 }}>
-                    {[
+                  {(() => {
+                    const views = [
                       { url: r.faceUrl,     title: 'Face',       file: `mannequin_${num}_face.jpg` },
-                      { url: r.profileUrl,  title: 'Profil',     file: `mannequin_${num}_profil.jpg` },
+                      ...(r.profileUrl  ? [{ url: r.profileUrl,  title: 'Profil',     file: `mannequin_${num}_profil.jpg` }] : []),
                       ...(r.fullBodyUrl ? [{ url: r.fullBodyUrl, title: 'Plein-pied', file: `mannequin_${num}_plein-pied.jpg` }] : []),
-                    ].map((v, vi) => (
+                    ]
+                    const cols = views.length
+                    return (
+                  <div style={{ display: 'grid',
+                                gridTemplateColumns: `repeat(${cols}, 1fr)`,
+                                gap: 10, maxWidth: cols === 1 ? 300 : cols === 2 ? 620 : 880 }}>
+                    {views.map((v, vi) => (
                       <div key={vi}>
                         <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, fontWeight: 600 }}>{v.title}</div>
                         <div style={{ aspectRatio: v.title === 'Plein-pied' ? '9/16' : '3/4',
@@ -589,6 +591,8 @@ export default function VisageTab() {
                       </div>
                     ))}
                   </div>
+                    )
+                  })()}
                   <details style={{ marginTop: 8 }}>
                     <summary style={{ fontSize: 11, color: '#6B7280', cursor: 'pointer' }}>Fiche technique</summary>
                     <pre style={{ fontSize: 9, background: '#F9FAFB', padding: 8, borderRadius: 6,
