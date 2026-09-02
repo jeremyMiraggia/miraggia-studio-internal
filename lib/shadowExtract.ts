@@ -107,13 +107,35 @@ export async function extractShadowRatio(
 
   const cand = new Uint8Array(bw * bh)
   const rBand = new Float32Array(bw * bh).fill(1)
-  let candidatePixels = 0
+  const measured = new Uint8Array(bw * bh)
   for (let i = 0; i < bw * bh; i++) {
     const v = rawR[i]
     if (Number.isNaN(v)) continue
-    const r = Math.min(1, v / gainSafe)
-    rBand[i] = r
-    if (r < 1 - threshold) { cand[i] = 1; candidatePixels++ }
+    rBand[i] = Math.min(1, v / gainSafe)
+    measured[i] = 1
+  }
+
+  // ---------- 2b. Propagation SOUS le bord du sujet ----------
+  // Les pixels du bord adouci (alpha 10..250) et le sujet lui-même n'ont pas de
+  // mesure. Sans ça, le sol sous le bord reste clair alors qu'il est ombré
+  // tout autour → anneau clair autour des pieds. On remplit par convolution
+  // normalisée des ratios mesurés voisins.
+  {
+    const fillSigma = Math.max(4, Math.round(subject.width * 0.012))
+    const wR = new Uint8Array(bw * bh), wW = new Uint8Array(bw * bh)
+    for (let i = 0; i < bw * bh; i++) if (measured[i]) { wR[i] = Math.round(rBand[i] * 255); wW[i] = 255 }
+    const bR = await blur8(wR, bw, bh, fillSigma)
+    const bW = await blur8(wW, bw, bh, fillSigma)
+    for (let i = 0; i < bw * bh; i++) {
+      if (measured[i]) continue
+      if (bW[i] < 4) continue                     // trop loin du fond : reste 1 (couvert par le sujet)
+      rBand[i] = Math.min(1, (bR[i] / bW[i]))
+    }
+  }
+
+  let candidatePixels = 0
+  for (let i = 0; i < bw * bh; i++) {
+    if (rBand[i] < 1 - threshold) { cand[i] = 1; candidatePixels++ }
   }
 
   // ---------- 3. Nettoyage : ouverture puis composantes connexes touchant le sujet ----------
