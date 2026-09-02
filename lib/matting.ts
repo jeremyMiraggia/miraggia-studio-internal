@@ -1,0 +1,189 @@
+/**
+ * matting.ts — raffinement d'un matte RGBA (sortie BiRefNet) avant paste-back.
+ *
+ * Problème traité : le « fil » / liseré autour du sujet après compositing.
+ * Sur les pixels de bord semi-transparents (cheveux, contours), BiRefNet donne
+ * un alpha correct mais la couleur RGB reste le MÉLANGE sujet + fond d'origine
+ * (C = α·F + (1−α)·B). Recollé sur un autre fond, ce mélange forme un liseré.
+ *
+ * Solution (matting classique, tout en Node) :
+ *   1. Estimer B, la couleur réelle du fond d'origine autour du sujet
+ *      (anneau de pixels transparents adjacents au sujet — on ne fait PAS
+ *      confiance à la couleur demandée à Gemini, on mesure ce qu'il a produit).
+ *   2. Décontaminer : F = (C − (1−α)·B) / α, clampé [0,255].
+ *   3. Éroder l'alpha de N px (min-filter séparable) pour retirer la frange
+ *      la plus contaminée.
+ *   4. Feather : léger flou gaussien sur l'alpha pour un bord doux.
+ *
+ * Tout est paramétrable, sans GPU, sans dépendance hors sharp.
+ */
+import sharp from 'sharp'
+
+export type MatteOptions = {
+  /** Décontamination de couleur avec fond estimé (défaut true) */
+  decontaminate?: boolean
+  /** Érosion de l'alpha en pixels (défaut 1). 0 = désactivé. */
+  erodePx?: number
+  /** Feather : sigma du flou gaussien sur l'alpha (défaut 0.8). 0 = désactivé. */
+  featherSigma?: number
+  /** En dessous de cet alpha (0-1), le pixel est jeté (frange bruitée) (défaut 0.06) */
+  minAlpha?: number
+  /** Couleur de fond imposée. Si absente, estimée depuis l'image. */
+  bgColor?: { r: number; g: number; b: number }
+}
+
+export type MatteReport = {
+  bgEstimated: { r: number; g: number; b: number; samples: number }
+  decontaminatedPixels: number
+  erodePx: number
+  featherSigma: number
+  width: number
+  height: number
+}
+
+/**
+ * Raffine un PNG RGBA (sujet détouré sur transparent).
+ * Renvoie un PNG RGBA + rapport.
+ */
+export async function refineMatte(rgbaPng: Buffer, opts: MatteOptions = {}): Promise<{ png: Buffer; report: MatteReport }> {
+  const decontaminate = opts.decontaminate !== false
+  const erodePx       = Math.max(0, Math.round(opts.erodePx ?? 1))
+  const featherSigma  = Math.max(0, opts.featherSigma ?? 0.8)
+  const minAlpha      = Math.max(0, Math.min(0.5, opts.minAlpha ?? 0.06))
+
+  const { data, info } = await sharp(rgbaPng).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+  const w = info.width, h = info.height
+  if (info.channels !== 4) throw new Error(`refineMatte: expected 4 channels, got ${info.channels}`)
+
+  const N = w * h
+  const alpha = new Uint8Array(N)
+  for (let i = 0; i < N; i++) alpha[i] = data[i * 4 + 3]
+
+  // ---------- 1. Estimation de B : anneau de pixels transparents adjacents au sujet ----------
+  let bg = opts.bgColor
+  let samples = 0
+  if (!bg) {
+    // dilate le masque opaque de ~6 px, garde les pixels α≈0 dans cette zone
+    const ring = dilateMask(alpha, w, h, 6, 200)
+    let sr = 0, sg = 0, sb = 0
+    for (let i = 0; i < N; i++) {
+      if (ring[i] && alpha[i] < 8) {
+        sr += data[i * 4]; sg += data[i * 4 + 1]; sb += data[i * 4 + 2]; samples++
+      }
+    }
+    if (samples > 50) {
+      bg = { r: Math.round(sr / samples), g: Math.round(sg / samples), b: Math.round(sb / samples) }
+    } else {
+      // fallback : moyenne globale des pixels transparents
+      sr = sg = sb = 0; samples = 0
+      for (let i = 0; i < N; i++) {
+        if (alpha[i] < 8) { sr += data[i * 4]; sg += data[i * 4 + 1]; sb += data[i * 4 + 2]; samples++ }
+      }
+      bg = samples > 0
+        ? { r: Math.round(sr / samples), g: Math.round(sg / samples), b: Math.round(sb / samples) }
+        : { r: 255, g: 255, b: 255 }
+    }
+  }
+
+  // ---------- 2. Décontamination ----------
+  const out = Buffer.from(data)
+  let decontaminated = 0
+  if (decontaminate) {
+    const minA = Math.round(minAlpha * 255)
+    for (let i = 0; i < N; i++) {
+      const a8 = alpha[i]
+      if (a8 === 0 || a8 === 255) continue
+      if (a8 < minA) { alpha[i] = 0; continue }
+      const a = a8 / 255
+      const ia = 1 - a
+      const o = i * 4
+      out[o]     = clamp255((data[o]     - ia * bg.r) / a)
+      out[o + 1] = clamp255((data[o + 1] - ia * bg.g) / a)
+      out[o + 2] = clamp255((data[o + 2] - ia * bg.b) / a)
+      decontaminated++
+    }
+  }
+
+  // ---------- 3. Érosion (min-filter séparable) ----------
+  let alphaOut: Uint8Array = alpha
+  if (erodePx > 0) alphaOut = erodeAlpha(alpha, w, h, erodePx)
+
+  // ---------- 4. Feather (flou gaussien sur l'alpha seul) ----------
+  if (featherSigma > 0) {
+    const blurred = await sharp(Buffer.from(alphaOut), { raw: { width: w, height: h, channels: 1 } })
+      .blur(featherSigma)
+      .raw().toBuffer()
+    alphaOut = new Uint8Array(blurred)
+  }
+
+  // ---------- Réassemblage ----------
+  for (let i = 0; i < N; i++) out[i * 4 + 3] = alphaOut[i]
+
+  const png = await sharp(out, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer()
+  return {
+    png,
+    report: {
+      bgEstimated: { ...bg, samples },
+      decontaminatedPixels: decontaminated,
+      erodePx, featherSigma, width: w, height: h,
+    },
+  }
+}
+
+/* ------------------------------ helpers ------------------------------ */
+
+function clamp255(v: number): number {
+  return v < 0 ? 0 : v > 255 ? 255 : Math.round(v)
+}
+
+/** Min-filter séparable (érosion) sur un canal 8 bits. */
+function erodeAlpha(src: Uint8Array, w: number, h: number, r: number): Uint8Array {
+  const tmp = new Uint8Array(w * h)
+  const dst = new Uint8Array(w * h)
+  // horizontal
+  for (let y = 0; y < h; y++) {
+    const row = y * w
+    for (let x = 0; x < w; x++) {
+      let m = 255
+      const x0 = Math.max(0, x - r), x1 = Math.min(w - 1, x + r)
+      for (let k = x0; k <= x1; k++) { const v = src[row + k]; if (v < m) m = v }
+      tmp[row + x] = m
+    }
+  }
+  // vertical
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      let m = 255
+      const y0 = Math.max(0, y - r), y1 = Math.min(h - 1, y + r)
+      for (let k = y0; k <= y1; k++) { const v = tmp[k * w + x]; if (v < m) m = v }
+      dst[y * w + x] = m
+    }
+  }
+  return dst
+}
+
+/** Dilate un masque binaire (alpha > thr) de r px (max-filter séparable). Renvoie 0/1. */
+function dilateMask(alpha: Uint8Array, w: number, h: number, r: number, thr: number): Uint8Array {
+  const bin = new Uint8Array(w * h)
+  for (let i = 0; i < w * h; i++) bin[i] = alpha[i] > thr ? 1 : 0
+  const tmp = new Uint8Array(w * h)
+  const dst = new Uint8Array(w * h)
+  for (let y = 0; y < h; y++) {
+    const row = y * w
+    for (let x = 0; x < w; x++) {
+      let m = 0
+      const x0 = Math.max(0, x - r), x1 = Math.min(w - 1, x + r)
+      for (let k = x0; k <= x1; k++) { if (bin[row + k]) { m = 1; break } }
+      tmp[row + x] = m
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      let m = 0
+      const y0 = Math.max(0, y - r), y1 = Math.min(h - 1, y + r)
+      for (let k = y0; k <= y1; k++) { if (tmp[k * w + x]) { m = 1; break } }
+      dst[y * w + x] = m
+    }
+  }
+  return dst
+}

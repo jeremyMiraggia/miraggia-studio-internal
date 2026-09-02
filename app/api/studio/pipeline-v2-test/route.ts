@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import { fal } from '@fal-ai/client'
 import sharp from 'sharp'
+import { refineMatte } from '@/lib/matting'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -22,7 +23,16 @@ export const runtime = 'nodejs'
 export async function POST(request: Request) {
   try {
     const formData = await request.formData()
-    const background    = formData.get('background')    as File | null
+    // Fond : soit un fichier multipart (legacy, limité à 4.5 MB et souvent compressé),
+    // soit une URL Blob uploadée directement par le client (fond EXACT, sans perte).
+    let background: File | null = formData.get('background') as File | null
+    const backgroundUrl = formData.get('backgroundUrl') as string | null
+    if (!background && backgroundUrl) {
+      const r = await fetch(backgroundUrl)
+      if (!r.ok) return NextResponse.json({ error: `Fond inaccessible (${r.status}).` }, { status: 400 })
+      const ab = await r.arrayBuffer()
+      background = new File([new Uint8Array(ab)], 'background', { type: r.headers.get('content-type') || 'image/png' })
+    }
     const mannequinBody = formData.get('mannequinBody') as File | null
     const mannequinFace = formData.get('mannequinFace') as File | null
     const products      = formData.getAll('products').filter((v): v is File => v instanceof File)
@@ -50,6 +60,16 @@ export async function POST(request: Request) {
     const bgColor = await extractDominantBackgroundColor(Buffer.from(new Uint8Array(bgPreview)))
     const bgHex = rgbToHex(bgColor.r, bgColor.g, bgColor.b)
     debug.steps.targetBgColor = { hex: bgHex, ...bgColor }
+
+    // === Résolution : si le fond client dépasse 2K, on demande 4K à Gemini ===
+    // Sinon le sujet est agrandi au paste-back → perte de netteté sur le textile.
+    const bgMetaEarly = await sharp(Buffer.from(new Uint8Array(bgPreview))).metadata()
+    const bgLongSide = Math.max(bgMetaEarly.width ?? 0, bgMetaEarly.height ?? 0)
+    let effectiveQuality = quality
+    if (bgLongSide > 2200 && quality !== '4K') {
+      effectiveQuality = '4K'
+      debug.steps.qualityAutoUpgrade = { from: quality, to: '4K', reason: `fond ${bgLongSide}px > 2K` }
+    }
 
     const intro = [
       `[SESSION ${sessionId}]`,
@@ -92,7 +112,7 @@ export async function POST(request: Request) {
       for (const f of products) parts.push(await toInlinePart(f))
     }
 
-    const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
+    const imageSize = effectiveQuality === '4K' ? '4K' : effectiveQuality === '1K' ? '1K' : '2K'
     const geminiBody = JSON.stringify({
       contents: [{ parts }],
       generationConfig: {
@@ -277,8 +297,26 @@ export async function POST(request: Request) {
     const subjectRgbaUrl: string | undefined = rembgResult?.data?.image?.url ?? rembgResult?.image?.url
     if (!subjectRgbaUrl) return NextResponse.json({ error: 'BiRefNet sans image.' }, { status: 502 })
     const subjectArrBuf = await fetch(subjectRgbaUrl).then(r => r.arrayBuffer())
-    const subjectBuf = Buffer.from(new Uint8Array(subjectArrBuf))
-    debug.steps.birefnet = { bytes: subjectBuf.length }
+    const subjectRawBuf = Buffer.from(new Uint8Array(subjectArrBuf))
+    debug.steps.birefnet = { bytes: subjectRawBuf.length }
+
+    // ============= ÉTAPE 2b — Raffinement du matte (anti-liseré) =============
+    // Décontamination couleur (fond Gemini estimé) + érosion + feather.
+    // Paramètres exposés par le client ; défauts calibrés pour un fond studio.
+    const matteOpts = {
+      decontaminate: (formData.get('matteDecontaminate') ?? '1') !== '0',
+      erodePx:       parseFloatOr(formData.get('matteErode') as string | null, 1),
+      featherSigma:  parseFloatOr(formData.get('matteFeather') as string | null, 0.8),
+      minAlpha:      parseFloatOr(formData.get('matteMinAlpha') as string | null, 0.06),
+    }
+    let subjectBuf: Buffer = subjectRawBuf
+    try {
+      const refined = await refineMatte(subjectRawBuf, matteOpts)
+      subjectBuf = refined.png
+      debug.steps.matte = { ...refined.report, opts: matteOpts }
+    } catch (e: any) {
+      debug.steps.matte = { error: e?.message ?? String(e), fallback: 'birefnet raw', opts: matteOpts }
+    }
 
     // ============= ÉTAPE 3 — Composite sujet sur fond user =============
     // (bgBuf, bgW, bgH déjà calculés plus haut)
@@ -463,7 +501,18 @@ export async function POST(request: Request) {
       compositeUrl = blob.url
     } catch { /* ignore */ }
 
-    return NextResponse.json({ imageUrl, compositeUrl, debug, icLightError, blobError })
+    // Cutout raffiné (RGBA) — pour inspecter le bord sans le fond
+    let cutoutUrl: string | undefined
+    try {
+      const path = `pipeline-v2-test/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-cutout.png`
+      const blob = await put(path, subjectResized, {
+        access: 'public', contentType: 'image/png', cacheControlMaxAge: 60,
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      })
+      cutoutUrl = blob.url
+    } catch { /* ignore */ }
+
+    return NextResponse.json({ imageUrl, compositeUrl, cutoutUrl, debug, icLightError, blobError })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'Erreur inconnue', stack: error?.stack?.slice(0, 800) }, { status: 500 })
   }
@@ -521,6 +570,12 @@ async function extractDominantBackgroundColor(imgBuf: Buffer): Promise<{ r: numb
     g: Math.round(stats.channels[1].mean),
     b: Math.round(stats.channels[2].mean),
   }
+}
+
+function parseFloatOr(v: string | null, def: number): number {
+  if (v == null || v === '') return def
+  const n = parseFloat(v)
+  return Number.isFinite(n) ? n : def
 }
 
 function rgbToHex(r: number, g: number, b: number): string {

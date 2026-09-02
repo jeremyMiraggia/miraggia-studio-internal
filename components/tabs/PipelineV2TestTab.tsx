@@ -9,12 +9,14 @@
  *   4. Compare : composite brut (avant IC-Light) vs résultat final (après IC-Light)
  */
 import { useState } from 'react'
+import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
 
 type Result = {
   imageUrl?:    string
   compositeUrl?: string
+  cutoutUrl?:   string
   error?:       string
   debug?:       any
   icLightError?: string
@@ -33,6 +35,10 @@ export default function PipelineV2TestTab() {
   const [horizonPct, setHorizonPct] = useState(80)   // % de la hauteur du fond où est la ligne du sol
   // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
   const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('custom')
+  // Raffinement du matte (anti-liseré) — mode custom uniquement
+  const [matteDecontaminate, setMatteDecontaminate] = useState(true)
+  const [matteErode, setMatteErode]     = useState(1)
+  const [matteFeather, setMatteFeather] = useState(0.8)
 
   const [running, setRunning] = useState(false)
   const [result, setResult]   = useState<Result | null>(null)
@@ -49,13 +55,21 @@ export default function PipelineV2TestTab() {
         try { return await compressImage(f, { maxSide: 2048, quality: 0.9 }) }
         catch { return f }
       }
-      const bg   = await compress(background[0])
+      // ⚠ Le FOND n'est JAMAIS compressé : il doit rester pixel-exact.
+      // Upload direct vers Blob (contourne la limite 4.5 MB de Vercel).
+      const bgFile = background[0]
+      const bgBlob = await upload(`pipeline-v2-inputs/${Date.now()}-${bgFile.name}`, bgFile, {
+        access: 'public',
+        handleUploadUrl: '/api/blob-upload',
+        contentType: bgFile.type || 'application/octet-stream',
+      })
+      // Les références (mannequin, produits) ne servent qu'à Gemini → compression OK
       const body = await compress(mannequinBody[0])
       const face = mannequinFace[0] ? await compress(mannequinFace[0]) : null
       const prods = await Promise.all(products.map(compress))
 
       const fd = new FormData()
-      fd.append('background', bg)
+      fd.set('backgroundUrl', bgBlob.url)
       fd.append('mannequinBody', body)
       if (face) fd.append('mannequinFace', face)
       for (const p of prods) fd.append('products', p)
@@ -65,6 +79,9 @@ export default function PipelineV2TestTab() {
       fd.set('prompt', prompt)
       fd.set('horizonPct', String(horizonPct / 100))
       fd.set('shadowMode', shadowMode)
+      fd.set('matteDecontaminate', matteDecontaminate ? '1' : '0')
+      fd.set('matteErode', String(matteErode))
+      fd.set('matteFeather', String(matteFeather))
 
       const resp = await fetch('/api/studio/pipeline-v2-test', { method: 'POST', body: fd })
       const json = await resp.json()
@@ -212,6 +229,33 @@ export default function PipelineV2TestTab() {
             style={{ width: '100%' }}
           />
         </div>
+
+        {/* ===== Raffinement du matte (anti-liseré) ===== */}
+        <div style={{ marginTop: 16, opacity: shadowMode === 'custom' ? 1 : 0.5 }}>
+          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>
+            <strong style={{ color: '#0D4A5C' }}>Détourage — anti-liseré</strong>
+            <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
+              (mode custom — décontamine les bords avec la couleur de fond Gemini mesurée, puis érode + adoucit)
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 12, alignItems: 'center' }}>
+            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={matteDecontaminate} onChange={e => setMatteDecontaminate(e.target.checked)} />
+              Décontamination
+            </label>
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280' }}>Érosion : <strong>{matteErode} px</strong></div>
+              <input type="range" min={0} max={4} step={1} value={matteErode}
+                     onChange={e => setMatteErode(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280' }}>Feather : <strong>{matteFeather.toFixed(1)}</strong></div>
+              <input type="range" min={0} max={3} step={0.1} value={matteFeather}
+                     onChange={e => setMatteFeather(parseFloat(e.target.value))} style={{ width: '100%' }} />
+            </div>
+          </div>
+        </div>
+
         <div style={{ marginTop: 14 }}>
           <button onClick={runOne} disabled={!canRun}
                   style={{ ...btn(canRun ? '#0D4A5C' : '#9CA3AF'), cursor: canRun ? 'pointer' : 'not-allowed' }}>
@@ -248,7 +292,39 @@ export default function PipelineV2TestTab() {
                 : result.debug.steps.photoroom?.error
                   ? `❌ Photoroom ÉCHEC : ${result.debug.steps.photoroom.error.slice(0, 100)}`
                   : `⚙ Mode custom (BiRefNet + ombre sharp)`}
+              {result.debug.steps.qualityAutoUpgrade && (
+                <span style={{ marginLeft: 10 }}>· 🔼 Gemini passé en 4K ({result.debug.steps.qualityAutoUpgrade.reason})</span>
+              )}
+              {result.debug.steps.matte && !result.debug.steps.matte.error && (
+                <span style={{ marginLeft: 10 }}>
+                  · 🧹 Matte : fond Gemini mesuré{' '}
+                  <span style={{
+                    display: 'inline-block', width: 10, height: 10, borderRadius: 2, verticalAlign: 'middle',
+                    background: `rgb(${result.debug.steps.matte.bgEstimated.r},${result.debug.steps.matte.bgEstimated.g},${result.debug.steps.matte.bgEstimated.b})`,
+                    border: '1px solid #9CA3AF',
+                  }} />{' '}
+                  {result.debug.steps.matte.decontaminatedPixels.toLocaleString('fr-FR')} px décontaminés,
+                  érosion {result.debug.steps.matte.erodePx}px, feather {result.debug.steps.matte.featherSigma}
+                </span>
+              )}
+              {result.debug.steps.matte?.error && (
+                <span style={{ marginLeft: 10, color: '#B45309' }}>· ⚠ Matte non raffiné : {result.debug.steps.matte.error}</span>
+              )}
             </div>
+          )}
+          {result.cutoutUrl && (
+            <details style={{ marginBottom: 12 }}>
+              <summary style={{ fontSize: 12, color: '#6B7280', cursor: 'pointer' }}>
+                🔍 Cutout raffiné (sur damier — pour inspecter le bord)
+              </summary>
+              <a href={result.cutoutUrl} target="_blank" rel="noreferrer">
+                <img src={result.cutoutUrl} alt="cutout" style={{
+                  maxWidth: 360, marginTop: 8, borderRadius: 8,
+                  backgroundImage: 'linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%)',
+                  backgroundSize: '16px 16px', backgroundPosition: '0 0,0 8px,8px -8px,-8px 0',
+                }} />
+              </a>
+            </details>
           )}
           {(result.imageUrl || result.compositeUrl) && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
