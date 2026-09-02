@@ -250,6 +250,7 @@ export async function POST(request: Request) {
       const shadowOpts = {
         threshold:    parseFloatOr(formData.get('shadowThreshold') as string | null, 0.06),
         minRatio:     parseFloatOr(formData.get('shadowMinRatio')  as string | null, 0.35),
+        softness:     parseFloatOr(formData.get('shadowSoftness')  as string | null, 1),
       }
       const { ratio, mask, report: shadowReport } = await extractShadowRatio(geminiRgb, bgRgb, alpha, bgW, bgH, sbox, shadowOpts)
       debug.steps.shadowExtract = { ...shadowReport, opts: shadowOpts }

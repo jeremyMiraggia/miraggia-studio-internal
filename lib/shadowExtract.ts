@@ -32,6 +32,12 @@ export type ShadowExtractOptions = {
   featherSigma?: number
   /** Ratio minimal (plancher d'assombrissement) — évite les trous noirs (défaut 0.35) */
   minRatio?: number
+  /**
+   * Diffusion (défaut 1). Multiplie : l'élargissement de la région d'ombre au-delà du
+   * seuil (pour garder la pénombre), le feather du masque et le lissage du ratio.
+   * 0.5 = ombre nette, 2-3 = très diffuse.
+   */
+  softness?: number
 }
 
 export type ShadowExtractReport = {
@@ -62,7 +68,10 @@ export async function extractShadowRatio(
   const bandUpFrac   = opts.bandUpFrac ?? 0.10
   const bandDownFrac = opts.bandDownFrac ?? 0.28
   const minRatio     = opts.minRatio ?? 0.35
-  const featherSigma = opts.featherSigma ?? Math.max(4, Math.round(subject.width * 0.01))
+  const softness     = Math.max(0.1, opts.softness ?? 1)
+  const featherSigma = opts.featherSigma ?? Math.max(4, Math.round(subject.width * 0.025 * softness))
+  const growPx       = Math.max(2, Math.round(subject.width * 0.03 * softness))     // élargissement de la région
+  const ratioSmooth  = Math.max(1.5, subject.width * 0.006 * softness)              // lissage du ratio
 
   const feetY = subject.top + subject.height
   const feetX = subject.left + Math.round(subject.width / 2)
@@ -181,14 +190,18 @@ export async function extractShadowRatio(
     return { ratio, mask, report: { ...emptyReport(band, feetX, feetY, threshold, featherSigma), candidatePixels } }
   }
 
-  // ---------- 4. Feather du masque + lissage du ratio ----------
+  // ---------- 4. Région élargie (pénombre) + feather + lissage du ratio ----------
+  // Le seuil a servi à TROUVER l'ombre. On élargit la région gardée pour inclure
+  // la pénombre (assombrissement < seuil) : à l'intérieur, c'est le ratio MESURÉ
+  // qui s'applique, donc les pixels à 2-3 % restent à 2-3 % au lieu d'être coupés.
+  const grown = dilate(kept, bw, bh, growPx)
   const kept255 = new Uint8Array(bw * bh)
-  for (let i = 0; i < bw * bh; i++) kept255[i] = kept[i] ? 255 : 0
+  for (let i = 0; i < bw * bh; i++) kept255[i] = grown[i] ? 255 : 0
   const maskBlur = await blur8(kept255, bw, bh, featherSigma)
-  // ratio lissé (sigma 1.5) pour gommer le grain de Gemini
+  // ratio lissé pour gommer le grain de Gemini et adoucir les transitions
   const r8 = new Uint8Array(bw * bh)
   for (let i = 0; i < bw * bh; i++) r8[i] = Math.round(Math.max(minRatio, rBand[i]) * 255)
-  const rBlur = await blur8(r8, bw, bh, 1.5)
+  const rBlur = await blur8(r8, bw, bh, ratioSmooth)
 
   let darkSum = 0
   for (let y = 0; y < bh; y++) {

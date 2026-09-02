@@ -38,6 +38,7 @@ export default function PipelineV2TestTab() {
   const [shadowMode, setShadowMode] = useState<'gemini' | 'photoroom-soft' | 'photoroom-hard' | 'custom'>('gemini')
   // Mode gemini : seuil d'ombre (assombrissement minimal pour compter comme ombre)
   const [shadowThreshold, setShadowThreshold] = useState(0.06)
+  const [shadowSoftness, setShadowSoftness]   = useState(1.5)
   // Raffinement du matte (anti-liseré) — mode custom uniquement
   const [matteDecontaminate, setMatteDecontaminate] = useState(true)
   const [matteErode, setMatteErode]     = useState(1)
@@ -86,6 +87,7 @@ export default function PipelineV2TestTab() {
       fd.set('matteErode', String(matteErode))
       fd.set('matteFeather', String(matteFeather))
       fd.set('shadowThreshold', String(shadowThreshold))
+      fd.set('shadowSoftness', String(shadowSoftness))
 
       const resp = await fetch('/api/studio/pipeline-v2-test', { method: 'POST', body: fd })
       const json = await resp.json()
@@ -218,15 +220,27 @@ export default function PipelineV2TestTab() {
           </div>
         </div>
         {shadowMode === 'gemini' && (
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
-              Seuil d'ombre : <strong style={{ color: '#0D4A5C' }}>{Math.round(shadowThreshold * 100)} %</strong>
-              <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
-                (assombrissement minimal Gemini vs fond pour compter comme ombre — monter si du bruit de fond est pris, baisser si l'ombre est ratée)
-              </span>
+          <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+                Seuil d'ombre : <strong style={{ color: '#0D4A5C' }}>{Math.round(shadowThreshold * 100)} %</strong>
+                <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
+                  (sert à trouver l'ombre — monter si du bruit de fond est pris, baisser si elle est ratée)
+                </span>
+              </div>
+              <input type="range" min={0.02} max={0.20} step={0.01} value={shadowThreshold}
+                     onChange={e => setShadowThreshold(parseFloat(e.target.value))} style={{ width: '100%' }} />
             </div>
-            <input type="range" min={0.02} max={0.20} step={0.01} value={shadowThreshold}
-                   onChange={e => setShadowThreshold(parseFloat(e.target.value))} style={{ width: '100%' }} />
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+                Diffusion : <strong style={{ color: '#0D4A5C' }}>×{shadowSoftness.toFixed(1)}</strong>
+                <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
+                  (0.5 = nette · 1.5 = douce · 3 = très diffuse)
+                </span>
+              </div>
+              <input type="range" min={0.5} max={3} step={0.1} value={shadowSoftness}
+                     onChange={e => setShadowSoftness(parseFloat(e.target.value))} style={{ width: '100%' }} />
+            </div>
           </div>
         )}
         <div style={{ marginTop: 16, opacity: shadowMode === 'custom' ? 1 : 0.5, display: shadowMode === 'gemini' ? 'none' : 'block' }}>

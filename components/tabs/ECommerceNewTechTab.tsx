@@ -74,6 +74,7 @@ export default function ECommerceNewTechTab() {
   // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
   const [shadowMode, setShadowMode] = useState<'gemini' | 'photoroom-soft' | 'photoroom-hard' | 'custom'>('gemini')
   const [shadowThreshold, setShadowThreshold] = useState(0.06)
+  const [shadowSoftness, setShadowSoftness]   = useState(1.5)
   // Affiche le brut Gemini à côté du final dans la grille
   const [showGemini, setShowGemini] = useState(true)
   const [concurrency, setConcurrency] = useState(2)
@@ -275,6 +276,7 @@ export default function ECommerceNewTechTab() {
         fd.set('matteErode', String(matteErode))
         fd.set('matteFeather', String(matteFeather))
         fd.set('shadowThreshold', String(shadowThreshold))
+        fd.set('shadowSoftness', String(shadowSoftness))
         // Si le fond a déjà été adapté côté client (ex : bgCloseUpHaut sans sol),
         // on dit au serveur de NE PAS appliquer le crop final selon framing.
         if (bgAlreadyAdaptedToFraming) fd.set('skipFinalCrop', '1')
@@ -513,6 +515,12 @@ export default function ECommerceNewTechTab() {
               </div>
               <input type="range" min={0.02} max={0.20} step={0.01} value={shadowThreshold}
                      onChange={e => setShadowThreshold(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>
+                Diffusion : <strong style={{ color: '#0D4A5C' }}>×{shadowSoftness.toFixed(1)}</strong>
+                <span style={{ marginLeft: 6, fontSize: 10, color: '#9CA3AF' }}>(0.5 nette · 1.5 douce · 3 très diffuse)</span>
+              </div>
+              <input type="range" min={0.5} max={3} step={0.1} value={shadowSoftness}
+                     onChange={e => setShadowSoftness(parseFloat(e.target.value))} style={{ width: '100%' }} />
             </div>
           ) : (
             <div>
