@@ -25,6 +25,8 @@ type State = {
   status:     TaskStatus
   enabled:    boolean
   imageUrl?:  string
+  geminiUrl?: string     // brut Gemini (avant paste-back) pour comparaison
+  shadowSource?: string  // 'gemini' | 'contact-fallback' | 'none'
   error?:     string
 }
 
@@ -72,6 +74,8 @@ export default function ECommerceNewTechTab() {
   // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
   const [shadowMode, setShadowMode] = useState<'gemini' | 'photoroom-soft' | 'photoroom-hard' | 'custom'>('gemini')
   const [shadowThreshold, setShadowThreshold] = useState(0.06)
+  // Affiche le brut Gemini à côté du final dans la grille
+  const [showGemini, setShowGemini] = useState(true)
   const [concurrency, setConcurrency] = useState(2)
   const [running, setRunning]     = useState(false)
   // Ligne du sol (mode custom) — 0 = auto-détection
@@ -286,7 +290,11 @@ export default function ECommerceNewTechTab() {
 
         setStates(prev => {
           const next = [...prev]
-          next[idx] = { ...next[idx], status: 'done', imageUrl: url }
+          next[idx] = {
+            ...next[idx], status: 'done', imageUrl: url,
+            geminiUrl: json.compositeUrl ?? undefined,
+            shadowSource: json.debug?.steps?.shadowSource,
+          }
           statesRef.current = next
           return next
         })
@@ -560,7 +568,11 @@ export default function ECommerceNewTechTab() {
             <div style={label}>
               4 — Tâches ({stats.enabled}/{stats.total} cochées · ✓ {stats.done} · 💾 {stats.saved} · ⏳ {stats.running} · ✕ {stats.errors})
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <label style={{ fontSize: 11, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 4, marginRight: 6 }}>
+                <input type="checkbox" checked={showGemini} onChange={e => setShowGemini(e.target.checked)} />
+                Brut Gemini à côté
+              </label>
               <button onClick={() => setAllEnabled(true)} style={btn('#E5E7EB', '#374151')}>
                 ☑ Tout cocher
               </button>
@@ -598,7 +610,7 @@ export default function ECommerceNewTechTab() {
                       </span>
                     </div>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${showGemini ? 300 : 180}px, 1fr))`, gap: 8 }}>
                     {items.map(s => {
                       const framing = extractFraming(s.task.vueRaw ?? '')
                       return (
@@ -631,11 +643,32 @@ export default function ECommerceNewTechTab() {
                             {s.task.vueRaw || '(no pose)'}
                           </div>
                           {s.imageUrl && (
-                            <div style={{ marginTop: 4, aspectRatio: '3/4', overflow: 'hidden', borderRadius: 4 }}>
-                              <a href={s.imageUrl} target="_blank" rel="noreferrer">
-                                <img src={s.imageUrl} alt="result"
-                                     style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                              </a>
+                            <div style={{ marginTop: 4, display: 'grid',
+                                          gridTemplateColumns: showGemini && s.geminiUrl ? '1fr 1fr' : '1fr', gap: 3 }}>
+                              {showGemini && s.geminiUrl && (
+                                <div>
+                                  <div style={{ fontSize: 9, color: '#9CA3AF', marginBottom: 2 }}>Gemini brut</div>
+                                  <div style={{ aspectRatio: '3/4', overflow: 'hidden', borderRadius: 4 }}>
+                                    <a href={s.geminiUrl} target="_blank" rel="noreferrer">
+                                      <img src={s.geminiUrl} alt="gemini"
+                                           style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    </a>
+                                  </div>
+                                </div>
+                              )}
+                              <div>
+                                {showGemini && s.geminiUrl && (
+                                  <div style={{ fontSize: 9, color: '#10B981', marginBottom: 2 }}>
+                                    Final{s.shadowSource === 'contact-fallback' ? ' · ⚠ ombre fallback' : ''}
+                                  </div>
+                                )}
+                                <div style={{ aspectRatio: '3/4', overflow: 'hidden', borderRadius: 4 }}>
+                                  <a href={s.imageUrl} target="_blank" rel="noreferrer">
+                                    <img src={s.imageUrl} alt="result"
+                                         style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                  </a>
+                                </div>
+                              </div>
                             </div>
                           )}
                           {s.error && (
