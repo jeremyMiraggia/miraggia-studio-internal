@@ -32,7 +32,7 @@ export default function PipelineV2TestTab() {
   const [ratio, setRatio]         = useState('9:16')
   const [quality, setQuality]     = useState('2K')
   const [prompt, setPrompt]       = useState('')
-  const [horizonPct, setHorizonPct] = useState(80)   // % de la hauteur du fond où est la ligne du sol
+  const [horizonPct, setHorizonPct] = useState(0)    // % de la hauteur du fond où est la ligne du sol (0 = auto)
   // Default = custom (BiRefNet + soft drop shadow) — ~10× moins cher que Photoroom
   const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('custom')
   // Raffinement du matte (anti-liseré) — mode custom uniquement
@@ -77,7 +77,7 @@ export default function PipelineV2TestTab() {
       fd.set('ratio', ratio)
       fd.set('quality', quality)
       fd.set('prompt', prompt)
-      fd.set('horizonPct', String(horizonPct / 100))
+      if (horizonPct > 0) fd.set('horizonPct', String(horizonPct / 100))
       fd.set('shadowMode', shadowMode)
       fd.set('matteDecontaminate', matteDecontaminate ? '1' : '0')
       fd.set('matteErode', String(matteErode))
@@ -214,16 +214,22 @@ export default function PipelineV2TestTab() {
         </div>
         <div style={{ marginTop: 16, opacity: shadowMode === 'custom' ? 1 : 0.5 }}>
           <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
-            Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct}%</strong>
+            Hauteur du sol dans le fond : <strong style={{ color: '#0D4A5C' }}>{horizonPct === 0 ? 'auto' : `${horizonPct}%`}</strong>
             <span style={{ marginLeft: 8, fontSize: 10, color: '#9CA3AF' }}>
               {shadowMode === 'custom'
-                ? '(actif : pieds du mannequin posés à cette ligne, ex 85% pour BON_FOND_OFFICIEL)'
+                ? '(0 = détection auto · sinon pieds posés à cette ligne, ex 85-92% selon le fond)'
                 : '(ignoré en mode Photoroom — Photoroom centre auto le sujet sur le fond)'}
             </span>
+            {result?.debug?.steps?.horizonY && (
+              <span style={{ marginLeft: 8, fontSize: 10, color: '#0D4A5C' }}>
+                · dernier run : {result.debug.steps.horizonY_source} → {Math.round(result.debug.steps.horizonY / (result.debug.steps.bgH || 1) * 100) || result.debug.steps.horizonY}
+                {result.debug.steps.bgH ? '%' : 'px'}
+              </span>
+            )}
           </div>
           <input
             type="range"
-            min={50} max={95} step={1}
+            min={0} max={97} step={1}
             value={horizonPct}
             onChange={e => setHorizonPct(parseInt(e.target.value, 10))}
             style={{ width: '100%' }}

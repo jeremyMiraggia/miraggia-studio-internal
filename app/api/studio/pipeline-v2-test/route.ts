@@ -356,6 +356,7 @@ export async function POST(request: Request) {
       }
     }
     debug.steps.horizonY = horizonY
+    debug.steps.bgH = bgH
 
     // Calcule taille cible du sujet en % de la hauteur du canvas + anchor
     let targetHeightRatio: number
@@ -688,44 +689,45 @@ async function detectHorizonLine(bgBuf: Buffer, bgW: number, bgH: number): Promi
       for (let x = 0; x < info.width; x++) sum += data[y * info.width + x]
       rowMeans.push(sum / info.width)
     }
-    // Gradient absolu entre rangées (avec lissage simple)
+    // Lissage des moyennes (fenêtre 5) pour ignorer le grain / les plis fins
+    const sm: number[] = rowMeans.map((_, y) => {
+      let s = 0, n = 0
+      for (let k = -2; k <= 2; k++) { const yy = y + k; if (yy >= 0 && yy < rowMeans.length) { s += rowMeans[yy]; n++ } }
+      return s / n
+    })
+    // Gradient sur un pas proportionnel à la hauteur (transition mur→sol = qq px à qq dizaines)
+    const step = Math.max(3, Math.round(bgH * 0.004))
     let bestY = -1
     let bestGrad = 0
-    const minY = Math.floor(bgH * 0.55)   // on cherche dans la moitié basse seulement
-    const maxY = Math.floor(bgH * 0.95)
-    for (let y = minY; y < maxY; y++) {
-      const grad = Math.abs(rowMeans[y] - rowMeans[y - 4])
+    const minY = Math.floor(bgH * 0.50)
+    const maxY = Math.floor(bgH * 0.97)
+    for (let y = minY + step; y < maxY; y++) {
+      const grad = Math.abs(sm[y] - sm[y - step])
       if (grad > bestGrad) {
         bestGrad = grad
         bestY = y
       }
     }
-    if (bestY > 0 && bestGrad > 5) return bestY
-    return Math.floor(bgH * 0.78)
+    if (bestY > 0 && bestGrad > 4) return bestY
+    return Math.floor(bgH * 0.85)
   } catch {
     return Math.floor(bgH * 0.78)
   }
 }
 
 /**
- * Construit une ombre de contact douce sous le sujet.
- * Technique : alpha du sujet → ellipse aplatie noire floue → décalée vers le bas.
- * Donne une ombre physiquement cohérente (ovale sous les pieds) plutôt qu'une
- * silhouette qui suit la forme du sujet (pas naturel pour une ombre au sol).
- */
-/**
- * Soft drop shadow STYLE STUDIO — ombre molle projetée au sol.
+ * OMBRE DE CONTACT — petite ombre AUX PIEDS, pas une projection du corps.
  *
- * Technique pro (équivalent Photoshop "drop shadow soft") :
- *   1. Récupère l'alpha de la SILHOUETTE ENTIÈRE du sujet
- *   2. Convertit en noir avec opacité réduite (~25%)
- *   3. Squash vertical ×0.32 (effet projection sur sol plat)
- *   4. Blur très fort (40-60px) → ombre molle, diffuse
- *   5. Ancre sous les pieds avec léger décalage vers le bas
+ * Deux couches, toutes deux dérivées de l'alpha du sujet :
+ *   1. CONTACT : la bande basse de la silhouette (pieds / bas de jambes),
+ *      écrasée verticalement ×0.5 et floutée modérément. Elle suit la position
+ *      réelle des pieds (deux pieds écartés → deux taches qui se rejoignent).
+ *      C'est l'ombre "sous la semelle" d'un éclairage studio par le haut.
+ *   2. OCCLUSION : une ellipse large, très faible, très floue, centrée aux pieds.
+ *      Elle ancre le sujet au sol sans dessiner de forme.
  *
- * Donne un effet "ombre studio diffuse" qui suggère le volume du sujet
- * sans être agressif. Beaucoup plus naturel qu'une silhouette de pieds
- * isolée ou qu'une ellipse géométrique.
+ * Ce qu'on ne fait PLUS : écraser la silhouette entière (lisait comme un reflet
+ * ou une projection de lumière rasante).
  */
 async function buildContactShadow(
   subjectResized: Buffer, newW: number, newH: number, offsetX: number, offsetY: number,
@@ -734,64 +736,73 @@ async function buildContactShadow(
   try {
     const subjBbox = await findAlphaBoundingBox(subjectResized, 20)
     if (!subjBbox) return { input: null, left: 0, top: 0 }
+    const sw = subjBbox.width, sh = subjBbox.height
 
-    // 1. Crop la silhouette tight (élimine le transparent autour)
-    const tight = await sharp(subjectResized)
-      .extract({ left: subjBbox.left, top: subjBbox.top,
-                 width: subjBbox.width, height: subjBbox.height })
-      .png()
-      .toBuffer()
+    // ---- Couche 1 : bande des pieds ----
+    const footBand = Math.max(24, Math.round(sh * 0.09))          // ~9 % bas de la silhouette
+    const { data: a, info: ai } = await sharp(subjectResized)
+      .extract({ left: subjBbox.left, top: subjBbox.top + sh - footBand, width: sw, height: footBand })
+      .ensureAlpha().extractChannel('alpha').raw().toBuffer({ resolveWithObject: true })
+    const fw = ai.width, fh = ai.height
+    const rgba = Buffer.alloc(fw * fh * 4)
+    for (let i = 0; i < fw * fh; i++) rgba[i * 4 + 3] = Math.round(a[i] * 0.55)   // noir, 55 %
+    const feetPng = await sharp(rgba, { raw: { width: fw, height: fh, channels: 4 } }).png().toBuffer()
+    const contactH = Math.max(8, Math.round(fh * 0.5))
+    const contact = await sharp(feetPng)
+      .resize({ width: fw, height: contactH, fit: 'fill', kernel: 'lanczos3' })
+      .png().toBuffer()
+    const contactBlur = Math.max(6, Math.round(sw * 0.025))
 
-    // 2. Extraire alpha → silhouette noire transparente
-    const { data: alphaData, info: alphaInfo } = await sharp(tight)
-      .ensureAlpha()
-      .extractChannel('alpha')
-      .raw()
-      .toBuffer({ resolveWithObject: true })
-    const sw = alphaInfo.width, sh = alphaInfo.height
-    const rgba = Buffer.alloc(sw * sh * 4)
-    for (let i = 0; i < sw * sh; i++) {
-      rgba[i * 4]     = 0
-      rgba[i * 4 + 1] = 0
-      rgba[i * 4 + 2] = 0
-      // Opacité 25% → ombre subtile, lisible sans être agressive
-      rgba[i * 4 + 3] = Math.round(alphaData[i] * 0.25)
-    }
-    const silhouette = await sharp(rgba, { raw: { width: sw, height: sh, channels: 4 } })
-      .png()
-      .toBuffer()
+    // ---- Couche 2 : occlusion ambiante (ellipse large, faible) ----
+    const occW = Math.round(sw * 1.15)
+    const occH = Math.max(10, Math.round(occW * 0.16))
+    const occSvg = Buffer.from(
+      `<svg width="${occW}" height="${occH}" xmlns="http://www.w3.org/2000/svg">
+         <ellipse cx="${occW / 2}" cy="${occH / 2}" rx="${occW / 2}" ry="${occH / 2}" fill="black" fill-opacity="0.22"/>
+       </svg>`,
+    )
+    const occBlur = Math.max(10, Math.round(occW * 0.07))
 
-    // 3. Squash vertical ×0.32 → projection au sol "lumière haute"
-    const squashedH = Math.max(20, Math.round(sh * 0.32))
-    const squashed = await sharp(silhouette)
-      .resize({ width: sw, height: squashedH, fit: 'fill', kernel: 'lanczos3' })
-      .png()
-      .toBuffer()
+    // ---- Canvas commun ----
+    const pad = Math.max(contactBlur, occBlur) * 2
+    const canvasW = Math.max(fw, occW) + pad * 2
+    const canvasH = Math.max(contactH, occH) + pad * 2
+    const cx = Math.round(canvasW / 2), cy = Math.round(canvasH / 2)
 
-    // 4. Blur très fort pour ombre molle studio
-    const blurRadius = Math.max(20, Math.round(sw * 0.06))
-    const pad = blurRadius * 2
-    const canvasW = sw + pad * 2
-    const canvasH = squashedH + pad * 2
-    const shadow = await sharp({
+    const occLayer = await sharp({
       create: { width: canvasW, height: canvasH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-    })
-      .composite([{ input: squashed, left: pad, top: pad }])
-      .blur(blurRadius)
-      .png()
-      .toBuffer()
+    }).composite([{ input: occSvg, left: cx - Math.round(occW / 2), top: cy - Math.round(occH / 2) }])
+      .blur(occBlur).png().toBuffer()
 
-    // 5. Position : centré sous les pieds, légèrement décalé vers le bas
-    const subjectCenterX = offsetX + subjBbox.left + Math.round(subjBbox.width / 2)
-    const subjectFeetY   = offsetY + subjBbox.top + subjBbox.height
-    const shadowX = subjectCenterX - Math.round(canvasW / 2)
-    const shadowY = subjectFeetY - Math.round(canvasH / 2) + Math.round(squashedH * 0.45)
+    const contactLayer = await sharp({
+      create: { width: canvasW, height: canvasH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    }).composite([{ input: contact, left: cx - Math.round(fw / 2), top: cy - Math.round(contactH / 2) }])
+      .blur(contactBlur).png().toBuffer()
 
-    return {
-      input: shadow,
-      left: Math.max(-pad, Math.min(bgW - canvasW + pad, shadowX)),
-      top:  Math.max(-pad, Math.min(bgH - canvasH + pad, shadowY)),
-    }
+    const shadow = await sharp(occLayer)
+      .composite([{ input: contactLayer, left: 0, top: 0, blend: 'over' }])
+      .png().toBuffer()
+
+    // ---- Position : centre du canvas sur le point de contact (bas des pieds) ----
+    const feetCenterX = offsetX + subjBbox.left + Math.round(sw / 2)
+    const feetY       = offsetY + subjBbox.top + sh
+    // Légèrement au-dessus du bas des pieds : l'ombre de contact est SOUS la semelle,
+    // pas devant. On remonte de ~35 % de la hauteur de contact.
+    let shadowX = feetCenterX - cx
+    let shadowY = feetY - cy - Math.round(contactH * 0.35)
+
+    // sharp exige des offsets ≥ 0 et un calque qui tient dans le fond → on rogne
+    let cropL = 0, cropT = 0, cropW = canvasW, cropH = canvasH
+    if (shadowX < 0) { cropL = -shadowX; cropW -= cropL; shadowX = 0 }
+    if (shadowY < 0) { cropT = -shadowY; cropH -= cropT; shadowY = 0 }
+    if (shadowX + cropW > bgW) cropW = bgW - shadowX
+    if (shadowY + cropH > bgH) cropH = bgH - shadowY
+    if (cropW <= 0 || cropH <= 0) return { input: null, left: 0, top: 0 }
+    const shadowFinal = (cropL || cropT || cropW !== canvasW || cropH !== canvasH)
+      ? await sharp(shadow).extract({ left: cropL, top: cropT, width: cropW, height: cropH }).png().toBuffer()
+      : shadow
+
+    return { input: shadowFinal, left: shadowX, top: shadowY }
   } catch (e) {
     console.warn('[shadow] failed', e)
     return { input: null, left: 0, top: 0 }
