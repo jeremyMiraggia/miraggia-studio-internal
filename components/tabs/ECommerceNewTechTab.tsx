@@ -13,6 +13,7 @@
  *   4. Affiche les résultats, sauvegarde au fil de l'eau dans le dossier de sortie
  */
 import { useMemo, useRef, useState } from 'react'
+import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
@@ -72,6 +73,29 @@ export default function ECommerceNewTechTab() {
   const [shadowMode, setShadowMode] = useState<'photoroom-soft' | 'photoroom-hard' | 'custom'>('custom')
   const [concurrency, setConcurrency] = useState(2)
   const [running, setRunning]     = useState(false)
+  // Ligne du sol (mode custom) — 0 = auto-détection
+  const [horizonPct, setHorizonPct] = useState(0)
+  // Raffinement du matte (anti-liseré) — mode custom uniquement
+  const [matteDecontaminate, setMatteDecontaminate] = useState(true)
+  const [matteErode, setMatteErode]     = useState(1)
+  const [matteFeather, setMatteFeather] = useState(0.8)
+
+  // Cache des fonds uploadés bruts vers Blob (un même fond sert à toutes les poses)
+  const bgUrlCacheRef = useRef<Map<File, Promise<string>>>(new Map())
+  const uploadBackgroundRaw = (f: File): Promise<string> => {
+    const cache = bgUrlCacheRef.current
+    let p = cache.get(f)
+    if (!p) {
+      p = upload(`pipeline-v2-inputs/${Date.now()}-${f.name}`, f, {
+        access: 'public',
+        handleUploadUrl: '/api/blob-upload',
+        contentType: f.type || 'application/octet-stream',
+      }).then(b => b.url)
+      cache.set(f, p)
+      p.catch(() => cache.delete(f))   // en cas d'échec, on retentera
+    }
+    return p
+  }
 
   // Fonds globaux (override le fond du mannequin / CSV)
   const [bgPlein, setBgPlein]         = useState<File[]>([])   // fond pour plein-pied / mi / bas
@@ -225,12 +249,14 @@ export default function ECommerceNewTechTab() {
       try {
         const fd = new FormData()
 
-        // Compress côté client (4.5 MB limit Vercel)
+        // ⚠ Le FOND n'est JAMAIS compressé : il doit rester pixel-exact.
+        // Upload direct Blob (mis en cache : un même fond sert à toutes les poses).
+        fd.set('backgroundUrl', await uploadBackgroundRaw(backgroundFile))
+        // Les références (mannequin, produits) ne servent qu'à Gemini → compression OK
         const compress = async (f: File) => {
           try { return await compressImage(f, { maxSide: 2048, quality: 0.9 }) }
           catch { return f }
         }
-        fd.append('background', await compress(backgroundFile))
         fd.append('mannequinBody', await compress(t.bodyPhotoFile))
         if (t.facePhotoFile) fd.append('mannequinFace', await compress(t.facePhotoFile))
         for (const p of (t.productFiles ?? [])) fd.append('products', await compress(p))
@@ -239,6 +265,10 @@ export default function ECommerceNewTechTab() {
         fd.set('ratio', ratio)
         fd.set('quality', quality)
         fd.set('shadowMode', shadowMode)
+        if (horizonPct > 0) fd.set('horizonPct', String(horizonPct / 100))
+        fd.set('matteDecontaminate', matteDecontaminate ? '1' : '0')
+        fd.set('matteErode', String(matteErode))
+        fd.set('matteFeather', String(matteFeather))
         // Si le fond a déjà été adapté côté client (ex : bgCloseUpHaut sans sol),
         // on dit au serveur de NE PAS appliquer le crop final selon framing.
         if (bgAlreadyAdaptedToFraming) fd.set('skipFinalCrop', '1')
@@ -371,12 +401,12 @@ export default function ECommerceNewTechTab() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 22 }}>🛍</span>
           <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>
-            E-Com New Tech — Batch Notion via Pipeline V2 (Photoroom AI)
+            E-Com New Tech — Batch Notion via Pipeline V2
           </h2>
         </div>
         <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-          Drop un ZIP Notion. Chaque pose est générée via la pipeline V2 (Gemini → Photoroom AI soft) avec
-          ton fond, mannequin, vêtements, ratio cohérents. Le framing est lu depuis la colonne <code>Vue et Pose</code> :
+          Drop un ZIP Notion. Chaque pose est générée via la pipeline V2 (Gemini → BiRefNet → détourage anti-liseré → paste-back sur ton fond <strong>exact</strong>, envoyé sans compression) avec
+          mannequin, vêtements, ratio cohérents. Fond &gt; 2K → Gemini passe en 4K automatiquement. Le framing est lu depuis la colonne <code>Vue et Pose</code> :
           <em> Front/Side/Back → plein-pied, "close up haut" → buste, "close up bas" → jambes</em>.
         </p>
       </div>
@@ -461,6 +491,40 @@ export default function ECommerceNewTechTab() {
             </select>
           </div>
         </div>
+        {/* ===== Réglages mode custom : sol + anti-liseré ===== */}
+        <div style={{ marginTop: 14, opacity: shadowMode === 'custom' ? 1 : 0.5,
+                      display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+              Ligne du sol : <strong style={{ color: '#0D4A5C' }}>{horizonPct === 0 ? 'auto' : `${horizonPct}%`}</strong>
+              <span style={{ marginLeft: 6, fontSize: 10, color: '#9CA3AF' }}>(0 = détection auto · ex 85 pour BON_FOND_OFFICIEL)</span>
+            </div>
+            <input type="range" min={0} max={95} step={1} value={horizonPct}
+                   onChange={e => setHorizonPct(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+              <strong style={{ color: '#0D4A5C' }}>Détourage — anti-liseré</strong>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 10, alignItems: 'center' }}>
+              <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input type="checkbox" checked={matteDecontaminate} onChange={e => setMatteDecontaminate(e.target.checked)} />
+                Décontam.
+              </label>
+              <div>
+                <div style={{ fontSize: 10, color: '#6B7280' }}>Érosion {matteErode}px</div>
+                <input type="range" min={0} max={4} step={1} value={matteErode}
+                       onChange={e => setMatteErode(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: '#6B7280' }}>Feather {matteFeather.toFixed(1)}</div>
+                <input type="range" min={0} max={3} step={0.1} value={matteFeather}
+                       onChange={e => setMatteFeather(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
           <button onClick={pickOutputDir} style={btn('#0D4A5C')}>
             📁 {outputDirName ? `Dossier : ${outputDirName}` : 'Choisir dossier de sortie'}
