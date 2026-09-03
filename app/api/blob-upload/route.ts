@@ -9,6 +9,16 @@
  */
 import { handleUpload, type HandleUploadBody } from '@vercel/blob/client'
 import { NextResponse } from 'next/server'
+import { SESSION_COOKIE, verifySessionToken } from '@/lib/auth'
+
+function cookieValue(request: Request, name: string): string | undefined {
+  const raw = request.headers.get('cookie') ?? ''
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=')
+    if (k === name) return decodeURIComponent(v.join('='))
+  }
+  return undefined
+}
 
 export async function POST(request: Request): Promise<NextResponse> {
   const body = (await request.json()) as HandleUploadBody
@@ -17,6 +27,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       body,
       request,
       onBeforeGenerateToken: async () => {
+        // Seul un utilisateur connecté peut obtenir un token d'upload.
+        // (Le callback "upload-completed" vient des serveurs Vercel, sans cookie —
+        //  il ne passe pas par ici, donc pas bloqué.)
+        const ok = await verifySessionToken(cookieValue(request, SESSION_COOKIE))
+        if (!ok) throw new Error('Non authentifié.')
         return {
           // Large liste — le client convertit normalement tout en JPEG, mais si
           // la conversion échoue (TIFF, BMP exotiques...) on accepte quand même

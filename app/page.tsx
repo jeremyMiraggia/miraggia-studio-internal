@@ -5,16 +5,30 @@ import { useRouter } from 'next/navigation'
 export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
   const router = useRouter()
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
-    const expected = process.env.NEXT_PUBLIC_APP_PASSWORD
-    if (expected && password === expected) {
-      localStorage.setItem('studio_auth', 'true')
-      router.push('/studio')
-    } else {
-      setError('Mot de passe incorrect')
+    setError('')
+    setBusy(true)
+    try {
+      // Vérification côté serveur : le mot de passe n'est jamais dans le code client.
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      if (res.ok) {
+        router.push('/studio')
+      } else {
+        const j = await res.json().catch(() => ({}))
+        setError(j.error || 'Mot de passe incorrect')
+      }
+    } catch {
+      setError('Connexion impossible')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -35,8 +49,8 @@ export default function LoginPage() {
             style={{ width: '100%', padding: '11px 14px', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 8, fontSize: 14, marginBottom: 12, boxSizing: 'border-box' as const, fontFamily: 'system-ui' }}
           />
           {error && <p style={{ color: '#c0392b', fontSize: 12, marginBottom: 10 }}>{error}</p>}
-          <button type="submit" style={{ width: '100%', padding: 12, background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-            Accéder au Studio →
+          <button type="submit" disabled={busy} style={{ width: '100%', padding: 12, background: busy ? '#6B7A8A' : '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: busy ? 'wait' : 'pointer' }}>
+            {busy ? 'Vérification…' : 'Accéder au Studio →'}
           </button>
         </form>
       </div>
