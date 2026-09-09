@@ -1,349 +1,282 @@
 'use client'
+/**
+ * Onglet 🎬 Video — Kling 3.0 via fal.ai.
+ *
+ * Modes : image → vidéo, ou image de départ + image de fin (transition).
+ * Les images partent en upload direct Blob (pas de limite 4.5 MB), la requête
+ * est mise en file chez fal, on poll le statut, la vidéo finale est copiée
+ * sur Vercel Blob et listée dans un historique de session.
+ */
 import { useEffect, useRef, useState } from 'react'
+import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
+import { VIDEO_PRICE_PER_SEC } from '@/lib/video'
 
-type Mode = 'text2video' | 'image2video' | 'image2video_pair'
+type Mode = 'i2v' | 'i2v_pair'
+type Tier = 'standard' | 'pro'
 
-const RESOLUTIONS = ['720p', '1080p', '4k'] as const
-const ASPECTS     = ['9:16', '16:9', '1:1'] as const
-const DURATIONS   = [3, 4, 5, 6, 7, 8, 9, 10] as const
+type Job = {
+  id:         string
+  requestId:  string
+  endpoint:   string
+  tier:       Tier
+  mode:       Mode
+  prompt:     string
+  duration:   number
+  audio:      boolean
+  startUrl:   string
+  endUrl?:    string
+  status:     'pending' | 'succeeded' | 'failed'
+  phase?:     string
+  position?:  number
+  videoUrl?:  string
+  error?:     string
+  createdAt:  number
+  raw?:       any
+}
 
-const POLL_INTERVAL_MS  = 8_000
-const POLL_TIMEOUT_MS   = 20 * 60 * 1000
+const POLL_INTERVAL_MS = 6_000
+const POLL_TIMEOUT_MS  = 20 * 60 * 1000
 
 export default function VideoTab() {
-  const [mode, setMode]               = useState<Mode>('image2video')
-  const [prompt, setPrompt]           = useState('')
-  const [negative, setNegative]       = useState('')
-  const [start, setStart]             = useState<File[]>([])
-  const [end, setEnd]                 = useState<File[]>([])
-  const [resolution, setResolution]   = useState<typeof RESOLUTIONS[number]>('1080p')
-  const [aspect, setAspect]           = useState<typeof ASPECTS[number]>('9:16')
-  const [duration, setDuration]       = useState<number>(5)
-  const [audio, setAudio]             = useState<boolean>(false)
+  const [mode, setMode]         = useState<Mode>('i2v')
+  const [tier, setTier]         = useState<Tier>('standard')
+  const [prompt, setPrompt]     = useState('')
+  const [start, setStart]       = useState<File[]>([])
+  const [end, setEnd]           = useState<File[]>([])
+  const [duration, setDuration] = useState(5)
+  const [audio, setAudio]       = useState(false)
 
-  const [submitting, setSubmitting]   = useState(false)
-  const [polling, setPolling]         = useState(false)
-  const [progress, setProgress]       = useState('')
-  const [error, setError]             = useState<string | null>(null)
-  const [timedOut, setTimedOut]       = useState(false)
-  const [videoUrl, setVideoUrl]       = useState<string | null>(null)
-  const [taskId, setTaskId]           = useState<string | null>(null)
-  const [endpoint, setEndpoint]       = useState<string>('image2video')
-  const [rawResponse, setRawResponse] = useState<any>(null)
-  const [showRaw, setShowRaw]         = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [progress, setProgress]     = useState('')
+  const [error, setError]           = useState<string | null>(null)
+  const [jobs, setJobs]             = useState<Job[]>([])
+  const jobsRef                     = useRef<Job[]>([])
+  const timersRef                   = useRef<Map<string, number>>(new Map())
+  const [showRaw, setShowRaw]       = useState<string | null>(null)
 
-  const pollRef = useRef<number | null>(null)
-  const startedAtRef = useRef<number>(0)
+  useEffect(() => () => { timersRef.current.forEach(t => clearTimeout(t)); timersRef.current.clear() }, [])
 
-  useEffect(() => () => {
-    if (pollRef.current) {
-      clearTimeout(pollRef.current)
-      pollRef.current = null
-    }
-  }, [])
+  const updateJob = (id: string, patch: Partial<Job>) => {
+    setJobs(prev => {
+      const next = prev.map(j => j.id === id ? { ...j, ...patch } : j)
+      jobsRef.current = next
+      return next
+    })
+  }
 
+  const estCost = (() => {
+    const p = VIDEO_PRICE_PER_SEC[tier]
+    return ((audio ? p.audio : p.noAudio) * duration).toFixed(2)
+  })()
+
+  /* ----------- Soumission ----------- */
   const handleSubmit = async () => {
     setError(null)
-    setVideoUrl(null)
-    setTaskId(null)
-    setRawResponse(null)
-    setTimedOut(false)
-    if (!prompt.trim()) {
-      setError('Ajoute un prompt avant de générer.')
-      return
-    }
-    if (mode !== 'text2video' && !start.length) {
-      setError('Image de départ requise.')
-      return
-    }
-    if (mode === 'image2video_pair' && !end.length) {
-      setError('Image de fin requise pour ce mode.')
-      return
-    }
+    if (!prompt.trim())               { setError('Ajoute un prompt de mouvement.'); return }
+    if (!start.length)                { setError('Image de départ requise.'); return }
+    if (mode === 'i2v_pair' && !end.length) { setError('Image de fin requise pour ce mode.'); return }
 
     setSubmitting(true)
     try {
-      setProgress('Compression des images…')
-      const startC = start.length ? await compressImage(start[0], { maxSide: 1920, quality: 0.88 }) : null
-      const endC   = end.length   ? await compressImage(end[0],   { maxSide: 1920, quality: 0.88 }) : null
-
-      setProgress('Envoi à Kling…')
-      const fd = new FormData()
-      fd.append('mode',        mode)
-      fd.append('prompt',      prompt)
-      if (negative.trim()) fd.append('negative', negative)
-      fd.append('duration',    String(duration))
-      fd.append('resolution',  resolution)
-      fd.append('aspectRatio', aspect)
-      fd.append('audio',       audio ? 'on' : 'off')
-      if (startC) fd.append('image', startC)
-      if (endC)   fd.append('imageTail', endC)
-
-      const res  = await fetch('/api/studio/video/create', { method: 'POST', body: fd })
-      let data: any = null
-      try { data = await res.json() } catch { /* */ }
-
-      if (!res.ok) {
-        setError((data && (data.error || data.message)) || `HTTP ${res.status} ${res.statusText}`)
-        setSubmitting(false)
-        setProgress('')
-        return
+      setProgress('Upload des images…')
+      const up = async (f: File) => {
+        // Compression légère : Kling accepte 720-1920 px, inutile d'envoyer du 4K
+        let file = f
+        try { file = await compressImage(f, { maxSide: 1920, quality: 0.92 }) } catch { /* brut */ }
+        const b = await upload(`video-inputs/${Date.now()}-${file.name}`, file, {
+          access: 'public', handleUploadUrl: '/api/blob-upload',
+          contentType: file.type || 'application/octet-stream',
+        })
+        return b.url
       }
+      const startUrl = await up(start[0])
+      const endUrl   = mode === 'i2v_pair' ? await up(end[0]) : undefined
 
-      setTaskId(data.taskId)
-      setEndpoint(data.endpoint)
-      setSubmitting(false)
-      setPolling(true)
-      setProgress('Tâche soumise · attente du rendu…')
-      startedAtRef.current = Date.now()
-      poll(data.taskId, data.endpoint)
+      setProgress('Mise en file chez fal…')
+      const res = await fetch('/api/studio/video/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier, prompt, startImageUrl: startUrl, endImageUrl: endUrl, duration, audio }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error([data.error, data.detail].filter(Boolean).join(' — ') || `HTTP ${res.status}`)
+
+      const job: Job = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        requestId: data.requestId, endpoint: data.endpoint, tier, mode, prompt, duration, audio,
+        startUrl, endUrl, status: 'pending', phase: 'queue', createdAt: Date.now(),
+      }
+      setJobs(prev => { const next = [job, ...prev]; jobsRef.current = next; return next })
+      schedulePoll(job.id, 1500)
+      setProgress('')
     } catch (e: any) {
-      setError(e?.message ?? 'Erreur réseau')
+      setError(e?.message ?? String(e))
+    } finally {
       setSubmitting(false)
       setProgress('')
     }
   }
 
-  const poll = (id: string, ep: string) => {
-    pollRef.current = window.setTimeout(async () => {
-      try {
-        const r = await fetch(`/api/studio/video/status?id=${encodeURIComponent(id)}&endpoint=${ep}`)
-        const data = await r.json()
-        setRawResponse(data?.raw ?? data ?? null)
+  /* ----------- Polling ----------- */
+  const schedulePoll = (jobId: string, delay = POLL_INTERVAL_MS) => {
+    const t = window.setTimeout(() => pollOnce(jobId), delay)
+    timersRef.current.set(jobId, t)
+  }
 
-        if (!r.ok) {
-          setError(data?.error || `HTTP ${r.status}`)
-          setPolling(false)
-          setProgress('')
-          return
-        }
-
-        const status = String(data.status ?? '').toLowerCase()
-        if (status === 'succeeded' && data.videoUrl) {
-          setVideoUrl(data.videoUrl)
-          setPolling(false)
-          setProgress('')
-          return
-        }
-        if (status === 'failed') {
-          setError(data.message || 'Kling a renvoyé un échec.')
-          setPolling(false)
-          setProgress('')
-          return
-        }
-        if (status === 'unknown') {
-          // Tâche terminée mais URL pas reconnue dans la réponse.
-          setError(data.message || 'Tâche terminée mais URL vidéo non trouvée dans la réponse Kling. Ouvre "Voir la réponse brute" ci-dessous.')
-          setShowRaw(true)
-          setPolling(false)
-          setProgress('')
-          return
-        }
-
-        const elapsed = Date.now() - startedAtRef.current
-        if (elapsed > POLL_TIMEOUT_MS) {
-          setTimedOut(true)
-          setPolling(false)
-          setProgress('')
-          setError(`Pas de réponse après ${formatDuration(elapsed)}. La tâche peut encore aboutir côté Kling — utilise "Reprendre le suivi" plus tard.`)
-          return
-        }
-
-        setProgress(`Rendu en cours · ${formatDuration(elapsed)} · statut : ${status || 'processing'}`)
-        poll(id, ep)
-      } catch (e: any) {
-        setError(e?.message ?? 'Erreur de polling')
-        setPolling(false)
-        setProgress('')
+  const pollOnce = async (jobId: string) => {
+    const job = jobsRef.current.find(j => j.id === jobId)
+    if (!job || job.status !== 'pending') return
+    if (Date.now() - job.createdAt > POLL_TIMEOUT_MS) {
+      updateJob(jobId, { status: 'failed', error: 'Délai dépassé (20 min). Relance le suivi si besoin.' })
+      return
+    }
+    try {
+      const r = await fetch(`/api/studio/video/status?requestId=${encodeURIComponent(job.requestId)}&endpoint=${encodeURIComponent(job.endpoint)}`)
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error([d.error, d.detail].filter(Boolean).join(' — ') || `HTTP ${r.status}`)
+      if (d.status === 'succeeded') {
+        updateJob(jobId, { status: 'succeeded', videoUrl: d.videoUrl, raw: d.raw, error: d.blobError ? `Copie Blob échouée (URL fal temporaire) : ${d.blobError}` : undefined })
+        return
       }
-    }, POLL_INTERVAL_MS)
+      if (d.status === 'failed') {
+        updateJob(jobId, { status: 'failed', error: d.message || 'Échec fal.', raw: d.raw })
+        return
+      }
+      updateJob(jobId, { phase: d.phase, position: d.position, raw: d.raw })
+      schedulePoll(jobId)
+    } catch (e: any) {
+      // Erreur réseau ponctuelle : on réessaie
+      updateJob(jobId, { phase: `retry (${(e?.message ?? '').slice(0, 60)})` })
+      schedulePoll(jobId)
+    }
   }
 
-  const resumePolling = () => {
-    if (!taskId) return
-    setError(null)
-    setTimedOut(false)
-    setPolling(true)
-    setProgress('Vérification du statut…')
-    if (!startedAtRef.current) startedAtRef.current = Date.now()
-    poll(taskId, endpoint)
+  const resume = (jobId: string) => {
+    updateJob(jobId, { status: 'pending', error: undefined, createdAt: Date.now() })
+    schedulePoll(jobId, 500)
   }
 
-  const cancelPolling = () => {
-    if (pollRef.current) clearTimeout(pollRef.current)
-    pollRef.current = null
-    setPolling(false)
-    setProgress('')
+  const download = async (job: Job) => {
+    if (!job.videoUrl) return
+    try {
+      const r = await fetch(job.videoUrl)
+      const b = await r.blob()
+      const u = URL.createObjectURL(b)
+      const a = document.createElement('a')
+      a.href = u; a.download = `miraggia_video_${job.duration}s_${job.createdAt}.mp4`
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(u), 5000)
+    } catch { window.open(job.videoUrl, '_blank') }
   }
 
-  const copyTaskId = async () => {
-    if (!taskId) return
-    try { await navigator.clipboard.writeText(taskId) } catch { /* */ }
-  }
-
-  const copyRaw = async () => {
-    if (!rawResponse) return
-    try { await navigator.clipboard.writeText(JSON.stringify(rawResponse, null, 2)) } catch { /* */ }
-  }
-
-  const loading = submitting || polling
+  const busy = submitting
 
   return (
     <div>
       <h2 style={styles.title}>🎬 Video</h2>
-      <p style={styles.sub}>Génération vidéo Kling V3.0 — image de départ, image start+end, ou pur texte. Audio optionnel.</p>
+      <p style={styles.sub}>Kling 3.0 via fal.ai — anime un visuel, ou fait la transition entre deux visuels (face → dos). ≈ {VIDEO_PRICE_PER_SEC.standard.noAudio} $/s sans audio.</p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '400px 1fr', gap: 24 }}>
         <div style={styles.card}>
-          {/* Mode */}
           <label style={styles.label}>Mode</label>
-          <div style={styles.modeGroup}>
-            <ModeBtn label="🖼️ Image → vidéo"        active={mode === 'image2video'}      onClick={() => setMode('image2video')} />
-            <ModeBtn label="🎞️ Image start + end"    active={mode === 'image2video_pair'} onClick={() => setMode('image2video_pair')} />
-            <ModeBtn label="✍️ Texte seul"           active={mode === 'text2video'}        onClick={() => setMode('text2video')} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            <ModeBtn label="🖼️ Image → vidéo"     active={mode === 'i2v'}      onClick={() => setMode('i2v')} />
+            <ModeBtn label="🎞️ Start → End frame" active={mode === 'i2v_pair'} onClick={() => setMode('i2v_pair')} />
           </div>
 
-          {/* Prompt */}
-          <label style={styles.label}>Prompt</label>
+          <label style={styles.label}>Image de départ</label>
+          <Dropzone files={start} onChange={setStart} label="Glisse le visuel de départ" hint="Ton visuel validé (720-1920 px)" minHeight={90} />
+
+          {mode === 'i2v_pair' && (
+            <>
+              <label style={styles.label}>Image de fin</label>
+              <Dropzone files={end} onChange={setEnd} label="Glisse le visuel d'arrivée" hint="Même mannequin, même fond — ex. vue de dos" minHeight={90} />
+            </>
+          )}
+
+          <label style={styles.label}>Prompt de mouvement</label>
           <textarea
             value={prompt}
             onChange={e => setPrompt(e.target.value)}
-            placeholder="Ex : mannequin marchant lentement sur une plage de galets, golden hour, contre-jour, mouvement souple, plan rapproché, ralenti subtil."
+            placeholder={mode === 'i2v_pair'
+              ? 'Ex : the model turns slowly on the spot from front to back, natural walking rhythm, fabric follows the motion, camera fixed, studio lighting unchanged.'
+              : 'Ex : the model shifts her weight and takes one slow step toward the camera, hair and fabric move naturally, subtle camera push-in, studio lighting unchanged.'}
             style={styles.textarea}
           />
 
-          <label style={styles.label}>Negative prompt (optionnel)</label>
-          <input
-            value={negative}
-            onChange={e => setNegative(e.target.value)}
-            placeholder="Ex : flou excessif, déformation, mains anormales"
-            style={styles.input}
-          />
-
-          {/* Images */}
-          {mode !== 'text2video' && (
-            <>
-              <label style={styles.label}>Image de départ</label>
-              <Dropzone files={start} onChange={setStart} label="Glisse l'image de départ" hint="Format ≥ 1080px conseillé" minHeight={90} />
-            </>
-          )}
-          {mode === 'image2video_pair' && (
-            <>
-              <label style={styles.label}>Image de fin</label>
-              <Dropzone files={end} onChange={setEnd} label="Glisse l'image de fin" hint="Même format que l'image de départ" minHeight={90} />
-            </>
-          )}
-
-          {/* Réglages */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
-              <label style={styles.label}>Résolution</label>
-              <select value={resolution} onChange={e => setResolution(e.target.value as any)} style={styles.select}>
-                {RESOLUTIONS.map(r => <option key={r} value={r}>{r.toUpperCase()}</option>)}
+              <label style={styles.label}>Qualité</label>
+              <select value={tier} onChange={e => setTier(e.target.value as Tier)} style={styles.select}>
+                <option value="standard">Kling 3.0 Standard</option>
+                <option value="pro">Kling 3.0 Pro</option>
               </select>
             </div>
-            {mode === 'text2video' && (
-              <div>
-                <label style={styles.label}>Format</label>
-                <select value={aspect} onChange={e => setAspect(e.target.value as any)} style={styles.select}>
-                  {ASPECTS.map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label style={styles.label}>Durée : {duration}s</label>
-            <input
-              type="range"
-              min={3}
-              max={10}
-              step={1}
-              value={duration}
-              onChange={e => setDuration(Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
-            <div style={styles.rangeTicks}>
-              {DURATIONS.map(d => <span key={d}>{d}s</span>)}
+            <div>
+              <label style={styles.label}>Durée : {duration}s · ≈ {estCost} $</label>
+              <input type="range" min={3} max={15} step={1} value={duration}
+                     onChange={e => setDuration(Number(e.target.value))} style={{ width: '100%', marginTop: 8 }} />
             </div>
           </div>
 
           <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C' }}>
             <input type="checkbox" checked={audio} onChange={e => setAudio(e.target.checked)} />
-            Activer le son (sound effects / ambiance)
+            Audio natif (+50 % du coût)
           </label>
 
           {error && <p style={styles.errorBox}>⚠ {error}</p>}
 
-          <button onClick={handleSubmit} disabled={loading} style={{ ...styles.btn, opacity: loading ? 0.7 : 1 }}>
-            {loading ? progress || 'Génération…' : `✦ Générer la vidéo`}
+          <button onClick={handleSubmit} disabled={busy} style={{ ...styles.btn, opacity: busy ? 0.7 : 1 }}>
+            {busy ? progress || 'Envoi…' : '✦ Générer la vidéo'}
           </button>
-
-          {polling && (
-            <button onClick={cancelPolling} style={styles.btnSecondary}>
-              Arrêter le suivi (la tâche continue côté Kling)
-            </button>
-          )}
-
-          {timedOut && taskId && !polling && (
-            <button onClick={resumePolling} style={styles.btnAccent}>
-              ↺ Reprendre le suivi de cette tâche
-            </button>
-          )}
-
-          {taskId && (
-            <div style={styles.hintSubtle}>
-              ID de tâche :{' '}
-              <code style={{ background: '#E8F2F5', padding: '1px 5px', borderRadius: 3 }}>{taskId}</code>{' '}
-              <button onClick={copyTaskId} style={styles.copyChip}>📋</button>
-            </div>
-          )}
+          <p style={styles.hintSubtle}>Le format de sortie suit l'image de départ. Rendu : 1 à 4 min selon la file fal. Tu peux lancer plusieurs vidéos en parallèle.</p>
         </div>
 
-        {/* Résultat */}
-        <div>
-          {!videoUrl && !loading && !error && (
-            <div style={styles.emptyState}>La vidéo apparaîtra ici une fois générée.</div>
+        {/* ----------- Historique / résultats ----------- */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {jobs.length === 0 && (
+            <div style={styles.emptyState}>Les vidéos apparaîtront ici. Historique de session (perdu au rechargement).</div>
           )}
-          {loading && !videoUrl && (
-            <div style={styles.emptyState}>⏳ {progress || 'Préparation…'}</div>
-          )}
-
-          {videoUrl && (
-            <div style={styles.resultCard}>
-              <video
-                controls
-                src={videoUrl}
-                style={{ width: '100%', borderRadius: 8, display: 'block', background: '#000' }}
-                autoPlay
-                loop
-              />
-              <div style={{ display: 'flex', gap: 8, padding: 10, borderTop: '1px solid rgba(13,74,92,0.08)' }}>
-                <a href={videoUrl} download={`miraggia_video_${Date.now()}.mp4`} style={styles.downloadBtn}>⬇ Télécharger</a>
-                <a href={videoUrl} target="_blank" rel="noreferrer" style={styles.linkBtn}>↗ Ouvrir</a>
-              </div>
-            </div>
-          )}
-
-          {/* Bloc debug réponse brute */}
-          {rawResponse && (
-            <div style={styles.debugBox}>
-              <div style={styles.debugHeader}>
-                <span>🔧 Réponse Kling brute</span>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => setShowRaw(s => !s)} style={styles.copyChipDark}>
-                    {showRaw ? 'Masquer' : 'Afficher'}
-                  </button>
-                  <button onClick={copyRaw} style={styles.copyChipDark}>📋 Copier</button>
+          {jobs.map(job => (
+            <div key={job.id} style={styles.resultCard}>
+              <div style={{ display: 'grid', gridTemplateColumns: job.videoUrl ? '1fr 1fr' : '1fr', gap: 12, padding: 12 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <img src={job.startUrl} alt="start" style={{ width: 64, borderRadius: 6, objectFit: 'cover', aspectRatio: '3/4' }} />
+                  {job.endUrl && <img src={job.endUrl} alt="end" style={{ width: 64, borderRadius: 6, objectFit: 'cover', aspectRatio: '3/4' }} />}
+                  <div style={{ fontSize: 12, color: '#374151', flex: 1 }}>
+                    <div style={{ fontWeight: 600, color: '#0D4A5C' }}>
+                      {job.mode === 'i2v_pair' ? 'Start → End' : 'Image → vidéo'} · Kling 3.0 {job.tier} · {job.duration}s{job.audio ? ' · audio' : ''}
+                    </div>
+                    <div style={{ color: '#6B7A8A', marginTop: 2, maxHeight: 48, overflow: 'hidden' }} title={job.prompt}>{job.prompt}</div>
+                    <div style={{ marginTop: 6 }}>
+                      {job.status === 'pending' && (
+                        <span style={{ color: '#B45309' }}>
+                          ⏳ {job.phase === 'queue' ? `en file${job.position != null ? ` (position ${job.position})` : ''}` : job.phase === 'rendering' ? 'rendu en cours' : job.phase ?? '…'} · {formatDuration(Date.now() - job.createdAt)}
+                        </span>
+                      )}
+                      {job.status === 'succeeded' && <span style={{ color: '#10B981' }}>✓ prête</span>}
+                      {job.status === 'failed' && (
+                        <span style={{ color: '#B91C1C' }}>✕ {job.error} <button onClick={() => resume(job.id)} style={styles.copyChip}>↺ reprendre</button></span>
+                      )}
+                      {job.status === 'succeeded' && job.error && <div style={{ color: '#B45309', fontSize: 11 }}>⚠ {job.error}</div>}
+                    </div>
+                    <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {job.videoUrl && <button onClick={() => download(job)} style={styles.downloadBtn}>⬇ Télécharger</button>}
+                      {job.videoUrl && <a href={job.videoUrl} target="_blank" rel="noreferrer" style={styles.linkBtn}>↗ Ouvrir</a>}
+                      {job.raw && <button onClick={() => setShowRaw(showRaw === job.id ? null : job.id)} style={styles.linkBtn}>🔧 brut</button>}
+                    </div>
+                  </div>
                 </div>
+                {job.videoUrl && (
+                  <video controls src={job.videoUrl} style={{ width: '100%', borderRadius: 8, background: '#000' }} loop />
+                )}
               </div>
-              {showRaw && (
-                <pre style={styles.rawPre}>{JSON.stringify(rawResponse, null, 2)}</pre>
+              {showRaw === job.id && job.raw && (
+                <pre style={styles.rawPre}>{JSON.stringify(job.raw, null, 2)}</pre>
               )}
             </div>
-          )}
+          ))}
         </div>
       </div>
     </div>
@@ -353,50 +286,33 @@ export default function VideoTab() {
 function ModeBtn({ label, active, onClick }: { label: string, active: boolean, onClick: () => void }) {
   return (
     <button onClick={onClick} style={{
-      ...modeBtn,
-      background: active ? '#0D4A5C' : '#fff',
-      color:      active ? '#C8F07D' : '#0D4A5C',
-      borderColor: active ? '#0D4A5C' : 'rgba(13,74,92,0.2)',
-      fontWeight: active ? 700 : 600,
+      padding: '8px 10px', border: '1px solid', borderRadius: 7, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', textAlign: 'center',
+      background: active ? '#0D4A5C' : '#fff', color: active ? '#C8F07D' : '#0D4A5C',
+      borderColor: active ? '#0D4A5C' : 'rgba(13,74,92,0.2)', fontWeight: active ? 700 : 600,
     }}>{label}</button>
   )
 }
 
 function formatDuration(ms: number): string {
   const total = Math.floor(ms / 1000)
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  if (m === 0) return `${s}s`
-  return `${m}m ${String(s).padStart(2, '0')}s`
-}
-
-const modeBtn: React.CSSProperties = {
-  padding: '8px 10px', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 7,
-  fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', textAlign: 'center',
+  const m = Math.floor(total / 60), s = total % 60
+  return m === 0 ? `${s}s` : `${m}m ${String(s).padStart(2, '0')}s`
 }
 
 const styles: Record<string, React.CSSProperties> = {
   title:       { fontFamily: 'system-ui', fontSize: 22, fontWeight: 700, color: '#0D4A5C', marginBottom: 4 },
   sub:         { fontSize: 13, color: '#6B7A8A', marginBottom: 24 },
-  card:        { background: '#fff', borderRadius: 12, padding: 20, border: '1px solid rgba(13,74,92,0.1)', display: 'flex', flexDirection: 'column', gap: 12 },
+  card:        { background: '#fff', borderRadius: 12, padding: 20, border: '1px solid rgba(13,74,92,0.1)', display: 'flex', flexDirection: 'column', gap: 12, alignSelf: 'start' },
   label:       { fontSize: 11, fontWeight: 700, color: '#6B7A8A', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 4 },
-  modeGroup:   { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 },
-  textarea:    { width: '100%', padding: '10px 12px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', resize: 'vertical', minHeight: 110, boxSizing: 'border-box' as const, lineHeight: 1.45 },
-  input:       { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' as const },
+  textarea:    { width: '100%', padding: '10px 12px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', resize: 'vertical', minHeight: 100, boxSizing: 'border-box' as const, lineHeight: 1.45 },
   select:      { width: '100%', padding: '8px 10px', border: '1px solid rgba(13,74,92,0.15)', borderRadius: 7, fontSize: 13, fontFamily: 'system-ui', background: '#fff' },
-  rangeTicks:  { display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#9BA8B5', marginTop: 2 },
   btn:         { padding: '12px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
-  btnSecondary:{ padding: '9px', background: '#fff', color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.25)', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  btnAccent:   { padding: '10px', background: '#C8F07D', color: '#0D4A5C', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'system-ui' },
   emptyState:  { textAlign: 'center', padding: '60px 0', color: '#6B7A8A', fontSize: 14, border: '1px dashed rgba(13,74,92,0.2)', borderRadius: 12, background: '#fff' },
   resultCard:  { background: '#fff', borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(13,74,92,0.1)' },
-  downloadBtn: { padding: '7px 12px', fontSize: 12, color: '#fff', background: '#0D4A5C', borderRadius: 6, textDecoration: 'none', fontWeight: 600 },
-  linkBtn:     { padding: '7px 12px', fontSize: 12, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 6, textDecoration: 'none', fontWeight: 600 },
+  downloadBtn: { padding: '6px 10px', fontSize: 12, color: '#fff', background: '#0D4A5C', borderRadius: 6, border: 'none', cursor: 'pointer', fontWeight: 600, fontFamily: 'system-ui' },
+  linkBtn:     { padding: '6px 10px', fontSize: 12, color: '#0D4A5C', border: '1px solid rgba(13,74,92,0.2)', borderRadius: 6, textDecoration: 'none', fontWeight: 600, background: '#fff', cursor: 'pointer', fontFamily: 'system-ui' },
   errorBox:    { background: '#FDECEC', color: '#9B1C1C', border: '1px solid #F5C2C2', padding: '8px 10px', borderRadius: 7, fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   hintSubtle:  { fontSize: 11, color: '#6B7A8A', margin: 0, lineHeight: 1.5 },
-  copyChip:    { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 12 },
-  copyChipDark:{ padding: '4px 8px', background: '#0D4A5C', color: '#C8F07D', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  debugBox:    { marginTop: 16, background: '#1B2A33', color: '#C8F07D', borderRadius: 10, padding: 12, fontFamily: 'monospace', fontSize: 11 },
-  debugHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontFamily: 'system-ui', color: '#fff' },
-  rawPre:      { margin: 0, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
+  copyChip:    { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 12, color: '#0D4A5C', textDecoration: 'underline' },
+  rawPre:      { margin: 0, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#1B2A33', color: '#C8F07D', fontSize: 11, padding: 12 },
 }
