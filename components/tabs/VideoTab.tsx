@@ -39,6 +39,18 @@ type Job = {
 const POLL_INTERVAL_MS = 6_000
 const POLL_TIMEOUT_MS  = 20 * 60 * 1000
 
+type Shot = { prompt: string; duration: number }
+
+/** Scénario e-com type : 4 plans, 12 s, rythme posé. */
+const ECOM_PRESET: Shot[] = [
+  { duration: 3, prompt: 'Full-body shot, camera static. The model stands relaxed, shifts her weight slightly from one leg to the other, breathes naturally. Fabric settles gently. Studio lighting and neutral background unchanged.' },
+  { duration: 3, prompt: 'Cut to a slow cinematic push-in from full body to mid-body. The model turns her torso a few degrees toward the camera and back, hands relax at her sides. Smooth, unhurried motion.' },
+  { duration: 3, prompt: 'Cut to a close-up on the garment: slow pan across the fabric texture, seams and details, following the model\'s subtle movement. Shallow depth of field, sharp on the textile.' },
+  { duration: 3, prompt: 'Cut back to full body. The model takes one slow step toward the camera and settles into a calm final pose, looking at the lens. Camera static. Same lighting, same background.' },
+]
+
+const SINGLE_PRESET = 'Full-body e-commerce fashion video, camera almost static with a very slow push-in. The model shifts her weight, takes one slow step toward the camera and settles into a calm pose, looking at the lens. Fabric and hair move naturally. Studio lighting and neutral background unchanged, no camera shake, no fast motion, no zoom bursts.'
+
 export default function VideoTab() {
   const [mode, setMode]         = useState<Mode>('i2v')
   const [tier, setTier]         = useState<Tier>('standard')
@@ -47,6 +59,11 @@ export default function VideoTab() {
   const [end, setEnd]           = useState<File[]>([])
   const [duration, setDuration] = useState(5)
   const [audio, setAudio]       = useState(false)
+  // Multi-plans (coupes) — remplace le prompt unique
+  const [multi, setMulti]       = useState(false)
+  const [shots, setShots]       = useState<Shot[]>(ECOM_PRESET)
+  const shotsTotal = shots.reduce((a, s) => a + s.duration, 0)
+  const effectiveDuration = multi ? shotsTotal : duration
 
   const [submitting, setSubmitting] = useState(false)
   const [progress, setProgress]     = useState('')
@@ -68,13 +85,16 @@ export default function VideoTab() {
 
   const estCost = (() => {
     const p = VIDEO_PRICE_PER_SEC[tier]
-    return ((audio ? p.audio : p.noAudio) * duration).toFixed(2)
+    return ((audio ? p.audio : p.noAudio) * effectiveDuration).toFixed(2)
   })()
 
   /* ----------- Soumission ----------- */
   const handleSubmit = async () => {
     setError(null)
-    if (!prompt.trim())               { setError('Ajoute un prompt de mouvement.'); return }
+    const activeShots = multi ? shots.filter(s => s.prompt.trim()) : []
+    if (!multi && !prompt.trim())     { setError('Ajoute un prompt de mouvement.'); return }
+    if (multi && activeShots.length < 2) { setError('Au moins 2 plans avec un texte.'); return }
+    if (multi && shotsTotal > 15)     { setError(`Durée totale ${shotsTotal}s > 15s max.`); return }
     if (!start.length)                { setError('Image de départ requise.'); return }
     if (mode === 'i2v_pair' && !end.length) { setError('Image de fin requise pour ce mode.'); return }
 
@@ -97,14 +117,21 @@ export default function VideoTab() {
       setProgress('Mise en file chez fal…')
       const res = await fetch('/api/studio/video/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier, prompt, startImageUrl: startUrl, endImageUrl: endUrl, duration, audio }),
+        body: JSON.stringify({
+          tier, startImageUrl: startUrl, endImageUrl: endUrl, audio,
+          prompt: multi ? '' : prompt,
+          duration: effectiveDuration,
+          shots: multi ? activeShots : undefined,
+        }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error([data.error, data.detail].filter(Boolean).join(' — ') || `HTTP ${res.status}`)
 
       const job: Job = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        requestId: data.requestId, endpoint: data.endpoint, tier, mode, prompt, duration, audio,
+        requestId: data.requestId, endpoint: data.endpoint, tier, mode,
+        prompt: multi ? activeShots.map((s, i) => `[${i + 1} · ${s.duration}s] ${s.prompt}`).join('\n') : prompt,
+        duration: effectiveDuration, audio,
         startUrl, endUrl, status: 'pending', phase: 'queue', createdAt: Date.now(),
       }
       setJobs(prev => { const next = [job, ...prev]; jobsRef.current = next; return next })
@@ -195,15 +222,52 @@ export default function VideoTab() {
             </>
           )}
 
-          <label style={styles.label}>Prompt de mouvement</label>
-          <textarea
-            value={prompt}
-            onChange={e => setPrompt(e.target.value)}
-            placeholder={mode === 'i2v_pair'
-              ? 'Ex : the model turns slowly on the spot from front to back, natural walking rhythm, fabric follows the motion, camera fixed, studio lighting unchanged.'
-              : 'Ex : the model shifts her weight and takes one slow step toward the camera, hair and fabric move naturally, subtle camera push-in, studio lighting unchanged.'}
-            style={styles.textarea}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <label style={{ ...styles.label, marginBottom: 0 }}>{multi ? 'Plans (coupes)' : 'Prompt de mouvement'}</label>
+            <label style={{ fontSize: 12, color: '#0D4A5C', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={multi} onChange={e => setMulti(e.target.checked)} />
+              Multi-plans
+            </label>
+          </div>
+
+          {!multi ? (
+            <>
+              <textarea
+                value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                placeholder={mode === 'i2v_pair'
+                  ? 'Ex : the model turns slowly on the spot from front to back, natural walking rhythm, fabric follows the motion, camera fixed, studio lighting unchanged.'
+                  : SINGLE_PRESET}
+                style={styles.textarea}
+              />
+              <button onClick={() => setPrompt(SINGLE_PRESET)} style={styles.linkBtn}>📋 Prompt e-com type</button>
+            </>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {shots.map((s, i) => (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '54px 1fr 24px', gap: 6, alignItems: 'start' }}>
+                  <select value={s.duration} onChange={e => setShots(prev => prev.map((x, j) => j === i ? { ...x, duration: Number(e.target.value) } : x))}
+                          style={{ ...styles.select, padding: '6px 4px', fontSize: 12 }}>
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map(d => <option key={d} value={d}>{d}s</option>)}
+                  </select>
+                  <textarea value={s.prompt} placeholder={`Plan ${i + 1}`}
+                            onChange={e => setShots(prev => prev.map((x, j) => j === i ? { ...x, prompt: e.target.value } : x))}
+                            style={{ ...styles.textarea, minHeight: 56, fontSize: 12 }} />
+                  <button onClick={() => setShots(prev => prev.filter((_, j) => j !== i))} title="Retirer"
+                          style={{ ...styles.copyChip, textDecoration: 'none', fontSize: 14 }}>✕</button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                {shots.length < 6 && (
+                  <button onClick={() => setShots(prev => [...prev, { prompt: '', duration: 3 }])} style={styles.linkBtn}>+ plan</button>
+                )}
+                <button onClick={() => setShots(ECOM_PRESET)} style={styles.linkBtn}>📋 Scénario e-com type (4 plans, 12 s)</button>
+                <span style={{ fontSize: 11, color: shotsTotal > 15 ? '#B91C1C' : '#6B7A8A', marginLeft: 'auto' }}>
+                  total {shotsTotal}s / 15
+                </span>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
@@ -214,9 +278,11 @@ export default function VideoTab() {
               </select>
             </div>
             <div>
-              <label style={styles.label}>Durée : {duration}s · ≈ {estCost} $</label>
-              <input type="range" min={3} max={15} step={1} value={duration}
-                     onChange={e => setDuration(Number(e.target.value))} style={{ width: '100%', marginTop: 8 }} />
+              <label style={styles.label}>Durée : {effectiveDuration}s · ≈ {estCost} $</label>
+              {multi
+                ? <div style={{ fontSize: 11, color: '#6B7A8A', marginTop: 8 }}>= somme des plans</div>
+                : <input type="range" min={3} max={15} step={1} value={duration}
+                         onChange={e => setDuration(Number(e.target.value))} style={{ width: '100%', marginTop: 8 }} />}
             </div>
           </div>
 

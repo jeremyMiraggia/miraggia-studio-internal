@@ -26,18 +26,33 @@ export async function POST(request: Request) {
     const prompt: string = typeof body.prompt === 'string' ? body.prompt.trim() : ''
     const startImageUrl: string = typeof body.startImageUrl === 'string' ? body.startImageUrl : ''
     const endImageUrl: string | undefined = typeof body.endImageUrl === 'string' && body.endImageUrl ? body.endImageUrl : undefined
-    const durationNum = Math.max(3, Math.min(15, Math.round(Number(body.duration) || 5)))
     const audio: boolean = body.audio === true
+    // Multi-plans : [{ prompt, duration }] — remplace `prompt` (fal : l'un OU l'autre)
+    const shots: Array<{ prompt: string; duration: number }> = Array.isArray(body.shots)
+      ? body.shots
+          .map((s: any) => ({ prompt: String(s?.prompt ?? '').trim(), duration: Math.max(1, Math.min(15, Math.round(Number(s?.duration) || 3))) }))
+          .filter((s: any) => s.prompt)
+      : []
+    const totalFromShots = shots.reduce((a, s) => a + s.duration, 0)
+    const durationNum = shots.length
+      ? Math.max(3, Math.min(15, totalFromShots))
+      : Math.max(3, Math.min(15, Math.round(Number(body.duration) || 5)))
 
-    if (!prompt) return NextResponse.json({ error: 'Prompt requis.' }, { status: 400 })
+    if (!prompt && !shots.length) return NextResponse.json({ error: 'Prompt requis (ou au moins un plan).' }, { status: 400 })
+    if (shots.length && totalFromShots > 15) return NextResponse.json({ error: `Durée totale des plans ${totalFromShots}s > 15s max.` }, { status: 400 })
     if (!/^https?:\/\//.test(startImageUrl)) return NextResponse.json({ error: 'startImageUrl requise (URL).' }, { status: 400 })
 
     const endpoint = VIDEO_ENDPOINTS[tier]
     const input: Record<string, unknown> = {
-      prompt,
       start_image_url: startImageUrl,
       duration: String(durationNum),
       generate_audio: audio,          // défaut fal = true → +50 % : on force explicitement
+    }
+    if (shots.length) {
+      input.multi_prompt = shots.map(s => ({ prompt: s.prompt, duration: String(s.duration) }))
+      input.shot_type = 'customize'   // on définit les plans nous-mêmes
+    } else {
+      input.prompt = prompt
     }
     if (endImageUrl) input.end_image_url = endImageUrl
 
