@@ -43,8 +43,10 @@ export async function POST(request: Request) {
     if (!/^https?:\/\//.test(startImageUrl)) return NextResponse.json({ error: 'startImageUrl requise (URL).' }, { status: 400 })
 
     const endpoint = VIDEO_ENDPOINTS[tier]
+    // Schéma fal Kling O3 (llms.txt) : image_url, end_image_url, duration, generate_audio,
+    // prompt | multi_prompt, shot_type. Validation faite au run, pas au submit.
     const input: Record<string, unknown> = {
-      start_image_url: startImageUrl,
+      image_url: startImageUrl,
       duration: String(durationNum),
       generate_audio: audio,          // défaut fal = true → +50 % : on force explicitement
     }

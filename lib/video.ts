@@ -4,10 +4,10 @@ export const VIDEO_ENDPOINTS: Record<string, string> = {
   pro:      process.env.FAL_VIDEO_ENDPOINT_PRO      || 'fal-ai/kling-video/o3/pro/image-to-video',
 }
 
-/** Coût indicatif $/s (fal, sept. 2026) — pour affichage seulement. */
+/** Coût $/s (fal llms.txt, sept. 2026) — pour affichage seulement. */
 export const VIDEO_PRICE_PER_SEC: Record<string, { noAudio: number; audio: number }> = {
-  standard: { noAudio: 0.112, audio: 0.168 },
-  pro:      { noAudio: 0.112, audio: 0.168 },
+  standard: { noAudio: 0.084, audio: 0.112 },
+  pro:      { noAudio: 0.112, audio: 0.14 },
 }
 
 /** Un endpoint est-il autorisé (anti-injection depuis le client) ? */

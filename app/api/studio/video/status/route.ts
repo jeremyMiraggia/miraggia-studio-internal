@@ -78,9 +78,12 @@ export async function GET(request: Request) {
     })
   } catch (error: any) {
     const detail = error?.body?.detail ?? error?.body
-    return NextResponse.json({
-      error: error?.message ?? 'Erreur inconnue',
-      detail: detail ? JSON.stringify(detail).slice(0, 800) : undefined,
-    }, { status: error?.status ?? 500 })
+    const detailStr = detail ? JSON.stringify(detail).slice(0, 800) : undefined
+    // fal valide l'entrée au RUN, pas au submit : une 422 ici = requête définitivement
+    // invalide (champ manquant, valeur hors enum). On termine le job proprement.
+    if (error?.status === 422 || /unprocessable/i.test(error?.message ?? '')) {
+      return NextResponse.json({ status: 'failed', message: `Entrée refusée par fal : ${detailStr ?? error?.message}`, raw: detail })
+    }
+    return NextResponse.json({ error: error?.message ?? 'Erreur inconnue', detail: detailStr }, { status: error?.status ?? 500 })
   }
 }
