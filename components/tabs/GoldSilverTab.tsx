@@ -5,7 +5,7 @@
  * Par vue (front / back / details) de chaque look :
  *   IMAGE 1 = outfit porté (photo de la vue), IMAGE 2 = visage du mannequin,
  *   prompt = REFERENCES fixe + description du décor (Notion) + TECHNICAL (ratio).
- * Mannequin et décor : colonne du LOOK si remplie, sinon défaut choisi ici.
+ * Mannequin et décor : colonnes Model et Décor du LOOK, obligatoires.
  */
 import { useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
@@ -51,8 +51,6 @@ export default function GoldSilverTab() {
   const [ratio, setRatio]       = useState('2:3')
   const [quality, setQuality]   = useState('2K')
   const [concurrency, setConcurrency] = useState(2)
-  const [defaultModel, setDefaultModel] = useState('')
-  const [defaultDecor, setDefaultDecor] = useState('')
   const [running, setRunning]   = useState(false)
   const [zipping, setZipping]   = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
@@ -93,8 +91,6 @@ export default function GoldSilverTab() {
       setParsed(res)
       const ns: State[] = res.tasks.map(t => ({ task: t, status: 'pending', enabled: true, versions: [] }))
       setStates(ns); statesRef.current = ns
-      if (!defaultModel && res.models[0]) setDefaultModel(res.models[0].name)
-      if (!defaultDecor && res.decors[0]) setDefaultDecor(res.decors[0].name)
     } catch (e: any) {
       setError(e?.message ?? String(e))
     } finally {
@@ -102,15 +98,11 @@ export default function GoldSilverTab() {
     }
   }
 
-  /* ----------- Résolution mannequin / décor d'une tâche ----------- */
-  const resolveModel = (t: GSTask) => {
-    const name = t.modelName || defaultModel
-    return parsed?.models.find(m => normName(m.name) === normName(name))
-  }
-  const resolveDecor = (t: GSTask) => {
-    const name = t.decorName || defaultDecor
-    return parsed?.decors.find(d => normName(d.name) === normName(name))
-  }
+  /* ----------- Résolution mannequin / décor d'une tâche (colonnes du LOOK, obligatoires) ----------- */
+  const resolveModel = (t: GSTask) =>
+    t.modelName ? parsed?.models.find(m => normName(m.name) === normName(t.modelName!)) : undefined
+  const resolveDecor = (t: GSTask) =>
+    t.decorName ? parsed?.decors.find(d => normName(d.name) === normName(t.decorName!)) : undefined
 
   /* ----------- Dossier sortie ----------- */
   const pickOutputDir = async () => {
@@ -153,8 +145,11 @@ export default function GoldSilverTab() {
     const fail = (msg: string, status: TaskStatus = 'skipped') => setStates(prev => {
       const next = [...prev]; next[idx] = { ...next[idx], status, error: msg }; statesRef.current = next; return next
     })
-    if (!model?.faceKey) return fail(`Mannequin "${t.modelName || defaultModel || '—'}" sans FACE PHOTO.`)
-    if (!decor)          return fail(`Décor "${t.decorName || defaultDecor || '—'}" introuvable.`)
+    if (!t.modelName)    return fail('Colonne Model vide dans le LOOK.')
+    if (!model)          return fail(`Mannequin "${t.modelName}" absent de Models Definition.`)
+    if (!model.faceKey)  return fail(`Mannequin "${t.modelName}" sans FACE PHOTO dans le ZIP.`)
+    if (!t.decorName)    return fail('Colonne Décor vide dans le LOOK.')
+    if (!decor)          return fail(`Décor "${t.decorName}" absent de Decors Definition (ou description vide).`)
 
     setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
     try {
@@ -260,11 +255,12 @@ export default function GoldSilverTab() {
     return Array.from(map.entries())
   }, [states])
 
+  const [previewDecor, setPreviewDecor] = useState('')
   const previewPrompt = useMemo(() => {
-    const decor = parsed?.decors.find(d => normName(d.name) === normName(defaultDecor))
+    const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
     return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, view: 'front', sku: 'SKU' })
-  }, [parsed, defaultDecor, ratio])
+  }, [parsed, previewDecor, ratio])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
 
@@ -284,7 +280,7 @@ export default function GoldSilverTab() {
         </div>
         <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
           Chaque vue (Front / Back / Détail) de chaque look → un visuel. <strong>Image 1</strong> = l'outfit porté, <strong>Image 2</strong> = le visage du mannequin,
-          prompt = bloc REFERENCES + description du décor (tableau Decors) + ratio. Mannequin et décor : colonne du look si remplie, sinon le défaut ci-dessous.
+          prompt = bloc REFERENCES + description du décor (tableau Decors) + ratio. Le mannequin et le décor viennent des colonnes <code>Model</code> et <code>Décor</code> de chaque look — un look sans l'un des deux est signalé et ignoré.
         </p>
       </div>
 
@@ -306,21 +302,7 @@ export default function GoldSilverTab() {
 
       <div style={card}>
         <div style={label}>2 — Paramètres</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Mannequin par défaut</div>
-            <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)} style={inp} disabled={!parsed}>
-              {!parsed?.models.length && <option value="">—</option>}
-              {parsed?.models.map(m => <option key={m.name} value={m.name}>{m.name}{m.faceKey ? '' : ' (sans visage)'}</option>)}
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Décor par défaut</div>
-            <select value={defaultDecor} onChange={e => setDefaultDecor(e.target.value)} style={inp} disabled={!parsed}>
-              {!parsed?.decors.length && <option value="">—</option>}
-              {parsed?.decors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
-            </select>
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
             <select value={ratio} onChange={e => setRatio(e.target.value)} style={inp}>
@@ -347,7 +329,13 @@ export default function GoldSilverTab() {
         </div>
         {previewPrompt && (
           <details style={{ marginTop: 10 }} open={showPrompt} onToggle={e => setShowPrompt((e.target as HTMLDetailsElement).open)}>
-            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#0D4A5C' }}>Voir le prompt assemblé (décor par défaut, vue Front)</summary>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#0D4A5C' }}>
+              Voir le prompt assemblé (vue Front) —{' '}
+              <select value={previewDecor || parsed?.decors[0]?.name || ''} onChange={e => setPreviewDecor(e.target.value)}
+                      onClick={e => e.stopPropagation()} style={{ fontSize: 12 }}>
+                {parsed?.decors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
+              </select>
+            </summary>
             <pre style={{ fontSize: 11, background: '#F9FAFB', padding: 10, borderRadius: 6, whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{previewPrompt}</pre>
           </details>
         )}
@@ -380,8 +368,8 @@ export default function GoldSilverTab() {
               const sku = items[0]?.task.sku || lookId
               const allOn = items.every(i => i.enabled), anyOn = items.some(i => i.enabled)
               const t0 = items[0].task
-              const modelUsed = t0.modelName || defaultModel
-              const decorUsed = t0.decorName || defaultDecor
+              const modelOk = !!resolveModel(t0)?.faceKey
+              const decorOk = !!resolveDecor(t0)
               return (
                 <div key={lookId} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -390,8 +378,12 @@ export default function GoldSilverTab() {
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#0D4A5C' }}>
                       <span style={{ color: '#6B7280', fontWeight: 500 }}>#{lookId}</span> · {sku}
                     </div>
-                    <span style={pill('#E8F2F5', '#0D4A5C')}>👤 {modelUsed || '—'}{!t0.modelName && ' (défaut)'}</span>
-                    <span style={pill('#FEF3C7', '#92400E')}>🏞 {decorUsed || '—'}{!t0.decorName && ' (défaut)'}</span>
+                    <span style={pill(modelOk ? '#E8F2F5' : '#FEE2E2', modelOk ? '#0D4A5C' : '#991B1B')}>
+                      👤 {t0.modelName || 'Model manquant'}{t0.modelName && !modelOk ? ' (introuvable)' : ''}
+                    </span>
+                    <span style={pill(decorOk ? '#FEF3C7' : '#FEE2E2', decorOk ? '#92400E' : '#991B1B')}>
+                      🏞 {t0.decorName || 'Décor manquant'}{t0.decorName && !decorOk ? ' (introuvable)' : ''}
+                    </span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
                     {items.map(s => (

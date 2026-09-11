@@ -191,15 +191,18 @@ export async function parseGoldSilverExport(
       const key = baseToKey.get(first)
       if (!key) { warnings.push(`⚠ Look ${lookId} (${sku}) vue ${view} : "${first}" introuvable dans le ZIP.`); continue }
       const w: string[] = []
-      if (modelName && !models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition.`)
-      if (decorName && !decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition.`)
+      if (!modelName) w.push('Colonne Model vide.')
+      else if (!models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition.`)
+      if (!decorName) w.push('Colonne Décor vide.')
+      else if (!decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition.`)
       tasks.push({ id: `${lookId}-${view}`, lookId, sku, view, outfitKey: key, modelName, decorName, warnings: w })
       found++
     }
     if (found === 0) warnings.push(`⚠ Look ${lookId} (${sku}) : aucune vue (FRONT/BACK/DETAILS) — ignoré.`)
   }
 
-  warnings.push(`✅ ${tasks.length} visuel(s) à générer, ${models.length} mannequin(s), ${decors.length} décor(s).`)
+  const incomplete = tasks.filter(t => t.warnings.length > 0).length
+  warnings.push(`✅ ${tasks.length} visuel(s), ${models.length} mannequin(s), ${decors.length} décor(s).${incomplete ? ` ⚠ ${incomplete} visuel(s) sans mannequin/décor valide — ils seront ignorés.` : ''}`)
   return { tasks, models, decors, warnings, getFile }
 }
 
