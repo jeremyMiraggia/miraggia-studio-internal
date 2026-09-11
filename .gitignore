@@ -36,6 +36,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# exports Notion de test (images clients)
+/NotionGold
+/_notion_*
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

@@ -1,0 +1,436 @@
+'use client'
+/**
+ * Onglet 🥇 Gold&Silver — batch lifestyle depuis un ZIP Notion.
+ *
+ * Par vue (front / back / details) de chaque look :
+ *   IMAGE 1 = outfit porté (photo de la vue), IMAGE 2 = visage du mannequin,
+ *   prompt = REFERENCES fixe + description du décor (Notion) + TECHNICAL (ratio).
+ * Mannequin et décor : colonne du LOOK si remplie, sinon défaut choisi ici.
+ */
+import { useMemo, useRef, useState } from 'react'
+import JSZip from 'jszip'
+import { upload } from '@vercel/blob/client'
+import Dropzone from '@/components/ui/Dropzone'
+import { compressImage } from '@/lib/compressImage'
+import { parseGoldSilverExport, normName, type GSExport, type GSTask } from '@/lib/notion/parseGoldSilverExport'
+import { buildGoldSilverPrompt } from '@/lib/goldSilverPrompt'
+
+type TaskStatus = 'pending' | 'running' | 'done' | 'saved' | 'error' | 'skipped'
+type State = {
+  task:      GSTask
+  status:    TaskStatus
+  enabled:   boolean
+  imageUrl?: string
+  versions:  string[]     // historique des générations (dernière = imageUrl)
+  error?:    string
+}
+
+const VIEW_LABEL = { front: 'Front', back: 'Back', details: 'Détail' } as const
+
+function sanitizeFilename(s: string): string {
+  return s.replace(/[\/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 80) || 'visual'
+}
+async function ensureWritePermission(handle: any): Promise<boolean> {
+  try {
+    const opts = { mode: 'readwrite' as const }
+    const q = await handle.queryPermission?.(opts) ?? 'prompt'
+    if (q === 'granted') return true
+    return (await handle.requestPermission?.(opts) ?? 'denied') === 'granted'
+  } catch { return false }
+}
+
+export default function GoldSilverTab() {
+  const [zips, setZips]         = useState<File[]>([])
+  const [parsing, setParsing]   = useState(false)
+  const [parsed, setParsed]     = useState<GSExport | null>(null)
+  const [states, setStates]     = useState<State[]>([])
+  const statesRef               = useRef<State[]>([])
+  const [error, setError]       = useState<string | null>(null)
+  const [progress, setProgress] = useState('')
+
+  const [ratio, setRatio]       = useState('2:3')
+  const [quality, setQuality]   = useState('2K')
+  const [concurrency, setConcurrency] = useState(2)
+  const [defaultModel, setDefaultModel] = useState('')
+  const [defaultDecor, setDefaultDecor] = useState('')
+  const [running, setRunning]   = useState(false)
+  const [zipping, setZipping]   = useState(false)
+  const [showPrompt, setShowPrompt] = useState(false)
+
+  const outputDirHandleRef = useRef<any | null>(null)
+  const [outputDirName, setOutputDirName] = useState<string | null>(null)
+  const [savedCount, setSavedCount] = useState(0)
+
+  // Cache des uploads Blob (clé ZIP → URL) : un visage sert à toutes les vues
+  const urlCacheRef = useRef<Map<string, Promise<string>>>(new Map())
+  const uploadKey = (key: string): Promise<string> => {
+    const cache = urlCacheRef.current
+    let p = cache.get(key)
+    if (!p) {
+      p = (async () => {
+        const f = await parsed!.getFile(key)
+        if (!f) throw new Error(`Fichier ZIP introuvable : ${key}`)
+        let file = f
+        try { file = await compressImage(f, { maxSide: 2048, quality: 0.9 }) } catch { /* brut */ }
+        const b = await upload(`gold-silver-inputs/${Date.now()}-${file.name}`, file, {
+          access: 'public', handleUploadUrl: '/api/blob-upload', contentType: file.type || 'application/octet-stream',
+        })
+        return b.url
+      })()
+      cache.set(key, p)
+      p.catch(() => cache.delete(key))
+    }
+    return p
+  }
+
+  /* ----------- Parse ZIP ----------- */
+  const handleZipChange = async (files: File[]) => {
+    setZips(files); setError(null); setParsed(null); setStates([]); urlCacheRef.current.clear()
+    if (files.length === 0) return
+    setParsing(true); setProgress('Lecture du ZIP…')
+    try {
+      const res = await parseGoldSilverExport(files[0], msg => setProgress(msg))
+      setParsed(res)
+      const ns: State[] = res.tasks.map(t => ({ task: t, status: 'pending', enabled: true, versions: [] }))
+      setStates(ns); statesRef.current = ns
+      if (!defaultModel && res.models[0]) setDefaultModel(res.models[0].name)
+      if (!defaultDecor && res.decors[0]) setDefaultDecor(res.decors[0].name)
+    } catch (e: any) {
+      setError(e?.message ?? String(e))
+    } finally {
+      setParsing(false); setProgress('')
+    }
+  }
+
+  /* ----------- Résolution mannequin / décor d'une tâche ----------- */
+  const resolveModel = (t: GSTask) => {
+    const name = t.modelName || defaultModel
+    return parsed?.models.find(m => normName(m.name) === normName(name))
+  }
+  const resolveDecor = (t: GSTask) => {
+    const name = t.decorName || defaultDecor
+    return parsed?.decors.find(d => normName(d.name) === normName(name))
+  }
+
+  /* ----------- Dossier sortie ----------- */
+  const pickOutputDir = async () => {
+    try {
+      // @ts-ignore
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' })
+      if (!(await ensureWritePermission(handle))) { setError('Permission readwrite refusée.'); return }
+      outputDirHandleRef.current = handle
+      setOutputDirName(handle.name ?? 'dossier'); setSavedCount(0)
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') setError(`Sélection dossier : ${e?.message ?? e}`)
+    }
+  }
+  const fileNameFor = (s: State, version: number) =>
+    `${sanitizeFilename(s.task.sku)}_${s.task.view}${version > 1 ? `_${version}` : ''}.jpg`
+
+  const writeToOutputDir = async (s: State, url: string, version: number): Promise<boolean> => {
+    const handle = outputDirHandleRef.current
+    if (!handle) return false
+    try {
+      const resp = await fetch(url)
+      if (!resp.ok) throw new Error(`Fetch HTTP ${resp.status}`)
+      const blob = await resp.blob()
+      const fh = await handle.getFileHandle(fileNameFor(s, version), { create: true })
+      const w = await fh.createWritable(); await w.write(blob); await w.close()
+      return true
+    } catch (e: any) {
+      console.warn('[Gold&Silver] write failed', e?.message)
+      return false
+    }
+  }
+
+  /* ----------- Génération ----------- */
+  const generateOne = async (idx: number) => {
+    const state = statesRef.current[idx]
+    if (!state || !parsed) return
+    const t = state.task
+    const model = resolveModel(t)
+    const decor = resolveDecor(t)
+    const fail = (msg: string, status: TaskStatus = 'skipped') => setStates(prev => {
+      const next = [...prev]; next[idx] = { ...next[idx], status, error: msg }; statesRef.current = next; return next
+    })
+    if (!model?.faceKey) return fail(`Mannequin "${t.modelName || defaultModel || '—'}" sans FACE PHOTO.`)
+    if (!decor)          return fail(`Décor "${t.decorName || defaultDecor || '—'}" introuvable.`)
+
+    setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
+    try {
+      const [outfitUrl, faceUrl] = await Promise.all([uploadKey(t.outfitKey), uploadKey(model.faceKey)])
+      const prompt = buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, view: t.view, sku: t.sku })
+      const resp = await fetch('/api/studio/gold-silver', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outfitUrl, faceUrl, prompt, ratio, quality, sku: `${t.sku}_${t.view}` }),
+      })
+      const text = await resp.text()
+      let json: any
+      try { json = JSON.parse(text) } catch { throw new Error(`HTTP ${resp.status} : ${text.replace(/<[^>]+>/g, ' ').trim().slice(0, 160)}`) }
+      if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
+      const url: string = json.imageUrl
+      if (!url) throw new Error('Réponse sans URL.')
+
+      const version = (statesRef.current[idx]?.versions.length ?? 0) + 1
+      setStates(prev => {
+        const next = [...prev]
+        next[idx] = { ...next[idx], status: 'done', imageUrl: url, versions: [...next[idx].versions, url] }
+        statesRef.current = next; return next
+      })
+      if (outputDirHandleRef.current) {
+        const saved = await writeToOutputDir(statesRef.current[idx], url, version)
+        if (saved) {
+          setSavedCount(c => c + 1)
+          setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'saved' }; statesRef.current = next; return next })
+        }
+      }
+    } catch (e: any) {
+      fail(e?.message ?? String(e), 'error')
+    }
+  }
+
+  const runGeneration = async () => {
+    if (running || !parsed) return
+    if (statesRef.current.length === 0) { setError('Aucune tâche. Drop un ZIP Notion.'); return }
+    setRunning(true); setError(null)
+    setStates(prev => {
+      const next = prev.map(s => (s.status === 'done' || s.status === 'saved') ? s : { ...s, status: 'pending' as TaskStatus, error: undefined })
+      statesRef.current = next; return next
+    })
+    const todo = statesRef.current.map((s, idx) => ({ s, idx })).filter(({ s }) => s.enabled && s.status !== 'done' && s.status !== 'saved')
+    const pool = Math.max(1, Math.min(concurrency, 6))
+    let cursor = 0
+    await Promise.all(Array.from({ length: pool }, async () => {
+      while (cursor < todo.length) {
+        const my = cursor++
+        setProgress(`Génération ${my + 1}/${todo.length}…`)
+        await generateOne(todo[my].idx)
+      }
+    }))
+    setProgress(''); setRunning(false)
+  }
+
+  const regenerate = async (taskId: string) => {
+    const idx = statesRef.current.findIndex(s => s.task.id === taskId)
+    if (idx < 0 || running) return
+    await generateOne(idx)
+  }
+
+  /* ----------- ZIP ----------- */
+  const downloadZip = async () => {
+    const done = statesRef.current.filter(s => s.versions.length > 0)
+    if (done.length === 0) { setError('Aucun visuel généré.'); return }
+    setZipping(true); setError(null)
+    try {
+      const zip = new JSZip()
+      for (const s of done) {
+        for (let v = 0; v < s.versions.length; v++) {
+          try {
+            const resp = await fetch(s.versions[v]); if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+            zip.file(fileNameFor(s, v + 1), await resp.blob())
+          } catch (e) { console.warn('[Gold&Silver] zip skip', s.task.id, e) }
+        }
+      }
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `gold_silver_${Date.now()}.zip`; a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+    } catch (e: any) { setError(`ZIP : ${e?.message ?? e}`) }
+    finally { setZipping(false) }
+  }
+
+  /* ----------- Toggles / stats ----------- */
+  const toggleTask = (id: string) => setStates(prev => { const next = prev.map(s => s.task.id === id ? { ...s, enabled: !s.enabled } : s); statesRef.current = next; return next })
+  const toggleLook = (lookId: string, v: boolean) => setStates(prev => { const next = prev.map(s => s.task.lookId === lookId ? { ...s, enabled: v } : s); statesRef.current = next; return next })
+  const setAllEnabled = (v: boolean) => setStates(prev => { const next = prev.map(s => ({ ...s, enabled: v })); statesRef.current = next; return next })
+
+  const stats = useMemo(() => ({
+    total: states.length,
+    enabled: states.filter(s => s.enabled).length,
+    done: states.filter(s => s.status === 'done' || s.status === 'saved').length,
+    saved: states.filter(s => s.status === 'saved').length,
+    errors: states.filter(s => s.status === 'error' || s.status === 'skipped').length,
+    running: states.filter(s => s.status === 'running').length,
+    toRun: states.filter(s => s.enabled && s.status !== 'done' && s.status !== 'saved').length,
+  }), [states])
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, State[]>()
+    for (const s of states) { const arr = map.get(s.task.lookId) ?? []; arr.push(s); map.set(s.task.lookId, arr) }
+    return Array.from(map.entries())
+  }, [states])
+
+  const previewPrompt = useMemo(() => {
+    const decor = parsed?.decors.find(d => normName(d.name) === normName(defaultDecor))
+    if (!decor) return ''
+    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, view: 'front', sku: 'SKU' })
+  }, [parsed, defaultDecor, ratio])
+
+  const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
+
+  /* ----------- Styles ----------- */
+  const card: React.CSSProperties = { border: '1px solid #E5E7EB', borderRadius: 12, padding: 16, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }
+  const label: React.CSSProperties = { fontSize: 12, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, marginBottom: 6 }
+  const inp: React.CSSProperties = { border: '1px solid #D1D5DB', borderRadius: 8, padding: '6px 10px', fontSize: 14, minHeight: 34, background: '#fff', width: '100%' }
+  const btn = (bg: string, color = '#fff'): React.CSSProperties => ({ background: bg, color, border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 600, fontSize: 14, cursor: 'pointer' })
+  const pill = (bg: string, color = '#fff'): React.CSSProperties => ({ background: bg, color, borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' })
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 22 }}>🥇</span>
+          <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Gold&Silver — Lifestyle depuis Notion</h2>
+        </div>
+        <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
+          Chaque vue (Front / Back / Détail) de chaque look → un visuel. <strong>Image 1</strong> = l'outfit porté, <strong>Image 2</strong> = le visage du mannequin,
+          prompt = bloc REFERENCES + description du décor (tableau Decors) + ratio. Mannequin et décor : colonne du look si remplie, sinon le défaut ci-dessous.
+        </p>
+      </div>
+
+      <div style={card}>
+        <div style={label}>1 — ZIP Notion</div>
+        <Dropzone files={zips} onChange={handleZipChange} accept=".zip" multiple={false}
+                  label="Drop le ZIP Notion ici" hint="Export complet : LOOK (LIFESTYLE) + Models Definition + Decors Definition — taille illimitée" />
+        {parsing && <div style={{ marginTop: 8, fontSize: 13, color: '#0D4A5C' }}>⏳ {progress}</div>}
+        {parsed && (
+          <div style={{ marginTop: 8, fontSize: 12, color: '#374151', background: '#F9FAFB', padding: 8, borderRadius: 6 }}>
+            ✓ {grouped.length} look(s), {states.length} visuel(s), {parsed.models.length} mannequin(s), {parsed.decors.length} décor(s).
+            <details style={{ marginTop: 4 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 11 }}>{parsed.warnings.length} note(s) de lecture</summary>
+              <ul style={{ fontSize: 11, color: '#6B7280', margin: '4px 0', paddingLeft: 16 }}>{parsed.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+            </details>
+          </div>
+        )}
+      </div>
+
+      <div style={card}>
+        <div style={label}>2 — Paramètres</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Mannequin par défaut</div>
+            <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)} style={inp} disabled={!parsed}>
+              {!parsed?.models.length && <option value="">—</option>}
+              {parsed?.models.map(m => <option key={m.name} value={m.name}>{m.name}{m.faceKey ? '' : ' (sans visage)'}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Décor par défaut</div>
+            <select value={defaultDecor} onChange={e => setDefaultDecor(e.target.value)} style={inp} disabled={!parsed}>
+              {!parsed?.decors.length && <option value="">—</option>}
+              {parsed?.decors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
+            <select value={ratio} onChange={e => setRatio(e.target.value)} style={inp}>
+              <option value="2:3">2:3 (éditorial)</option>
+              <option value="3:4">3:4</option>
+              <option value="4:5">4:5 (Insta feed)</option>
+              <option value="9:16">9:16</option>
+              <option value="1:1">1:1</option>
+              <option value="3:2">3:2 (paysage)</option>
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Qualité</div>
+            <select value={quality} onChange={e => setQuality(e.target.value)} style={inp}>
+              <option value="1K">1K</option><option value="2K">2K</option><option value="4K">4K</option>
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Parallèle</div>
+            <select value={concurrency} onChange={e => setConcurrency(parseInt(e.target.value, 10))} style={inp}>
+              {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+        </div>
+        {previewPrompt && (
+          <details style={{ marginTop: 10 }} open={showPrompt} onToggle={e => setShowPrompt((e.target as HTMLDetailsElement).open)}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#0D4A5C' }}>Voir le prompt assemblé (décor par défaut, vue Front)</summary>
+            <pre style={{ fontSize: 11, background: '#F9FAFB', padding: 10, borderRadius: 6, whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{previewPrompt}</pre>
+          </details>
+        )}
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <button onClick={pickOutputDir} style={btn('#0D4A5C')}>📁 {outputDirName ? `Dossier : ${outputDirName}` : 'Choisir dossier de sortie'}</button>
+          {outputDirName && <button onClick={() => { outputDirHandleRef.current = null; setOutputDirName(null); setSavedCount(0) }} style={btn('#E5E7EB', '#374151')}>✕ Retirer</button>}
+          {outputDirName && <span style={{ fontSize: 12, color: '#6B7280' }}>Sauvegarde live : <strong style={{ color: '#10B981' }}>{savedCount}</strong></span>}
+        </div>
+      </div>
+
+      {states.length > 0 && (
+        <div style={card}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+            <div style={label}>3 — Visuels ({stats.enabled}/{stats.total} cochés · ✓ {stats.done} · 💾 {stats.saved} · ⏳ {stats.running} · ✕ {stats.errors})</div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button onClick={() => setAllEnabled(true)} style={btn('#E5E7EB', '#374151')}>☑ Tout</button>
+              <button onClick={() => setAllEnabled(false)} style={btn('#E5E7EB', '#374151')}>☐ Rien</button>
+              <button onClick={downloadZip} disabled={zipping || stats.done === 0} style={{ ...btn(stats.done === 0 ? '#9CA3AF' : '#374151'), cursor: stats.done === 0 ? 'not-allowed' : 'pointer' }}>
+                {zipping ? '⏳ ZIP…' : '⬇ ZIP'}
+              </button>
+              <button onClick={runGeneration} disabled={running || stats.toRun === 0}
+                      style={{ ...btn(running || stats.toRun === 0 ? '#9CA3AF' : '#0D4A5C'), cursor: running || stats.toRun === 0 ? 'not-allowed' : 'pointer' }}>
+                {running ? `⏳ ${progress || 'Génération…'}` : `🚀 Générer ${stats.toRun} visuel${stats.toRun > 1 ? 's' : ''} (≈ ${estCost} $)`}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {grouped.map(([lookId, items]) => {
+              const sku = items[0]?.task.sku || lookId
+              const allOn = items.every(i => i.enabled), anyOn = items.some(i => i.enabled)
+              const t0 = items[0].task
+              const modelUsed = t0.modelName || defaultModel
+              const decorUsed = t0.decorName || defaultDecor
+              return (
+                <div key={lookId} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                    <input type="checkbox" checked={allOn} ref={el => { if (el) el.indeterminate = anyOn && !allOn }}
+                           onChange={() => toggleLook(lookId, !allOn)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0D4A5C' }}>
+                      <span style={{ color: '#6B7280', fontWeight: 500 }}>#{lookId}</span> · {sku}
+                    </div>
+                    <span style={pill('#E8F2F5', '#0D4A5C')}>👤 {modelUsed || '—'}{!t0.modelName && ' (défaut)'}</span>
+                    <span style={pill('#FEF3C7', '#92400E')}>🏞 {decorUsed || '—'}{!t0.decorName && ' (défaut)'}</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+                    {items.map(s => (
+                      <div key={s.task.id} style={{ border: '1px solid #E5E7EB', borderRadius: 6, padding: 6, background: s.enabled ? '#fff' : '#F9FAFB', opacity: s.enabled ? 1 : 0.55 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                          <input type="checkbox" checked={s.enabled} onChange={() => toggleTask(s.task.id)} style={{ width: 14, height: 14, cursor: 'pointer' }} />
+                          {s.status === 'pending' && <span style={pill('#9CA3AF')}>•</span>}
+                          {s.status === 'running' && <span style={pill('#F59E0B')}>⏳</span>}
+                          {s.status === 'done'    && <span style={pill('#3B82F6')}>✓</span>}
+                          {s.status === 'saved'   && <span style={pill('#10B981')}>💾</span>}
+                          {s.status === 'error'   && <span style={pill('#EF4444')}>✕</span>}
+                          {s.status === 'skipped' && <span style={pill('#6B7280')}>⊘</span>}
+                          <span style={pill('#E5E7EB', '#374151')}>{VIEW_LABEL[s.task.view]}</span>
+                          {s.versions.length > 1 && <span style={{ fontSize: 10, color: '#6B7280' }}>v{s.versions.length}</span>}
+                          {(s.status === 'done' || s.status === 'saved' || s.status === 'error') && !running && (
+                            <button onClick={() => regenerate(s.task.id)} title="Regénérer (nouvelle version, l'ancienne est gardée)"
+                                    style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13 }}>↺</button>
+                          )}
+                        </div>
+                        {s.imageUrl ? (
+                          <a href={s.imageUrl} target="_blank" rel="noreferrer">
+                            <img src={s.imageUrl} alt={s.task.id} style={{ width: '100%', borderRadius: 4, display: 'block' }} />
+                          </a>
+                        ) : (
+                          <div style={{ fontSize: 10, color: '#9CA3AF', padding: '18px 0', textAlign: 'center' }}>{s.task.outfitKey.split('/').pop()}</div>
+                        )}
+                        {s.error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 4 }} title={s.error}>{s.error.slice(0, 90)}</div>}
+                        {s.task.warnings.map((w, i) => <div key={i} style={{ fontSize: 10, color: '#B45309', marginTop: 2 }}>⚠ {w}</div>)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {error && <div style={{ ...card, background: '#FEF2F2', color: '#991B1B' }}>❌ {error}</div>}
+    </div>
+  )
+}
