@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll } from '@/lib/compressImage'
 
@@ -9,6 +10,9 @@ export default function FreePromptTab() {
   const [ratio, setRatio]     = useState('9:16')
   const [quality, setQuality] = useState('2K')
   const [count, setCount]     = useState(1)
+  // Mode brut = exactement ce que fait l'app Gemini : ton prompt tel quel, tes images
+  // sans compression, aucun texte ajouté par la plateforme, pas de retry sans visage.
+  const [rawMode, setRawMode] = useState(true)
 
   const [results, setResults] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
@@ -27,17 +31,36 @@ export default function FreePromptTab() {
 
     try {
       setProgress('Préparation des références…')
-      const compressedRefs = refs.length ? await compressAll(refs) : []
+      // Mode brut : upload direct Blob SANS compression (résolution et couleurs d'origine)
+      let refUrls: string[] = []
+      let compressedRefs: File[] = []
+      if (rawMode) {
+        refUrls = await Promise.all(refs.map(async f => {
+          const b = await upload(`free-inputs/${Date.now()}-${f.name}`, f, {
+            access: 'public', handleUploadUrl: '/api/blob-upload', contentType: f.type || 'application/octet-stream',
+          })
+          return b.url
+        }))
+      } else {
+        compressedRefs = refs.length ? await compressAll(refs) : []
+      }
 
       for (let i = 0; i < count; i++) {
         setProgress(`Génération ${i + 1}/${count}…`)
-        const formData = new FormData()
-        formData.append('prompt',  prompt)
-        formData.append('ratio',   ratio)
-        formData.append('quality', quality)
-        compressedRefs.forEach(f => formData.append('refs', f))
-
-        const res = await fetch('/api/studio/free', { method: 'POST', body: formData })
+        let res: Response
+        if (rawMode) {
+          res = await fetch('/api/studio/free', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt, ratio, quality, refUrls }),
+          })
+        } else {
+          const formData = new FormData()
+          formData.append('prompt',  prompt)
+          formData.append('ratio',   ratio)
+          formData.append('quality', quality)
+          compressedRefs.forEach(f => formData.append('refs', f))
+          res = await fetch('/api/studio/free', { method: 'POST', body: formData })
+        }
         let data: any = null
         try { data = await res.json() } catch { /* corps non-JSON */ }
 
@@ -110,6 +133,16 @@ export default function FreePromptTab() {
               </select>
             </div>
           </div>
+
+          <label style={{ fontSize: 12, color: '#0D4A5C', display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={rawMode} onChange={e => setRawMode(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>
+              <strong>Mode brut</strong> (comme l'app Gemini)
+              <span style={{ display: 'block', fontSize: 11, color: '#6B7A8A' }}>
+                Ton prompt tel quel, images sans compression, aucun texte ajouté, pas de retry sans visage. Décoché = mode plateforme (consignes de sécurité ajoutées, images compressées 2048 px).
+              </span>
+            </span>
+          </label>
 
           {error && <p style={styles.errorBox}>⚠ {error}</p>}
 

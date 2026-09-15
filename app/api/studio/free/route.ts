@@ -32,8 +32,45 @@ export const runtime = 'nodejs'
  *   - 2) sans face photo (5s) — déclenché par IMAGE_SAFETY
  *   - 3) sans face photo (10s)
  */
+/** Modèle image (surchargeable par env GEMINI_IMAGE_MODEL). */
+const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
+
 export async function POST(request: Request) {
   try {
+    // ============= MODE BRUT (JSON) : prompt exact + images en URL, rien d'autre =============
+    // Reproduit au plus près ce que fait l'app Gemini : aucun texte ajouté, aucune
+    // compression des références, pas de retry qui retire le visage.
+    if ((request.headers.get('content-type') ?? '').includes('application/json')) {
+      const body = await request.json().catch(() => ({}))
+      const prompt: string = String(body.prompt ?? '').trim()
+      const ratio: string  = body.ratio ?? '9:16'
+      const quality: string = body.quality ?? '2K'
+      const refUrls: string[] = Array.isArray(body.refUrls) ? body.refUrls.filter((u: any) => typeof u === 'string' && /^https?:\/\//.test(u)) : []
+      if (!prompt) return NextResponse.json({ error: 'Prompt requis.' }, { status: 400 })
+      const apiKey = process.env.GEMINI_API_KEY
+      if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY manquante côté serveur.' }, { status: 500 })
+
+      const parts: any[] = [{ text: prompt }]
+      for (const u of refUrls) parts.push(await urlToInlinePart(u))
+      const bodyStr = JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: { aspectRatio: ratio, imageSize: quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K' },
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+        ],
+      })
+      const att = await callGemini(apiKey, bodyStr)
+      if (!att.ok) return NextResponse.json({ error: att.error, raw: trimRaw(att.raw) }, { status: att.status })
+      if (att.imageUrl) return NextResponse.json({ imageUrl: att.imageUrl, attempt: 1, raw: true, model: IMAGE_MODEL, blobError: att.blobError })
+      return NextResponse.json({ error: `Aucune image générée. ${buildDetailMessage(att)}`, raw: trimRaw(att.raw) }, { status: 502 })
+    }
+
     const formData = await request.formData()
     const prompt   = (formData.get('prompt')  as string | null)?.trim() ?? ''
     const ratio    = (formData.get('ratio')   as string | null) ?? '9:16'
@@ -219,9 +256,23 @@ async function toInlinePart(file: File) {
   return { inlineData: { mimeType: file.type || 'image/jpeg', data: buf } }
 }
 
+const GEMINI_SUPPORTED = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
+
+/** URL (Blob) → inline part, sans recompression. Conversion JPEG seulement si format non supporté. */
+async function urlToInlinePart(url: string) {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Image inaccessible (${res.status}) : ${url.slice(0, 80)}`)
+  let mime = (res.headers.get('content-type') ?? 'image/jpeg').split(';')[0].trim()
+  let buf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
+  if (!GEMINI_SUPPORTED.has(mime)) {
+    try { buf = await sharp(buf).jpeg({ quality: 95 }).toBuffer(); mime = 'image/jpeg' } catch { /* tel quel */ }
+  }
+  return { inlineData: { mimeType: mime, data: buf.toString('base64') } }
+}
+
 async function callGemini(apiKey: string, body: string): Promise<GeminiAttempt> {
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${apiKey}`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
   )
   let data: any = null
