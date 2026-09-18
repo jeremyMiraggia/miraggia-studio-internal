@@ -117,7 +117,7 @@ export default function FreePromptTab() {
             <div>
               <label style={styles.label}>Format</label>
               <select value={ratio} onChange={e => setRatio(e.target.value)} style={styles.select}>
-                {['9:16', '3:4', '4:5', '2:3', '4:3', '1:1', '16:9'].map(r => <option key={r}>{r}</option>)}
+                {['9:16', '3:4', '4:5', '2:3', '1:1', '3:2', '4:3', '5:4', '16:9', '21:9'].map(r => <option key={r}>{r}</option>)}
               </select>
             </div>
             <div>
