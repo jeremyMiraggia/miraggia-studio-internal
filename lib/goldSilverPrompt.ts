@@ -4,7 +4,8 @@
  * Ordre des images envoyées :
  *   IMAGES 1…n      = photos de la tenue portée (Files (Front)) — n ≥ 1
  *   IMAGE n+1       = visage du mannequin (FACE PHOTO)
- *   IMAGES n+2…     = gros plans du vêtement (Details) — optionnels, guide de fidélité
+ *   IMAGE n+2       = corps du mannequin (FRONT-model) — optionnel
+ *   IMAGES suivantes = gros plans du vêtement (Details) — optionnels, guide de fidélité
  *
  * Sortie : UN visuel de FACE.
  */
@@ -15,13 +16,16 @@ export function buildGoldSilverPrompt(opts: {
   sku?: string
   detailText?: string
   outfitCount?: number
+  hasBody?: boolean
   detailCount?: number
 }): string {
   const nOut = Math.max(1, opts.outfitCount ?? 1)
   const nDet = opts.detailCount ?? 0
   const modelIdx = nOut + 1
+  const bodyIdx = opts.hasBody ? modelIdx + 1 : null
+  const firstDetail = (bodyIdx ?? modelIdx) + 1
   const outfitLabel = nOut === 1 ? 'IMAGE 1' : `IMAGES 1 to ${nOut}`
-  const detailLabel = nDet === 1 ? `IMAGE ${modelIdx + 1}` : `IMAGES ${modelIdx + 1} to ${modelIdx + nDet}`
+  const detailLabel = nDet === 1 ? `IMAGE ${firstDetail}` : `IMAGES ${firstDetail} to ${firstDetail + nDet - 1}`
   const title = opts.decorName.trim().toUpperCase()
 
   const lines = [
@@ -35,11 +39,22 @@ export function buildGoldSilverPrompt(opts: {
     '  hem length. No reinterpretation, no added accessories, no altered color.',
     `  SHOES: the model wears EXACTLY the same shoes as in ${outfitLabel} — same model,`,
     '  same color, same material. Never replace, hide or crop them.',
-    `- IMAGE ${modelIdx} = MODEL. Preserve identity exactly: same face, facial structure,`,
+    `- IMAGE ${modelIdx} = MODEL FACE. Preserve identity exactly: same face, facial structure,`,
     '  eyes, eyebrows, lips, skin tone and undertone, freckles/marks, hair color,',
-    '  texture and length, body proportions. She must be unmistakably the same',
-    '  person. Keep her natural skin — visible pores and texture, no retouching.',
+    '  texture and length. She must be unmistakably the same person. Keep her',
+    '  natural skin — visible pores and texture, no retouching.',
   ]
+  if (bodyIdx) {
+    lines.push(
+      `- IMAGE ${bodyIdx} = MODEL BODY, the same person. Use it for skin tone, build and`,
+      '  overall silhouette. Do not copy its pose, framing or background.',
+    )
+  }
+  lines.push(
+    '- STATURE: she is a TALL fashion model — long legs, long neck, elongated',
+    '  silhouette, head small relative to the body (about 9 heads tall). Never',
+    '  short or stocky.',
+  )
   if (nDet > 0) {
     lines.push(
       `- ${detailLabel} = CLOSE-UP DETAIL${nDet > 1 ? 'S' : ''} of the same garment. Use ${nDet > 1 ? 'them' : 'it'} ONLY to`,

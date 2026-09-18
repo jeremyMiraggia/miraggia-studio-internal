@@ -14,8 +14,8 @@ import Papa from 'papaparse'
 import { compressImage } from '@/lib/compressImage'
 import { readZipIndex, extractEntry, getEntryDataOffset, type ZipEntry } from './zipReader'
 
-/** Mannequin : seule la colonne FACE PHOTO est utilisée (le corps FRONT-model est ignoré). */
-export type GSModel = { name: string; faceKey?: string }
+/** Mannequin : FACE PHOTO (identité, obligatoire) + FRONT-model (corps, optionnel). */
+export type GSModel = { name: string; faceKey?: string; bodyKey?: string }
 export type GSDecor = { name: string; description: string }
 
 /**
@@ -128,8 +128,14 @@ export async function parseGoldSilverExport(
       if (!name) continue
       // Une cellule Notion peut contenir plusieurs fichiers séparés par des virgules → premier
       const faceRef = decodeRef(String(r['FACE PHOTO'] ?? r['FACE'] ?? r['Face'] ?? '').trim().split(',')[0].trim())
-      const m: GSModel = { name, faceKey: faceRef ? baseToKey.get(faceRef) : undefined }
+      const bodyRef = decodeRef(String(r['FRONT-model'] ?? r['FRONT-Model'] ?? r['Body'] ?? r['BODY'] ?? '').trim().split(',')[0].trim())
+      const m: GSModel = {
+        name,
+        faceKey: faceRef ? baseToKey.get(faceRef) : undefined,
+        bodyKey: bodyRef ? baseToKey.get(bodyRef) : undefined,
+      }
       if (!m.faceKey) warnings.push(`⚠ Mannequin "${name}" : FACE PHOTO vide ou introuvable dans le ZIP → exclu du tirage.`)
+      else if (!m.bodyKey) warnings.push(`ℹ Mannequin "${name}" : pas de FRONT-model — visage seul.`)
       models.push(m)
     }
   }
