@@ -1,43 +1,60 @@
 /**
- * Prompt Gold&Silver — bloc REFERENCES fixe + description du décor (Notion) + bloc TECHNICAL.
+ * Prompt Golden Silver — bloc REFERENCES fixe + description du décor (Notion) + bloc TECHNICAL.
  *
- * IMAGE 1 = outfit porté (photo de la vue dans le LOOK)
+ * IMAGE 1 = outfit porté, vue de face (Files (Front))
  * IMAGE 2 = visage du mannequin (FACE PHOTO)
+ * IMAGE 3 = gros plan du même vêtement (Details) — optionnel, guide de fidélité seulement
+ *
+ * Sortie : UN visuel de FACE.
  */
-import type { GSView } from '@/lib/notion/parseGoldSilverExport'
-
-const VIEW_HINT: Record<GSView, string> = {
-  front:   'This is the FRONT view of the outfit. Show the garment from the front; the composition may be full-length or three-quarter but the front of the garment must be fully readable.',
-  back:    'This is the BACK view of the outfit. The model is seen from behind or in a three-quarter back angle so that the back of the garment (back seams, closure, back hem) is clearly visible. Her face may be turned away or in profile.',
-  details: 'This is a DETAIL view of the outfit. Frame tighter on the part of the garment shown in IMAGE 1 (fabric, print, closure, neckline, cuff…). The model may be partially out of frame; the detail must be sharp and readable.',
-}
-
 export function buildGoldSilverPrompt(opts: {
   decorName: string
   decorDescription: string
   ratio: string
-  view: GSView
   sku?: string
+  detailText?: string
+  hasDetail?: boolean
 }): string {
   const title = opts.decorName.trim().toUpperCase()
-  return [
+  const lines = [
     `EDITORIAL FASHION PHOTOGRAPH — ${title} SERIES`,
     '',
     'REFERENCES (strict):',
-    '- IMAGE 1 = OUTFIT. Reproduce the garment exactly: same cut, silhouette,',
-    '  fabric texture, drape, color, print, seams, buttons, sleeve and hem length.',
-    '  No reinterpretation, no added accessories, no altered color.',
+    '- IMAGE 1 = OUTFIT, front view. Reproduce the garment exactly: same cut,',
+    '  silhouette, fabric texture, drape, color, print, seams, buttons, sleeve and',
+    '  hem length. No reinterpretation, no added accessories, no altered color.',
+    '  SHOES: the model wears EXACTLY the same shoes as in IMAGE 1 — same model,',
+    '  same color, same material. Never replace, hide or crop them.',
     '- IMAGE 2 = MODEL. Preserve identity exactly: same face, facial structure,',
     '  eyes, eyebrows, lips, skin tone and undertone, freckles/marks, hair color,',
     '  texture and length, body proportions. She must be unmistakably the same',
     '  person. Keep her natural skin — visible pores and texture, no retouching.',
+  ]
+  if (opts.hasDetail) {
+    lines.push(
+      '- IMAGE 3 = CLOSE-UP DETAIL of the same garment as IMAGE 1. Use it ONLY to',
+      '  reproduce the fabric texture, print, stitching and finishes faithfully.',
+      '  Do NOT reproduce its framing: the output is a single front-view photograph,',
+      '  not a detail shot.',
+    )
+  }
+  lines.push(
     '',
-    `VIEW: ${VIEW_HINT[opts.view]}`,
+    'OUTPUT: one photograph of the model wearing the outfit, seen from the FRONT,',
+    'garment fully readable. FEET (non-negotiable): the model\'s feet and shoes are',
+    'ALWAYS fully visible in the frame, never cut by the bottom edge, never hidden',
+    'behind an object or the foreground. Small margin below the shoes.',
+  )
+  if (opts.detailText?.trim()) {
+    lines.push('', 'ADDITIONAL DIRECTION (from the brief):', opts.detailText.trim())
+  }
+  lines.push(
     '-----------------',
     opts.decorDescription.trim(),
     '---------------',
     'TECHNICAL:',
     `Aspect ratio ${opts.ratio}. High resolution. Photorealistic.`,
-    opts.sku ? `Reference: ${opts.sku}.` : '',
-  ].filter(l => l !== undefined).join('\n')
+  )
+  if (opts.sku) lines.push(`Reference: ${opts.sku}.`)
+  return lines.join('\n')
 }

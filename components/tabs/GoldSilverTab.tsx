@@ -1,13 +1,16 @@
 'use client'
 /**
- * Onglet 🥇 Gold&Silver — batch lifestyle depuis un ZIP Notion.
+ * Onglet 🥇 Golden Silver — batch lifestyle depuis un ZIP Notion.
  *
- * Par vue (front / back / details) de chaque look :
- *   IMAGE 1 = outfit porté (photo de la vue), IMAGE 2 = visage du mannequin,
- *   prompt = REFERENCES fixe + description du décor (Notion) + TECHNICAL (ratio).
- * Mannequin et décor : colonnes Model et Décor du LOOK, obligatoires.
+ * UN visuel de FACE par look :
+ *   IMAGE 1 = Files (Front), IMAGE 2 = FACE PHOTO du mannequin,
+ *   IMAGE 3 = Details (optionnel, guide de fidélité du vêtement, pas une sortie).
+ *   prompt = REFERENCES fixe (pieds + chaussures identiques) + description du
+ *   décor (Notion) + "Detail texte" optionnel + TECHNICAL (ratio).
+ * Mannequin et décor : colonnes Model / Décor du LOOK, sinon tirage aléatoire
+ * (re-tirable).
  */
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
@@ -25,7 +28,28 @@ type State = {
   error?:    string
 }
 
-const VIEW_LABEL = { front: 'Front', back: 'Back', details: 'Détail' } as const
+/** Vignette d'une image du ZIP, extraite à la demande. */
+function InputThumb({ getFile, zipKey, label }: { getFile: (k: string) => Promise<File | undefined>; zipKey: string; label: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    let obj: string | null = null
+    getFile(zipKey).then(f => {
+      if (!alive || !f) return
+      obj = URL.createObjectURL(f)
+      setUrl(obj)
+    }).catch(() => {})
+    return () => { alive = false; if (obj) URL.revokeObjectURL(obj) }
+  }, [getFile, zipKey])
+  return (
+    <div>
+      <div style={{ fontSize: 9, color: '#9CA3AF' }}>{label}</div>
+      {url
+        ? <img src={url} alt={label} style={{ width: '100%', borderRadius: 4, display: 'block', aspectRatio: '3/4', objectFit: 'cover' }} />
+        : <div style={{ aspectRatio: '3/4', background: '#F3F4F6', borderRadius: 4 }} />}
+    </div>
+  )
+}
 
 function sanitizeFilename(s: string): string {
   return s.replace(/[\/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 80) || 'visual'
@@ -59,6 +83,24 @@ export default function GoldSilverTab() {
   const [outputDirName, setOutputDirName] = useState<string | null>(null)
   const [savedCount, setSavedCount] = useState(0)
 
+  // Tirages aléatoires par look (quand la colonne est vide ou introuvable), re-tirables
+  const [randomPick, setRandomPick] = useState<Record<string, { model?: string; decor?: string }>>({})
+  const pickRandom = <T extends { name: string }>(arr: T[]): T | undefined =>
+    arr.length ? arr[Math.floor(Math.random() * arr.length)] : undefined
+  const rollLook = (t: GSTask, res: GSExport) => {
+    const modelOk = !!t.modelName && res.models.some(m => normName(m.name) === normName(t.modelName!) && m.faceKey)
+    const decorOk = !!t.decorName && res.decors.some(d => normName(d.name) === normName(t.decorName!))
+    return {
+      model: modelOk ? undefined : pickRandom(res.models.filter(m => m.faceKey))?.name,
+      decor: decorOk ? undefined : pickRandom(res.decors)?.name,
+    }
+  }
+  const rerollLook = (lookId: string) => {
+    if (!parsed) return
+    const t = parsed.tasks.find(x => x.lookId === lookId)
+    if (t) setRandomPick(prev => ({ ...prev, [lookId]: rollLook(t, parsed) }))
+  }
+
   // Cache des uploads Blob (clé ZIP → URL) : un visage sert à toutes les vues
   const urlCacheRef = useRef<Map<string, Promise<string>>>(new Map())
   const uploadKey = (key: string): Promise<string> => {
@@ -91,6 +133,10 @@ export default function GoldSilverTab() {
       setParsed(res)
       const ns: State[] = res.tasks.map(t => ({ task: t, status: 'pending', enabled: true, versions: [] }))
       setStates(ns); statesRef.current = ns
+      // Tirages aléatoires initiaux
+      const picks: Record<string, { model?: string; decor?: string }> = {}
+      for (const t of res.tasks) picks[t.lookId] = rollLook(t, res)
+      setRandomPick(picks)
     } catch (e: any) {
       setError(e?.message ?? String(e))
     } finally {
@@ -98,11 +144,19 @@ export default function GoldSilverTab() {
     }
   }
 
-  /* ----------- Résolution mannequin / décor d'une tâche (colonnes du LOOK, obligatoires) ----------- */
-  const resolveModel = (t: GSTask) =>
-    t.modelName ? parsed?.models.find(m => normName(m.name) === normName(t.modelName!)) : undefined
-  const resolveDecor = (t: GSTask) =>
-    t.decorName ? parsed?.decors.find(d => normName(d.name) === normName(t.decorName!)) : undefined
+  /* ----------- Résolution mannequin / décor : colonne du LOOK, sinon tirage aléatoire du look ----------- */
+  const effectiveModelName = (t: GSTask) => randomPick[t.lookId]?.model ?? t.modelName
+  const effectiveDecorName = (t: GSTask) => randomPick[t.lookId]?.decor ?? t.decorName
+  const isRandomModel = (t: GSTask) => !!randomPick[t.lookId]?.model
+  const isRandomDecor = (t: GSTask) => !!randomPick[t.lookId]?.decor
+  const resolveModel = (t: GSTask) => {
+    const n = effectiveModelName(t)
+    return n ? parsed?.models.find(m => normName(m.name) === normName(n)) : undefined
+  }
+  const resolveDecor = (t: GSTask) => {
+    const n = effectiveDecorName(t)
+    return n ? parsed?.decors.find(d => normName(d.name) === normName(n)) : undefined
+  }
 
   /* ----------- Dossier sortie ----------- */
   const pickOutputDir = async () => {
@@ -117,7 +171,7 @@ export default function GoldSilverTab() {
     }
   }
   const fileNameFor = (s: State, version: number) =>
-    `${sanitizeFilename(s.task.sku)}_${s.task.view}${version > 1 ? `_${version}` : ''}.jpg`
+    `${sanitizeFilename(s.task.sku)}${version > 1 ? `_${version}` : ''}.jpg`
 
   const writeToOutputDir = async (s: State, url: string, version: number): Promise<boolean> => {
     const handle = outputDirHandleRef.current
@@ -145,19 +199,21 @@ export default function GoldSilverTab() {
     const fail = (msg: string, status: TaskStatus = 'skipped') => setStates(prev => {
       const next = [...prev]; next[idx] = { ...next[idx], status, error: msg }; statesRef.current = next; return next
     })
-    if (!t.modelName)    return fail('Colonne Model vide dans le LOOK.')
-    if (!model)          return fail(`Mannequin "${t.modelName}" absent de Models Definition.`)
-    if (!model.faceKey)  return fail(`Mannequin "${t.modelName}" sans FACE PHOTO dans le ZIP.`)
-    if (!t.decorName)    return fail('Colonne Décor vide dans le LOOK.')
-    if (!decor)          return fail(`Décor "${t.decorName}" absent de Decors Definition (ou description vide).`)
+    if (!model)          return fail('Aucun mannequin disponible (colonne vide et Models Definition vide).')
+    if (!model.faceKey)  return fail(`Mannequin "${model.name}" sans FACE PHOTO dans le ZIP.`)
+    if (!decor)          return fail('Aucun décor disponible (colonne vide et Decors Definition vide).')
 
     setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
     try {
-      const [outfitUrl, faceUrl] = await Promise.all([uploadKey(t.outfitKey), uploadKey(model.faceKey)])
-      const prompt = buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, view: t.view, sku: t.sku })
+      const [outfitUrl, faceUrl, detailUrl] = await Promise.all([
+        uploadKey(t.outfitKey),
+        uploadKey(model.faceKey),
+        t.detailKey ? uploadKey(t.detailKey) : Promise.resolve(''),
+      ])
+      const prompt = buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: t.sku, detailText: t.detailText, hasDetail: !!detailUrl })
       const resp = await fetch('/api/studio/gold-silver', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outfitUrl, faceUrl, prompt, ratio, quality, sku: `${t.sku}_${t.view}` }),
+        body: JSON.stringify({ outfitUrl, faceUrl, detailUrl: detailUrl || undefined, prompt, ratio, quality, sku: t.sku }),
       })
       const text = await resp.text()
       let json: any
@@ -236,7 +292,6 @@ export default function GoldSilverTab() {
 
   /* ----------- Toggles / stats ----------- */
   const toggleTask = (id: string) => setStates(prev => { const next = prev.map(s => s.task.id === id ? { ...s, enabled: !s.enabled } : s); statesRef.current = next; return next })
-  const toggleLook = (lookId: string, v: boolean) => setStates(prev => { const next = prev.map(s => s.task.lookId === lookId ? { ...s, enabled: v } : s); statesRef.current = next; return next })
   const setAllEnabled = (v: boolean) => setStates(prev => { const next = prev.map(s => ({ ...s, enabled: v })); statesRef.current = next; return next })
 
   const stats = useMemo(() => ({
@@ -249,17 +304,11 @@ export default function GoldSilverTab() {
     toRun: states.filter(s => s.enabled && s.status !== 'done' && s.status !== 'saved').length,
   }), [states])
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, State[]>()
-    for (const s of states) { const arr = map.get(s.task.lookId) ?? []; arr.push(s); map.set(s.task.lookId, arr) }
-    return Array.from(map.entries())
-  }, [states])
-
   const [previewDecor, setPreviewDecor] = useState('')
   const previewPrompt = useMemo(() => {
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
-    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, view: 'front', sku: 'SKU' })
+    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', hasDetail: true })
   }, [parsed, previewDecor, ratio])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
@@ -276,11 +325,11 @@ export default function GoldSilverTab() {
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 22 }}>🥇</span>
-          <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Gold&Silver — Lifestyle depuis Notion</h2>
+          <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Golden Silver — Lifestyle depuis Notion</h2>
         </div>
         <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-          Chaque vue (Front / Back / Détail) de chaque look → un visuel. <strong>Image 1</strong> = l'outfit porté, <strong>Image 2</strong> = le visage du mannequin,
-          prompt = bloc REFERENCES + description du décor (tableau Decors) + ratio. Le mannequin et le décor viennent des colonnes <code>Model</code> et <code>Décor</code> de chaque look — un look sans l'un des deux est signalé et ignoré.
+          Un visuel <strong>de face</strong> par look. <strong>Image 1</strong> = <code>Files (Front)</code> (la tenue portée), <strong>Image 2</strong> = <code>FACE PHOTO</code> du mannequin, <strong>Image 3</strong> = <code>Details</code> si présent — uniquement pour guider la fidélité du vêtement, pas pour produire un visuel détail. Back et Profil ignorés.
+          Prompt = REFERENCES (pieds et chaussures identiques toujours visibles) + description du décor + ratio. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
         </p>
       </div>
 
@@ -291,7 +340,7 @@ export default function GoldSilverTab() {
         {parsing && <div style={{ marginTop: 8, fontSize: 13, color: '#0D4A5C' }}>⏳ {progress}</div>}
         {parsed && (
           <div style={{ marginTop: 8, fontSize: 12, color: '#374151', background: '#F9FAFB', padding: 8, borderRadius: 6 }}>
-            ✓ {grouped.length} look(s), {states.length} visuel(s), {parsed.models.length} mannequin(s), {parsed.decors.length} décor(s).
+            ✓ {states.length} look(s) → {states.length} visuel(s) de face, {parsed.models.length} mannequin(s), {parsed.decors.length} décor(s).
             <details style={{ marginTop: 4 }}>
               <summary style={{ cursor: 'pointer', fontSize: 11 }}>{parsed.warnings.length} note(s) de lecture</summary>
               <ul style={{ fontSize: 11, color: '#6B7280', margin: '4px 0', paddingLeft: 16 }}>{parsed.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
@@ -330,7 +379,7 @@ export default function GoldSilverTab() {
         {previewPrompt && (
           <details style={{ marginTop: 10 }} open={showPrompt} onToggle={e => setShowPrompt((e.target as HTMLDetailsElement).open)}>
             <summary style={{ cursor: 'pointer', fontSize: 12, color: '#0D4A5C' }}>
-              Voir le prompt assemblé (vue Front) —{' '}
+              Voir le prompt assemblé —{' '}
               <select value={previewDecor || parsed?.decors[0]?.name || ''} onChange={e => setPreviewDecor(e.target.value)}
                       onClick={e => e.stopPropagation()} style={{ fontSize: 12 }}>
                 {parsed?.decors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
@@ -363,58 +412,73 @@ export default function GoldSilverTab() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {grouped.map(([lookId, items]) => {
-              const sku = items[0]?.task.sku || lookId
-              const allOn = items.every(i => i.enabled), anyOn = items.some(i => i.enabled)
-              const t0 = items[0].task
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
+            {states.map(s => {
+              const t0 = s.task
+              const lookId = t0.lookId
               const modelOk = !!resolveModel(t0)?.faceKey
               const decorOk = !!resolveDecor(t0)
+              const modelLbl = effectiveModelName(t0)
+              const decorLbl = effectiveDecorName(t0)
+              const anyRandom = isRandomModel(t0) || isRandomDecor(t0)
               return (
-                <div key={lookId} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10 }}>
+                <div key={s.task.id} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10, background: s.enabled ? '#fff' : '#F9FAFB', opacity: s.enabled ? 1 : 0.55 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                    <input type="checkbox" checked={allOn} ref={el => { if (el) el.indeterminate = anyOn && !allOn }}
-                           onChange={() => toggleLook(lookId, !allOn)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+                    <input type="checkbox" checked={s.enabled} onChange={() => toggleTask(s.task.id)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+                    {s.status === 'pending' && <span style={pill('#9CA3AF')}>•</span>}
+                    {s.status === 'running' && <span style={pill('#F59E0B')}>⏳</span>}
+                    {s.status === 'done'    && <span style={pill('#3B82F6')}>✓</span>}
+                    {s.status === 'saved'   && <span style={pill('#10B981')}>💾</span>}
+                    {s.status === 'error'   && <span style={pill('#EF4444')}>✕</span>}
+                    {s.status === 'skipped' && <span style={pill('#6B7280')}>⊘</span>}
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#0D4A5C' }}>
-                      <span style={{ color: '#6B7280', fontWeight: 500 }}>#{lookId}</span> · {sku}
+                      <span style={{ color: '#6B7280', fontWeight: 500 }}>#{lookId}</span> · {t0.sku}
                     </div>
+                    {s.versions.length > 1 && <span style={{ fontSize: 10, color: '#6B7280' }}>v{s.versions.length}</span>}
+                    {(s.status === 'done' || s.status === 'saved' || s.status === 'error') && !running && (
+                      <button onClick={() => regenerate(s.task.id)} title="Regénérer (nouvelle version, l'ancienne est gardée)"
+                              style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14 }}>↺</button>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
                     <span style={pill(modelOk ? '#E8F2F5' : '#FEE2E2', modelOk ? '#0D4A5C' : '#991B1B')}>
-                      👤 {t0.modelName || 'Model manquant'}{t0.modelName && !modelOk ? ' (introuvable)' : ''}
+                      👤 {modelLbl || 'aucun mannequin'}{isRandomModel(t0) ? ' 🎲' : ''}
                     </span>
                     <span style={pill(decorOk ? '#FEF3C7' : '#FEE2E2', decorOk ? '#92400E' : '#991B1B')}>
-                      🏞 {t0.decorName || 'Décor manquant'}{t0.decorName && !decorOk ? ' (introuvable)' : ''}
+                      🏞 {decorLbl || 'aucun décor'}{isRandomDecor(t0) ? ' 🎲' : ''}
+                    </span>
+                    {anyRandom && !running && (
+                      <button onClick={() => rerollLook(lookId)} title="Re-tirer mannequin / décor aléatoires"
+                              style={{ background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}>
+                        🎲 re-tirer
+                      </button>
+                    )}
+                    {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 détail texte</span>}
+                    <span style={pill(t0.detailKey ? '#DCFCE7' : '#F3F4F6', t0.detailKey ? '#166534' : '#6B7280')}>
+                      {t0.detailKey ? '🔍 détail en guide' : 'sans détail'}
                     </span>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-                    {items.map(s => (
-                      <div key={s.task.id} style={{ border: '1px solid #E5E7EB', borderRadius: 6, padding: 6, background: s.enabled ? '#fff' : '#F9FAFB', opacity: s.enabled ? 1 : 0.55 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
-                          <input type="checkbox" checked={s.enabled} onChange={() => toggleTask(s.task.id)} style={{ width: 14, height: 14, cursor: 'pointer' }} />
-                          {s.status === 'pending' && <span style={pill('#9CA3AF')}>•</span>}
-                          {s.status === 'running' && <span style={pill('#F59E0B')}>⏳</span>}
-                          {s.status === 'done'    && <span style={pill('#3B82F6')}>✓</span>}
-                          {s.status === 'saved'   && <span style={pill('#10B981')}>💾</span>}
-                          {s.status === 'error'   && <span style={pill('#EF4444')}>✕</span>}
-                          {s.status === 'skipped' && <span style={pill('#6B7280')}>⊘</span>}
-                          <span style={pill('#E5E7EB', '#374151')}>{VIEW_LABEL[s.task.view]}</span>
-                          {s.versions.length > 1 && <span style={{ fontSize: 10, color: '#6B7280' }}>v{s.versions.length}</span>}
-                          {(s.status === 'done' || s.status === 'saved' || s.status === 'error') && !running && (
-                            <button onClick={() => regenerate(s.task.id)} title="Regénérer (nouvelle version, l'ancienne est gardée)"
-                                    style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13 }}>↺</button>
-                          )}
-                        </div>
-                        {s.imageUrl ? (
-                          <a href={s.imageUrl} target="_blank" rel="noreferrer">
-                            <img src={s.imageUrl} alt={s.task.id} style={{ width: '100%', borderRadius: 4, display: 'block' }} />
-                          </a>
-                        ) : (
-                          <div style={{ fontSize: 10, color: '#9CA3AF', padding: '18px 0', textAlign: 'center' }}>{s.task.outfitKey.split('/').pop()}</div>
-                        )}
-                        {s.error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 4 }} title={s.error}>{s.error.slice(0, 90)}</div>}
-                        {s.task.warnings.map((w, i) => <div key={i} style={{ fontSize: 10, color: '#B45309', marginTop: 2 }}>⚠ {w}</div>)}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8 }}>
+                    <div style={{ fontSize: 10, color: '#6B7280' }}>
+                      <div style={{ marginBottom: 2 }}>Entrées</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: t0.detailKey ? '1fr 1fr' : '1fr', gap: 4 }}>
+                        <InputThumb getFile={parsed!.getFile} zipKey={t0.outfitKey} label="Front" />
+                        {t0.detailKey && <InputThumb getFile={parsed!.getFile} zipKey={t0.detailKey} label="Détail" />}
                       </div>
-                    ))}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: '#10B981', marginBottom: 2 }}>Sortie (face)</div>
+                      {s.imageUrl ? (
+                        <a href={s.imageUrl} target="_blank" rel="noreferrer">
+                          <img src={s.imageUrl} alt={s.task.id} style={{ width: '100%', borderRadius: 4, display: 'block' }} />
+                        </a>
+                      ) : (
+                        <div style={{ fontSize: 10, color: '#9CA3AF', padding: '28px 0', textAlign: 'center', border: '1px dashed #E5E7EB', borderRadius: 4 }}>—</div>
+                      )}
+                    </div>
                   </div>
+                  {s.error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 4 }} title={s.error}>{s.error.slice(0, 120)}</div>}
+                  {s.task.warnings.map((w, i) => <div key={i} style={{ fontSize: 10, color: '#B45309', marginTop: 2 }}>⚠ {w}</div>)}
                 </div>
               )
             })}

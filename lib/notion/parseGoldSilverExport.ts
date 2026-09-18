@@ -14,18 +14,22 @@ import Papa from 'papaparse'
 import { compressImage } from '@/lib/compressImage'
 import { readZipIndex, extractEntry, getEntryDataOffset, type ZipEntry } from './zipReader'
 
-export type GSView = 'front' | 'back' | 'details'
-
 /** Mannequin : seule la colonne FACE PHOTO est utilisée (le corps FRONT-model est ignoré). */
 export type GSModel = { name: string; faceKey?: string }
 export type GSDecor = { name: string; description: string }
 
+/**
+ * Une tâche = UN visuel de FACE par look.
+ *   outfitKey = Files (Front) — image 1, la tenue portée à reproduire
+ *   detailKey = Details (optionnel) — image 3, gros plan du même vêtement,
+ *               sert uniquement à guider la fidélité (matière, imprimé, finitions)
+ */
 export type GSTask = {
-  id:         string      // `${lookId}-${view}`
+  id:         string      // = lookId
   lookId:     string
   sku:        string
-  view:       GSView
-  outfitKey:  string      // clé ZIP de l'image de la vue
+  outfitKey:  string
+  detailKey?: string
   modelName?: string      // colonne Model du LOOK (vide → tirage aléatoire côté onglet)
   decorName?: string      // colonne Décor du LOOK (vide → tirage aléatoire côté onglet)
   detailText?: string     // colonne "Detail texte" (optionnelle) — ajoutée au prompt
@@ -182,29 +186,32 @@ export async function parseGoldSilverExport(
     const decorName = decorCol ? stripRef(String(row[decorCol] ?? '').trim()) || undefined : undefined
     const detailText = detailTextCol ? String(row[detailTextCol] ?? '').trim() || undefined : undefined
 
-    const views: Array<[GSView, string]> = [
-      ['front',   frontCol   ? String(row[frontCol]   ?? '').trim() : ''],
-      ['details', detailsCol ? String(row[detailsCol] ?? '').trim() : ''],
-    ]
-    let found = 0
-    for (const [view, raw] of views) {
-      if (!raw) continue
-      // une cellule peut contenir plusieurs fichiers séparés par des virgules → on prend le premier
-      const first = decodeRef(raw.split(',')[0].trim())
-      const key = baseToKey.get(first)
-      if (!key) { warnings.push(`⚠ Look ${lookId} (${sku}) vue ${view} : "${first}" introuvable dans le ZIP.`); continue }
-      const w: string[] = []
-      // Mannequin / décor renseignés mais introuvables → signalé (l'onglet tirera au sort)
-      if (modelName && !models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition → aléatoire.`)
-      if (decorName && !decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition → aléatoire.`)
-      tasks.push({ id: `${lookId}-${view}`, lookId, sku, view, outfitKey: key, modelName, decorName, detailText, warnings: w })
-      found++
+    // une cellule peut contenir plusieurs fichiers séparés par des virgules → on prend le premier
+    const firstRef = (col: string) => {
+      const raw = col ? String(row[col] ?? '').trim() : ''
+      return raw ? decodeRef(raw.split(',')[0].trim()) : ''
     }
-    if (found === 0) warnings.push(`⚠ Look ${lookId} (${sku}) : ni FRONT ni DETAILS — ignoré.`)
+    const frontRef  = firstRef(frontCol)
+    const detailRef = firstRef(detailsCol)
+    if (!frontRef) { warnings.push(`⚠ Look ${lookId} (${sku}) : Files (Front) vide — ignoré.`); continue }
+    const outfitKey = baseToKey.get(frontRef)
+    if (!outfitKey) { warnings.push(`⚠ Look ${lookId} (${sku}) : "${frontRef}" introuvable dans le ZIP — ignoré.`); continue }
+
+    const w: string[] = []
+    let detailKey: string | undefined
+    if (detailRef) {
+      detailKey = baseToKey.get(detailRef)
+      if (!detailKey) w.push(`Détail "${detailRef}" introuvable dans le ZIP — généré sans.`)
+    }
+    // Mannequin / décor renseignés mais introuvables → signalé (l'onglet tirera au sort)
+    if (modelName && !models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition → aléatoire.`)
+    if (decorName && !decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition → aléatoire.`)
+    tasks.push({ id: lookId, lookId, sku, outfitKey, detailKey, modelName, decorName, detailText, warnings: w })
   }
 
-  const randomLooks = new Set(tasks.filter(t => !t.modelName || !t.decorName || t.warnings.length > 0).map(t => t.lookId)).size
-  warnings.push(`✅ ${tasks.length} visuel(s), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
+  const randomLooks = tasks.filter(t => !t.modelName || !t.decorName || t.warnings.some(x => x.includes('aléatoire'))).length
+  const withDetail  = tasks.filter(t => t.detailKey).length
+  warnings.push(`✅ ${tasks.length} look(s) → ${tasks.length} visuel(s) de face (${withDetail} avec image détail en guide), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
   return { tasks, models, decors, warnings, getFile }
 }
 

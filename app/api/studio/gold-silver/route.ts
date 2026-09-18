@@ -16,6 +16,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}))
     const outfitUrl: string = body.outfitUrl ?? ''
     const faceUrl: string   = body.faceUrl ?? ''
+    const detailUrl: string = body.detailUrl ?? ''
     const prompt: string    = body.prompt ?? ''
     const ratio: string     = body.ratio ?? '2:3'
     const quality: string   = body.quality ?? '2K'
@@ -31,12 +32,16 @@ export async function POST(request: Request) {
     const sessionId = Date.now()
     const parts: any[] = [
       { text: `[SESSION ${sessionId}]\n${prompt}` },
-      { text: '=== IMAGE 1 — OUTFIT (reproduce this garment exactly) ===' },
+      { text: '=== IMAGE 1 — OUTFIT, front view (reproduce this garment exactly) ===' },
       await toInlinePart(outfitUrl),
       { text: '=== IMAGE 2 — MODEL (preserve this exact identity) ===' },
       await toInlinePart(faceUrl),
-      { text: '⚠ FINAL CHECK : garment identical to IMAGE 1 (cut, color, print, details) · face identical to IMAGE 2 · scene, light, film look and mood exactly as described · one photograph, no text, no collage.' },
     ]
+    if (/^https?:\/\//.test(detailUrl)) {
+      parts.push({ text: '=== IMAGE 3 — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===' })
+      parts.push(await toInlinePart(detailUrl))
+    }
+    parts.push({ text: '⚠ FINAL CHECK : ONE front-view photograph · garment identical to IMAGE 1 (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE 2 · scene, light, film look and mood exactly as described · no text, no collage.' })
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiRes = await fetch(
