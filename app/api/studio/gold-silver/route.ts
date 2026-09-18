@@ -14,35 +14,39 @@ const GEMINI_SUPPORTED = new Set(['image/jpeg', 'image/png', 'image/webp', 'imag
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}))
-    const outfitUrl: string = body.outfitUrl ?? ''
+    const isUrl = (u: any) => typeof u === 'string' && /^https?:\/\//.test(u)
+    const outfitUrls: string[] = (Array.isArray(body.outfitUrls) ? body.outfitUrls : (body.outfitUrl ? [body.outfitUrl] : [])).filter(isUrl)
     const faceUrl: string   = body.faceUrl ?? ''
-    const detailUrls: string[] = (Array.isArray(body.detailUrls) ? body.detailUrls : (body.detailUrl ? [body.detailUrl] : []))
-      .filter((u: any) => typeof u === 'string' && /^https?:\/\//.test(u))
+    const detailUrls: string[] = (Array.isArray(body.detailUrls) ? body.detailUrls : (body.detailUrl ? [body.detailUrl] : [])).filter(isUrl)
     const prompt: string    = body.prompt ?? ''
     const ratio: string     = body.ratio ?? '2:3'
     const quality: string   = body.quality ?? '2K'
     const sku: string       = body.sku ?? ''
 
-    if (!/^https?:\/\//.test(outfitUrl)) return NextResponse.json({ error: 'outfitUrl requise.' }, { status: 400 })
-    if (!/^https?:\/\//.test(faceUrl))   return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
+    if (outfitUrls.length === 0) return NextResponse.json({ error: 'Au moins une outfitUrl requise.' }, { status: 400 })
+    if (!isUrl(faceUrl))         return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
     if (!prompt.trim())                  return NextResponse.json({ error: 'prompt requis.' }, { status: 400 })
 
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY manquante.' }, { status: 500 })
 
     const sessionId = Date.now()
-    const parts: any[] = [
-      { text: `[SESSION ${sessionId}]\n${prompt}` },
-      { text: '=== IMAGE 1 — OUTFIT, front view (reproduce this garment exactly) ===' },
-      await toInlinePart(outfitUrl),
-      { text: '=== IMAGE 2 — MODEL (preserve this exact identity) ===' },
-      await toInlinePart(faceUrl),
-    ]
+    const parts: any[] = [{ text: `[SESSION ${sessionId}]\n${prompt}` }]
+    const nOut = outfitUrls.length
+    for (let i = 0; i < nOut; i++) {
+      parts.push({ text: nOut === 1
+        ? '=== IMAGE 1 — OUTFIT, front view (reproduce this garment exactly) ==='
+        : `=== IMAGE ${i + 1} — OUTFIT, photo ${i + 1}/${nOut} of the SAME garment worn ===` })
+      parts.push(await toInlinePart(outfitUrls[i]))
+    }
+    const modelIdx = nOut + 1
+    parts.push({ text: `=== IMAGE ${modelIdx} — MODEL (preserve this exact identity) ===` })
+    parts.push(await toInlinePart(faceUrl))
     for (let i = 0; i < detailUrls.length; i++) {
-      parts.push({ text: `=== IMAGE ${3 + i} — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===` })
+      parts.push({ text: `=== IMAGE ${modelIdx + 1 + i} — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===` })
       parts.push(await toInlinePart(detailUrls[i]))
     }
-    parts.push({ text: '⚠ FINAL CHECK : ONE front-view photograph · garment identical to IMAGE 1 (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE 2 · scene, light, film look and mood exactly as described · no text, no collage.' })
+    parts.push({ text: `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE ${modelIdx} · scene, light, film look and mood exactly as described · no text, no collage.` })
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiRes = await fetch(

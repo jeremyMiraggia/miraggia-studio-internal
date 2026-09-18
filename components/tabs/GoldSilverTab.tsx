@@ -171,7 +171,7 @@ export default function GoldSilverTab() {
     }
   }
   const fileNameFor = (s: State, version: number) =>
-    `${sanitizeFilename(s.task.sku)}${s.task.frontCount > 1 ? `_${s.task.frontIndex}` : ''}${version > 1 ? `_v${version}` : ''}.jpg`
+    `${sanitizeFilename(s.task.sku)}${version > 1 ? `_${version}` : ''}.jpg`
 
   const writeToOutputDir = async (s: State, url: string, version: number): Promise<boolean> => {
     const handle = outputDirHandleRef.current
@@ -205,16 +205,18 @@ export default function GoldSilverTab() {
 
     setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
     try {
-      const [outfitUrl, faceUrl, detailUrls] = await Promise.all([
-        uploadKey(t.outfitKey),
+      const [outfitUrls, faceUrl, detailUrls] = await Promise.all([
+        Promise.all(t.outfitKeys.map(uploadKey)),
         uploadKey(model.faceKey),
         Promise.all(t.detailKeys.map(uploadKey)),
       ])
-      const skuLabel = t.frontCount > 1 ? `${t.sku}_${t.frontIndex}` : t.sku
-      const prompt = buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: skuLabel, detailText: t.detailText, detailCount: detailUrls.length })
+      const prompt = buildGoldSilverPrompt({
+        decorName: decor.name, decorDescription: decor.description, ratio, sku: t.sku, detailText: t.detailText,
+        outfitCount: outfitUrls.length, detailCount: detailUrls.length,
+      })
       const resp = await fetch('/api/studio/gold-silver', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outfitUrl, faceUrl, detailUrls, prompt, ratio, quality, sku: skuLabel }),
+        body: JSON.stringify({ outfitUrls, faceUrl, detailUrls, prompt, ratio, quality, sku: t.sku }),
       })
       const text = await resp.text()
       let json: any
@@ -309,7 +311,7 @@ export default function GoldSilverTab() {
   const previewPrompt = useMemo(() => {
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
-    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', detailCount: 1 })
+    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, detailCount: 1 })
   }, [parsed, previewDecor, ratio])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
@@ -434,7 +436,6 @@ export default function GoldSilverTab() {
                     {s.status === 'skipped' && <span style={pill('#6B7280')}>⊘</span>}
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#0D4A5C' }}>
                       <span style={{ color: '#6B7280', fontWeight: 500 }}>#{lookId}</span> · {t0.sku}
-                      {t0.frontCount > 1 && <span style={{ color: '#6B7280', fontWeight: 500 }}> · front {t0.frontIndex}/{t0.frontCount}</span>}
                     </div>
                     {s.versions.length > 1 && <span style={{ fontSize: 10, color: '#6B7280' }}>v{s.versions.length}</span>}
                     {(s.status === 'done' || s.status === 'saved' || s.status === 'error') && !running && (
@@ -456,15 +457,16 @@ export default function GoldSilverTab() {
                       </button>
                     )}
                     {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 détail texte</span>}
+                    <span style={pill('#E5E7EB', '#374151')}>🧥 {t0.outfitKeys.length} front</span>
                     <span style={pill(t0.detailKeys.length ? '#DCFCE7' : '#F3F4F6', t0.detailKeys.length ? '#166534' : '#6B7280')}>
                       {t0.detailKeys.length ? `🔍 ${t0.detailKeys.length} détail${t0.detailKeys.length > 1 ? 's' : ''} en guide` : 'sans détail'}
                     </span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8 }}>
                     <div style={{ fontSize: 10, color: '#6B7280' }}>
-                      <div style={{ marginBottom: 2 }}>Entrées</div>
+                      <div style={{ marginBottom: 2 }}>Entrées → 1 sortie</div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-                        <InputThumb getFile={parsed!.getFile} zipKey={t0.outfitKey} label="Front" />
+                        {t0.outfitKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.outfitKeys.length > 1 ? `Front ${i + 1}` : 'Front'} />)}
                         {t0.detailKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Détail ${i + 1}`} />)}
                       </div>
                     </div>

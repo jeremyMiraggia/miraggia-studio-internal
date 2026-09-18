@@ -19,19 +19,16 @@ export type GSModel = { name: string; faceKey?: string }
 export type GSDecor = { name: string; description: string }
 
 /**
- * Une tâche = UN visuel de FACE par image de Files (Front).
- *   outfitKey  = une image de Files (Front) — image 1, la tenue portée à reproduire
- *   detailKeys = toutes les images de Details — images 3, 4… gros plans du même
- *                vêtement, servent uniquement à guider la fidélité (matière, imprimé)
- *   frontIndex / frontCount = position de cette image dans la cellule (nommage)
+ * Une tâche = UNE ligne du LOOK = UN visuel de FACE en sortie.
+ *   outfitKeys = TOUTES les images de Files (Front) — la tenue portée (images 1…n)
+ *   detailKeys = TOUTES les images de Details — gros plans du même vêtement,
+ *                servent uniquement à guider la fidélité (matière, imprimé)
  */
 export type GSTask = {
-  id:         string      // `${lookId}-${frontIndex}`
+  id:         string      // = lookId
   lookId:     string
   sku:        string
-  outfitKey:  string
-  frontIndex: number
-  frontCount: number
+  outfitKeys: string[]
   detailKeys: string[]
   modelName?: string      // colonne Model du LOOK (vide → tirage aléatoire côté onglet)
   decorName?: string      // colonne Décor du LOOK (vide → tirage aléatoire côté onglet)
@@ -214,19 +211,17 @@ export async function parseGoldSilverExport(
     if (modelName && !models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition → aléatoire.`)
     if (decorName && !decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition → aléatoire.`)
 
-    validFronts.forEach((f, i) => {
-      tasks.push({
-        id: `${lookId}-${i + 1}`, lookId, sku,
-        outfitKey: f.key, frontIndex: i + 1, frontCount: validFronts.length,
-        detailKeys, modelName, decorName, detailText, warnings: w,
-      })
+    tasks.push({
+      id: lookId, lookId, sku,
+      outfitKeys: validFronts.map(f => f.key),
+      detailKeys, modelName, decorName, detailText, warnings: w,
     })
   }
 
-  const lookCount   = new Set(tasks.map(t => t.lookId)).size
-  const randomLooks = new Set(tasks.filter(t => !t.modelName || !t.decorName || t.warnings.some(x => x.includes('aléatoire'))).map(t => t.lookId)).size
+  const randomLooks = tasks.filter(t => !t.modelName || !t.decorName || t.warnings.some(x => x.includes('aléatoire'))).length
   const withDetail  = tasks.filter(t => t.detailKeys.length > 0).length
-  warnings.push(`✅ ${lookCount} look(s) → ${tasks.length} visuel(s) de face (${withDetail} avec image(s) détail en guide), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
+  const multiFront  = tasks.filter(t => t.outfitKeys.length > 1).length
+  warnings.push(`✅ ${tasks.length} look(s) → ${tasks.length} visuel(s) de face (${multiFront} avec plusieurs photos Front, ${withDetail} avec détail(s) en guide), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
   return { tasks, models, decors, warnings, getFile }
 }
 
