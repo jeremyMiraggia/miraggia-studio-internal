@@ -41,8 +41,8 @@ export async function POST(request: Request) {
       const { buf, mime } = await fetchImage(u)
       if (!maskFaces) { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
       const det = await detectHead(buf, mime, apiKey)
-      if (det.error) { outfits.push({ part: toPart(buf, mime), masked: false, note: `détection échouée : ${det.error.slice(0, 80)}` }); continue }
-      if (!det.hasPerson || !det.box) { outfits.push({ part: toPart(buf, mime), masked: false, note: det.hasPerson ? 'tête non localisée' : 'pas de personne (vêtement non porté)' }); continue }
+      if (!det.hasPerson) { outfits.push({ part: toPart(buf, mime), masked: false, note: det.error ? `détection échouée : ${det.error.slice(0, 80)}` : 'pas de personne (vêtement non porté)' }); continue }
+      if (!det.box) { outfits.push({ part: toPart(buf, mime), masked: false, note: `⚠ non masqué : ${det.error ?? 'tête non localisée'}` }); continue }
       try {
         const m = await maskHead(buf, det.box)
         let maskedUrl: string | undefined
