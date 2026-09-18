@@ -16,7 +16,8 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}))
     const outfitUrl: string = body.outfitUrl ?? ''
     const faceUrl: string   = body.faceUrl ?? ''
-    const detailUrl: string = body.detailUrl ?? ''
+    const detailUrls: string[] = (Array.isArray(body.detailUrls) ? body.detailUrls : (body.detailUrl ? [body.detailUrl] : []))
+      .filter((u: any) => typeof u === 'string' && /^https?:\/\//.test(u))
     const prompt: string    = body.prompt ?? ''
     const ratio: string     = body.ratio ?? '2:3'
     const quality: string   = body.quality ?? '2K'
@@ -37,9 +38,9 @@ export async function POST(request: Request) {
       { text: '=== IMAGE 2 — MODEL (preserve this exact identity) ===' },
       await toInlinePart(faceUrl),
     ]
-    if (/^https?:\/\//.test(detailUrl)) {
-      parts.push({ text: '=== IMAGE 3 — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===' })
-      parts.push(await toInlinePart(detailUrl))
+    for (let i = 0; i < detailUrls.length; i++) {
+      parts.push({ text: `=== IMAGE ${3 + i} — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===` })
+      parts.push(await toInlinePart(detailUrls[i]))
     }
     parts.push({ text: '⚠ FINAL CHECK : ONE front-view photograph · garment identical to IMAGE 1 (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE 2 · scene, light, film look and mood exactly as described · no text, no collage.' })
 
