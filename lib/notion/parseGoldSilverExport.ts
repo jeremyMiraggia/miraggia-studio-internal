@@ -16,7 +16,8 @@ import { readZipIndex, extractEntry, getEntryDataOffset, type ZipEntry } from '.
 
 export type GSView = 'front' | 'back' | 'details'
 
-export type GSModel = { name: string; faceKey?: string; bodyKey?: string }
+/** Mannequin : seule la colonne FACE PHOTO est utilisée (le corps FRONT-model est ignoré). */
+export type GSModel = { name: string; faceKey?: string }
 export type GSDecor = { name: string; description: string }
 
 export type GSTask = {
@@ -25,8 +26,9 @@ export type GSTask = {
   sku:        string
   view:       GSView
   outfitKey:  string      // clé ZIP de l'image de la vue
-  modelName?: string      // colonne Model du LOOK (peut être vide)
-  decorName?: string      // colonne Décor du LOOK (peut être vide)
+  modelName?: string      // colonne Model du LOOK (vide → tirage aléatoire côté onglet)
+  decorName?: string      // colonne Décor du LOOK (vide → tirage aléatoire côté onglet)
+  detailText?: string     // colonne "Detail texte" (optionnelle) — ajoutée au prompt
   warnings:   string[]
 }
 
@@ -120,10 +122,10 @@ export async function parseGoldSilverExport(
     for (const r of parseCsv((await readCsvText(modelsKey)) ?? '')) {
       const name = String(r['Name your Model'] ?? r['Name'] ?? '').trim()
       if (!name) continue
-      const faceRef = decodeRef(String(r['FACE PHOTO'] ?? r['FACE'] ?? r['Face'] ?? '').trim())
-      const bodyRef = decodeRef(String(r['FRONT-model'] ?? r['FRONT-Model'] ?? r['Body'] ?? '').trim())
-      const m: GSModel = { name, faceKey: faceRef ? baseToKey.get(faceRef) : undefined, bodyKey: bodyRef ? baseToKey.get(bodyRef) : undefined }
-      if (!m.faceKey) warnings.push(`⚠ Mannequin "${name}" : FACE PHOTO introuvable dans le ZIP.`)
+      // Une cellule Notion peut contenir plusieurs fichiers séparés par des virgules → premier
+      const faceRef = decodeRef(String(r['FACE PHOTO'] ?? r['FACE'] ?? r['Face'] ?? '').trim().split(',')[0].trim())
+      const m: GSModel = { name, faceKey: faceRef ? baseToKey.get(faceRef) : undefined }
+      if (!m.faceKey) warnings.push(`⚠ Mannequin "${name}" : FACE PHOTO vide ou introuvable dans le ZIP → exclu du tirage.`)
       models.push(m)
     }
   }
@@ -162,11 +164,12 @@ export async function parseGoldSilverExport(
   const idCol      = findCol(['ID', 'Numero'])
   const skuCol     = findCol(['SKU', 'Nom', 'Name'])
   const frontCol   = findCol(['FILES (FRONT)', 'FRONT'], ['model'])
-  const backCol    = findCol(['FILES (BACK)', 'BACK'])
-  const detailsCol = findCol(['DETAILS', 'DETAIL'])
+  // BACK / PROFIL : volontairement ignorés pour le moment
+  const detailsCol = findCol(['DETAILS', 'DETAIL'], ['texte', 'text'])
+  const detailTextCol = findCol(['Detail texte', 'Détail texte', 'Details texte', 'Detail text', 'Commentaire', 'Description'])
   const modelCol   = findCol(['Model', 'Mannequin'], ['front-model'])
   const decorCol   = findCol(['Décor', 'Decor', 'Decors definition', 'Decors Definition', 'Fond'])
-  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" back="${backCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}"`)
+  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}" detail-texte="${detailTextCol || '—'}"`)
 
   const tasks: GSTask[] = []
   let idx = 0
@@ -177,10 +180,10 @@ export async function parseGoldSilverExport(
     if (!lookId && !sku) continue
     const modelName = modelCol ? stripRef(String(row[modelCol] ?? '').trim()) || undefined : undefined
     const decorName = decorCol ? stripRef(String(row[decorCol] ?? '').trim()) || undefined : undefined
+    const detailText = detailTextCol ? String(row[detailTextCol] ?? '').trim() || undefined : undefined
 
     const views: Array<[GSView, string]> = [
       ['front',   frontCol   ? String(row[frontCol]   ?? '').trim() : ''],
-      ['back',    backCol    ? String(row[backCol]    ?? '').trim() : ''],
       ['details', detailsCol ? String(row[detailsCol] ?? '').trim() : ''],
     ]
     let found = 0
@@ -191,18 +194,17 @@ export async function parseGoldSilverExport(
       const key = baseToKey.get(first)
       if (!key) { warnings.push(`⚠ Look ${lookId} (${sku}) vue ${view} : "${first}" introuvable dans le ZIP.`); continue }
       const w: string[] = []
-      if (!modelName) w.push('Colonne Model vide.')
-      else if (!models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition.`)
-      if (!decorName) w.push('Colonne Décor vide.')
-      else if (!decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition.`)
-      tasks.push({ id: `${lookId}-${view}`, lookId, sku, view, outfitKey: key, modelName, decorName, warnings: w })
+      // Mannequin / décor renseignés mais introuvables → signalé (l'onglet tirera au sort)
+      if (modelName && !models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition → aléatoire.`)
+      if (decorName && !decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition → aléatoire.`)
+      tasks.push({ id: `${lookId}-${view}`, lookId, sku, view, outfitKey: key, modelName, decorName, detailText, warnings: w })
       found++
     }
-    if (found === 0) warnings.push(`⚠ Look ${lookId} (${sku}) : aucune vue (FRONT/BACK/DETAILS) — ignoré.`)
+    if (found === 0) warnings.push(`⚠ Look ${lookId} (${sku}) : ni FRONT ni DETAILS — ignoré.`)
   }
 
-  const incomplete = tasks.filter(t => t.warnings.length > 0).length
-  warnings.push(`✅ ${tasks.length} visuel(s), ${models.length} mannequin(s), ${decors.length} décor(s).${incomplete ? ` ⚠ ${incomplete} visuel(s) sans mannequin/décor valide — ils seront ignorés.` : ''}`)
+  const randomLooks = new Set(tasks.filter(t => !t.modelName || !t.decorName || t.warnings.length > 0).map(t => t.lookId)).size
+  warnings.push(`✅ ${tasks.length} visuel(s), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
   return { tasks, models, decors, warnings, getFile }
 }
 
