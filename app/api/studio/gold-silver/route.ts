@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
+import { detectHead, maskHead } from '@/lib/faceMask'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -17,11 +18,13 @@ export async function POST(request: Request) {
     const isUrl = (u: any) => typeof u === 'string' && /^https?:\/\//.test(u)
     const outfitUrls: string[] = (Array.isArray(body.outfitUrls) ? body.outfitUrls : (body.outfitUrl ? [body.outfitUrl] : [])).filter(isUrl)
     const faceUrl: string   = body.faceUrl ?? ''
+    const bodyUrl: string   = isUrl(body.bodyUrl) ? body.bodyUrl : ''
     const detailUrls: string[] = (Array.isArray(body.detailUrls) ? body.detailUrls : (body.detailUrl ? [body.detailUrl] : [])).filter(isUrl)
     const prompt: string    = body.prompt ?? ''
     const ratio: string     = body.ratio ?? '2:3'
     const quality: string   = body.quality ?? '2K'
     const sku: string       = body.sku ?? ''
+    const maskFaces: boolean = body.maskFaces !== false
 
     if (outfitUrls.length === 0) return NextResponse.json({ error: 'Au moins une outfitUrl requise.' }, { status: 400 })
     if (!isUrl(faceUrl))         return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
@@ -30,23 +33,58 @@ export async function POST(request: Request) {
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY manquante.' }, { status: 500 })
 
+    // ===== Masquage tête (visage + cheveux) sur les photos de tenue PORTÉE =====
+    // Vêtement à plat / packshot → aucune personne détectée → image inchangée.
+    type OutfitPart = { part: any; masked: boolean; maskedUrl?: string; note?: string }
+    const outfits: OutfitPart[] = []
+    for (const u of outfitUrls) {
+      const { buf, mime } = await fetchImage(u)
+      if (!maskFaces) { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
+      const det = await detectHead(buf, mime, apiKey)
+      if (det.error) { outfits.push({ part: toPart(buf, mime), masked: false, note: `détection échouée : ${det.error.slice(0, 80)}` }); continue }
+      if (!det.hasPerson || !det.box) { outfits.push({ part: toPart(buf, mime), masked: false, note: det.hasPerson ? 'tête non localisée' : 'pas de personne (vêtement non porté)' }); continue }
+      try {
+        const m = await maskHead(buf, det.box)
+        let maskedUrl: string | undefined
+        try {
+          const b = await put(`gold-silver-masked/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`, m.buf, {
+            access: 'public', contentType: 'image/jpeg', cacheControlMaxAge: 300, token: process.env.BLOB_READ_WRITE_TOKEN,
+          })
+          maskedUrl = b.url
+        } catch { /* vignette non disponible, on continue */ }
+        outfits.push({ part: toPart(m.buf, m.mime), masked: true, maskedUrl })
+      } catch (e: any) {
+        outfits.push({ part: toPart(buf, mime), masked: false, note: `masquage échoué : ${e?.message ?? e}` })
+      }
+    }
+    const anyMasked = outfits.some(o => o.masked)
+
     const sessionId = Date.now()
     const parts: any[] = [{ text: `[SESSION ${sessionId}]\n${prompt}` }]
-    const nOut = outfitUrls.length
+    const nOut = outfits.length
+    if (anyMasked) {
+      parts.push({ text: `NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The ONLY identity reference is the MODEL FACE image (IMAGE ${nOut + 1}). Do not reproduce any pixelation in the output.` })
+    }
     for (let i = 0; i < nOut; i++) {
       parts.push({ text: nOut === 1
         ? '=== IMAGE 1 — OUTFIT, front view (reproduce this garment exactly) ==='
         : `=== IMAGE ${i + 1} — OUTFIT, photo ${i + 1}/${nOut} of the SAME garment worn ===` })
-      parts.push(await toInlinePart(outfitUrls[i]))
+      parts.push(outfits[i].part)
     }
     const modelIdx = nOut + 1
-    parts.push({ text: `=== IMAGE ${modelIdx} — MODEL (preserve this exact identity) ===` })
+    parts.push({ text: `=== IMAGE ${modelIdx} — MODEL FACE (preserve this exact identity) ===` })
     parts.push(await toInlinePart(faceUrl))
+    let next = modelIdx + 1
+    if (bodyUrl) {
+      parts.push({ text: `=== IMAGE ${next} — MODEL BODY, same person (skin tone, build, silhouette — not the pose, not the background) ===` })
+      parts.push(await toInlinePart(bodyUrl))
+      next++
+    }
     for (let i = 0; i < detailUrls.length; i++) {
-      parts.push({ text: `=== IMAGE ${modelIdx + 1 + i} — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===` })
+      parts.push({ text: `=== IMAGE ${next + i} — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===` })
       parts.push(await toInlinePart(detailUrls[i]))
     }
-    parts.push({ text: `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE ${modelIdx} · scene, light, film look and mood exactly as described · no text, no collage.` })
+    parts.push({ text: `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE ${modelIdx} · TALL elongated model · scene, light, film look and mood exactly as described · no text, no collage.` })
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiRes = await fetch(
@@ -89,19 +127,29 @@ export async function POST(request: Request) {
       imageUrl = `data:${finalMime};base64,${finalBuf.toString('base64')}`
       blobError = e?.message ?? String(e)
     }
-    return NextResponse.json({ imageUrl, blobError })
+    return NextResponse.json({
+      imageUrl, blobError,
+      masks: outfits.map(o => ({ masked: o.masked, maskedUrl: o.maskedUrl, note: o.note })),
+    })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'Erreur inconnue' }, { status: 500 })
   }
 }
 
-async function toInlinePart(url: string) {
+async function fetchImage(url: string): Promise<{ buf: Buffer; mime: string }> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Image inaccessible (${res.status}) : ${url.slice(0, 80)}`)
-  let mime = res.headers.get('content-type') ?? 'image/jpeg'
+  let mime = (res.headers.get('content-type') ?? 'image/jpeg').split(';')[0].trim()
   let buf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
   if (!GEMINI_SUPPORTED.has(mime)) {
     try { buf = await sharp(buf).jpeg({ quality: 90 }).toBuffer(); mime = 'image/jpeg' } catch { /* tel quel */ }
   }
+  return { buf, mime }
+}
+function toPart(buf: Buffer, mime: string) {
   return { inlineData: { mimeType: mime, data: buf.toString('base64') } }
+}
+async function toInlinePart(url: string) {
+  const { buf, mime } = await fetchImage(url)
+  return toPart(buf, mime)
 }

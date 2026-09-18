@@ -25,6 +25,7 @@ type State = {
   enabled:   boolean
   imageUrl?: string
   versions:  string[]     // historique des générations (dernière = imageUrl)
+  masks?:    Array<{ masked: boolean; maskedUrl?: string; note?: string }>   // état du masquage par photo Front
   error?:    string
 }
 
@@ -75,6 +76,8 @@ export default function GoldSilverTab() {
   const [ratio, setRatio]       = useState('2:3')
   const [quality, setQuality]   = useState('2K')
   const [concurrency, setConcurrency] = useState(2)
+  // Masquer visage + cheveux du mannequin d'origine sur les photos de tenue portée
+  const [maskFaces, setMaskFaces] = useState(true)
   const [running, setRunning]   = useState(false)
   const [zipping, setZipping]   = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
@@ -205,18 +208,19 @@ export default function GoldSilverTab() {
 
     setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
     try {
-      const [outfitUrls, faceUrl, detailUrls] = await Promise.all([
+      const [outfitUrls, faceUrl, bodyUrl, detailUrls] = await Promise.all([
         Promise.all(t.outfitKeys.map(uploadKey)),
         uploadKey(model.faceKey),
+        model.bodyKey ? uploadKey(model.bodyKey) : Promise.resolve(''),
         Promise.all(t.detailKeys.map(uploadKey)),
       ])
       const prompt = buildGoldSilverPrompt({
         decorName: decor.name, decorDescription: decor.description, ratio, sku: t.sku, detailText: t.detailText,
-        outfitCount: outfitUrls.length, detailCount: detailUrls.length,
+        outfitCount: outfitUrls.length, hasBody: !!bodyUrl, detailCount: detailUrls.length,
       })
       const resp = await fetch('/api/studio/gold-silver', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outfitUrls, faceUrl, detailUrls, prompt, ratio, quality, sku: t.sku }),
+        body: JSON.stringify({ outfitUrls, faceUrl, bodyUrl: bodyUrl || undefined, detailUrls, prompt, ratio, quality, sku: t.sku, maskFaces }),
       })
       const text = await resp.text()
       let json: any
@@ -228,7 +232,7 @@ export default function GoldSilverTab() {
       const version = (statesRef.current[idx]?.versions.length ?? 0) + 1
       setStates(prev => {
         const next = [...prev]
-        next[idx] = { ...next[idx], status: 'done', imageUrl: url, versions: [...next[idx].versions, url] }
+        next[idx] = { ...next[idx], status: 'done', imageUrl: url, versions: [...next[idx].versions, url], masks: Array.isArray(json.masks) ? json.masks : undefined }
         statesRef.current = next; return next
       })
       if (outputDirHandleRef.current) {
@@ -311,7 +315,7 @@ export default function GoldSilverTab() {
   const previewPrompt = useMemo(() => {
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
-    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, detailCount: 1 })
+    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1 })
   }, [parsed, previewDecor, ratio])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
@@ -331,8 +335,8 @@ export default function GoldSilverTab() {
           <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Golden Silver — Lifestyle depuis Notion</h2>
         </div>
         <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-          Un visuel <strong>de face</strong> par look. <strong>Image 1</strong> = <code>Files (Front)</code> (la tenue portée), <strong>Image 2</strong> = <code>FACE PHOTO</code> du mannequin, <strong>Image 3</strong> = <code>Details</code> si présent — uniquement pour guider la fidélité du vêtement, pas pour produire un visuel détail. Back et Profil ignorés.
-          Prompt = REFERENCES (pieds et chaussures identiques toujours visibles) + description du décor + ratio. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
+          Un visuel <strong>de face</strong> par ligne. Entrées : toutes les photos <code>Files (Front)</code> (la tenue portée), puis <code>FACE PHOTO</code> + <code>FRONT-model</code> du mannequin, puis <code>Details</code> si présents — uniquement pour guider la fidélité du vêtement. Back et Profil ignorés.
+          Prompt = REFERENCES (pieds et chaussures identiques toujours visibles, mannequin grande et élancée) + description du décor + ratio. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
         </p>
       </div>
 
@@ -379,6 +383,15 @@ export default function GoldSilverTab() {
             </select>
           </div>
         </div>
+        <label style={{ marginTop: 12, fontSize: 12, color: '#0D4A5C', display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={maskFaces} onChange={e => setMaskFaces(e.target.checked)} style={{ marginTop: 2 }} />
+          <span>
+            <strong>Masquer visage + cheveux du mannequin d'origine</strong> sur les photos de tenue portée
+            <span style={{ display: 'block', fontSize: 11, color: '#6B7A8A' }}>
+              Détection par Gemini Flash (~0,001 $/photo), pixelisation de la tête, vêtement intact. Vêtement non porté (à plat, packshot) → rien n'est masqué. Les photos masquées telles qu'envoyées s'affichent sous chaque résultat.
+            </span>
+          </span>
+        </label>
         {previewPrompt && (
           <details style={{ marginTop: 10 }} open={showPrompt} onToggle={e => setShowPrompt((e.target as HTMLDetailsElement).open)}>
             <summary style={{ cursor: 'pointer', fontSize: 12, color: '#0D4A5C' }}>
@@ -467,6 +480,8 @@ export default function GoldSilverTab() {
                       <div style={{ marginBottom: 2 }}>Entrées → 1 sortie</div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
                         {t0.outfitKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.outfitKeys.length > 1 ? `Front ${i + 1}` : 'Front'} />)}
+                        {resolveModel(t0)?.faceKey && <InputThumb key={resolveModel(t0)!.faceKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.faceKey!} label="Visage" />}
+                        {resolveModel(t0)?.bodyKey && <InputThumb key={resolveModel(t0)!.bodyKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.bodyKey!} label="Corps" />}
                         {t0.detailKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Détail ${i + 1}`} />)}
                       </div>
                     </div>
@@ -481,6 +496,18 @@ export default function GoldSilverTab() {
                       )}
                     </div>
                   </div>
+                  {s.masks && s.masks.length > 0 && (
+                    <div style={{ marginTop: 6, fontSize: 10, color: '#6B7280' }}>
+                      <div style={{ marginBottom: 2 }}>
+                        Tenue envoyée à Gemini : {s.masks.filter(m => m.masked).length}/{s.masks.length} tête(s) masquée(s)
+                      </div>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {s.masks.map((m, i) => m.maskedUrl
+                          ? <a key={i} href={m.maskedUrl} target="_blank" rel="noreferrer"><img src={m.maskedUrl} alt={`masked ${i + 1}`} style={{ height: 72, borderRadius: 4 }} /></a>
+                          : <span key={i} style={pill('#F3F4F6', '#6B7280')} title={m.note}>front {i + 1} : {m.note ?? 'non masqué'}</span>)}
+                      </div>
+                    </div>
+                  )}
                   {s.error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 4 }} title={s.error}>{s.error.slice(0, 120)}</div>}
                   {s.task.warnings.map((w, i) => <div key={i} style={{ fontSize: 10, color: '#B45309', marginTop: 2 }}>⚠ {w}</div>)}
                 </div>
