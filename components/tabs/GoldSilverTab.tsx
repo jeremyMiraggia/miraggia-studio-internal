@@ -191,7 +191,7 @@ export default function GoldSilverTab() {
     try {
       const res = await parseGoldSilverExport(files[0], msg => setProgress(msg))
       setParsed(res)
-      const ns: State[] = res.tasks.map(t => ({ task: t, status: 'pending', enabled: true, versions: [] }))
+      const ns: State[] = resetStatesForMode(subMode, res.tasks.map(t => ({ task: t, status: 'pending' as TaskStatus, enabled: true, versions: [] })))
       setStates(ns); statesRef.current = ns
       // Tirages aléatoires initiaux
       const picks: Record<string, { model?: string; decor?: string }> = {}
@@ -246,17 +246,27 @@ export default function GoldSilverTab() {
     }
   }
   const fileNameFor = (s: State, version: number) =>
-    `${sanitizeFilename(s.task.sku)}${subMode === 'back' ? '_back' : ''}${version > 1 ? `_${version}` : ''}.jpg`
+    `${sanitizeFilename(s.task.sku)}${subMode === 'back' ? '_Back' : ''}${version > 1 ? `_${version}` : ''}.jpg`
+
+  /** En mode Back, une ligne sans visuel de face OU sans photo de dos est écartée d'office (décochée, jamais tentée). */
+  const backIneligible = (t: GSTask): string | null => {
+    if (t.outfitKeys.length === 0) return 'pas de visuel de face (Files (Front) vide)'
+    if (t.backKeys.length === 0)   return 'pas de photo de dos (Files (Back) vide)'
+    return null
+  }
+  const resetStatesForMode = (mode: SubMode, base: State[]): State[] =>
+    base.map(s => {
+      const reason = mode === 'back' ? backIneligible(s.task) : null
+      return reason
+        ? { ...s, status: 'skipped' as TaskStatus, enabled: false, error: `⊘ écarté : ${reason}`, imageUrl: undefined, versions: [], masks: undefined }
+        : { ...s, status: 'pending' as TaskStatus, enabled: true, error: undefined, imageUrl: undefined, versions: [], masks: undefined }
+    })
 
   // Changer de sous-onglet remet toutes les cartes en attente (les visuels sont d'un autre type)
   const switchSubMode = (m: SubMode) => {
     if (m === subMode || running) return
     setSubMode(m)
-    setStates(prev => {
-      const next = prev.map(s => ({ ...s, status: 'pending' as TaskStatus, enabled: true, error: undefined, imageUrl: undefined, versions: [], masks: undefined }))
-      statesRef.current = next
-      return next
-    })
+    setStates(prev => { const next = resetStatesForMode(m, prev); statesRef.current = next; return next })
     setSavedCount(0)
   }
 
@@ -303,7 +313,7 @@ export default function GoldSilverTab() {
         const prompt = buildGoldSilverBackPrompt({ ratio, sku: t.sku, backCount: backUrls.length, detailText: t.detailText, modelDescription })
         const resp = await fetch('/api/studio/gold-silver', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'back', frontVisualUrl, outfitUrls: backUrls, prompt, ratio, quality, sku: `${t.sku}_back`, maskFaces }),
+          body: JSON.stringify({ mode: 'back', frontVisualUrl, outfitUrls: backUrls, prompt, ratio, quality, sku: `${t.sku}_Back`, maskFaces }),
         })
         const text = await resp.text()
         let json: any
@@ -385,10 +395,10 @@ export default function GoldSilverTab() {
     if (statesRef.current.length === 0) { setError('Aucune tâche. Drop un ZIP Notion.'); return }
     setRunning(true); setError(null)
     setStates(prev => {
-      const next = prev.map(s => (s.status === 'done' || s.status === 'saved') ? s : { ...s, status: 'pending' as TaskStatus, error: undefined })
+      const next = prev.map(s => (s.status === 'done' || s.status === 'saved' || isIneligible(s.task)) ? s : { ...s, status: 'pending' as TaskStatus, error: undefined })
       statesRef.current = next; return next
     })
-    const todo = statesRef.current.map((s, idx) => ({ s, idx })).filter(({ s }) => s.enabled && s.status !== 'done' && s.status !== 'saved')
+    const todo = statesRef.current.map((s, idx) => ({ s, idx })).filter(({ s }) => s.enabled && !isIneligible(s.task) && s.status !== 'done' && s.status !== 'saved')
     const pool = Math.max(1, Math.min(concurrency, 6))
     let cursor = 0
     await Promise.all(Array.from({ length: pool }, async () => {
@@ -431,8 +441,9 @@ export default function GoldSilverTab() {
   }
 
   /* ----------- Toggles / stats ----------- */
-  const toggleTask = (id: string) => setStates(prev => { const next = prev.map(s => s.task.id === id ? { ...s, enabled: !s.enabled } : s); statesRef.current = next; return next })
-  const setAllEnabled = (v: boolean) => setStates(prev => { const next = prev.map(s => ({ ...s, enabled: v })); statesRef.current = next; return next })
+  const isIneligible = (t: GSTask) => subMode === 'back' && !!backIneligible(t)
+  const toggleTask = (id: string) => setStates(prev => { const next = prev.map(s => s.task.id === id && !isIneligible(s.task) ? { ...s, enabled: !s.enabled } : s); statesRef.current = next; return next })
+  const setAllEnabled = (v: boolean) => setStates(prev => { const next = prev.map(s => ({ ...s, enabled: v && !isIneligible(s.task) })); statesRef.current = next; return next })
 
   const stats = useMemo(() => ({
     total: states.length,
@@ -486,7 +497,7 @@ export default function GoldSilverTab() {
         ) : (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
             Un visuel <strong>de dos</strong> par ligne. <strong>Image 1</strong> = <code>Files (Front)</code> = le visuel de face <strong>final</strong> (mannequin, décor, lumière et style à conserver). <strong>Images 2…</strong> = <code>Files (Back)</code> = la tenue vue de dos (une ou plusieurs photos).
-            Prompt : même mannequin, même lieu, même lumière, vue de dos, pose naturelle et décontractée, pieds et chaussures visibles. Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
+            Prompt : même mannequin, même lieu, même lumière, vue de dos, pose posée et décontractée (debout, immobile, pas de marche), pieds et chaussures visibles. Fichiers <code>NOMDULOOK_Back.jpg</code>. Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
           </p>
         )}
       </div>
@@ -629,7 +640,8 @@ export default function GoldSilverTab() {
               return (
                 <div key={s.task.id} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10, background: s.enabled ? '#fff' : '#F9FAFB', opacity: s.enabled ? 1 : 0.55 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                    <input type="checkbox" checked={s.enabled} onChange={() => toggleTask(s.task.id)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+                    <input type="checkbox" checked={s.enabled} disabled={isIneligible(s.task)} onChange={() => toggleTask(s.task.id)}
+                           title={isIneligible(s.task) ? backIneligible(s.task) ?? '' : ''} style={{ width: 16, height: 16, cursor: isIneligible(s.task) ? 'not-allowed' : 'pointer' }} />
                     {s.status === 'pending' && <span style={pill('#9CA3AF')}>•</span>}
                     {s.status === 'running' && <span style={pill('#F59E0B')}>⏳</span>}
                     {s.status === 'done'    && <span style={pill('#3B82F6')}>✓</span>}
