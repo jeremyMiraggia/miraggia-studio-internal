@@ -16,7 +16,9 @@ import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
 import { parseGoldSilverExport, normName, type GSExport, type GSTask, type GSModel } from '@/lib/notion/parseGoldSilverExport'
-import { buildGoldSilverPrompt } from '@/lib/goldSilverPrompt'
+import { buildGoldSilverPrompt, buildGoldSilverBackPrompt } from '@/lib/goldSilverPrompt'
+
+type SubMode = 'front' | 'back'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'saved' | 'error' | 'skipped'
 type State = {
@@ -65,6 +67,9 @@ async function ensureWritePermission(handle: any): Promise<boolean> {
 }
 
 export default function GoldSilverTab() {
+  // Sous-onglet : 'front' = tenue + mannequin + décor → visuel de face
+  //               'back'  = visuel de face final + tenue de dos → visuel de dos
+  const [subMode, setSubMode]   = useState<SubMode>('front')
   const [zips, setZips]         = useState<File[]>([])
   const [parsing, setParsing]   = useState(false)
   const [parsed, setParsed]     = useState<GSExport | null>(null)
@@ -241,7 +246,19 @@ export default function GoldSilverTab() {
     }
   }
   const fileNameFor = (s: State, version: number) =>
-    `${sanitizeFilename(s.task.sku)}${version > 1 ? `_${version}` : ''}.jpg`
+    `${sanitizeFilename(s.task.sku)}${subMode === 'back' ? '_back' : ''}${version > 1 ? `_${version}` : ''}.jpg`
+
+  // Changer de sous-onglet remet toutes les cartes en attente (les visuels sont d'un autre type)
+  const switchSubMode = (m: SubMode) => {
+    if (m === subMode || running) return
+    setSubMode(m)
+    setStates(prev => {
+      const next = prev.map(s => ({ ...s, status: 'pending' as TaskStatus, enabled: true, error: undefined, imageUrl: undefined, versions: [], masks: undefined }))
+      statesRef.current = next
+      return next
+    })
+    setSavedCount(0)
+  }
 
   const writeToOutputDir = async (s: State, url: string, version: number): Promise<boolean> => {
     const handle = outputDirHandleRef.current
@@ -269,6 +286,50 @@ export default function GoldSilverTab() {
     const fail = (msg: string, status: TaskStatus = 'skipped') => setStates(prev => {
       const next = [...prev]; next[idx] = { ...next[idx], status, error: msg }; statesRef.current = next; return next
     })
+
+    // ===== Sous-onglet BACK : image 1 = visuel de face final, images 2.. = tenue de dos =====
+    if (subMode === 'back') {
+      if (t.outfitKeys.length === 0) return fail('Files (Front) vide — il faut le visuel de face final.')
+      if (t.backKeys.length === 0)   return fail('Files (Back) vide — aucune photo de la tenue de dos.')
+      setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
+      try {
+        const [frontVisualUrl, backUrls] = await Promise.all([
+          uploadKey(t.outfitKeys[0]),                 // le visuel de face FINAL (première image de Files (Front))
+          Promise.all(t.backKeys.map(uploadKey)),
+        ])
+        const mName = model?.name
+        if (mName) for (let i = 0; i < 40 && modelDescsRef.current[mName]?.status === 'running'; i++) await new Promise(r => setTimeout(r, 500))
+        const modelDescription = mName && modelDescsRef.current[mName]?.status === 'done' ? modelDescsRef.current[mName].text : undefined
+        const prompt = buildGoldSilverBackPrompt({ ratio, sku: t.sku, backCount: backUrls.length, detailText: t.detailText, modelDescription })
+        const resp = await fetch('/api/studio/gold-silver', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'back', frontVisualUrl, outfitUrls: backUrls, prompt, ratio, quality, sku: `${t.sku}_back`, maskFaces }),
+        })
+        const text = await resp.text()
+        let json: any
+        try { json = JSON.parse(text) } catch { throw new Error(`HTTP ${resp.status} : ${text.replace(/<[^>]+>/g, ' ').trim().slice(0, 160)}`) }
+        if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`)
+        const url: string = json.imageUrl
+        if (!url) throw new Error('Réponse sans URL.')
+        const version = (statesRef.current[idx]?.versions.length ?? 0) + 1
+        setStates(prev => {
+          const next = [...prev]
+          next[idx] = { ...next[idx], status: 'done', imageUrl: url, versions: [...next[idx].versions, url], masks: Array.isArray(json.masks) ? json.masks : undefined }
+          statesRef.current = next; return next
+        })
+        if (outputDirHandleRef.current) {
+          const saved = await writeToOutputDir(statesRef.current[idx], url, version)
+          if (saved) {
+            setSavedCount(c => c + 1)
+            setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'saved' }; statesRef.current = next; return next })
+          }
+        }
+      } catch (e: any) {
+        fail(e?.message ?? String(e), 'error')
+      }
+      return
+    }
+
     if (!model)          return fail('Aucun mannequin disponible (colonne vide et Models Definition vide).')
     if (!model.faceKey)  return fail(`Mannequin "${model.name}" sans FACE PHOTO dans le ZIP.`)
     if (!decor)          return fail('Aucun décor disponible (colonne vide et Decors Definition vide).')
@@ -385,10 +446,13 @@ export default function GoldSilverTab() {
 
   const [previewDecor, setPreviewDecor] = useState('')
   const previewPrompt = useMemo(() => {
+    if (subMode === 'back') {
+      return buildGoldSilverBackPrompt({ ratio, sku: 'SKU', backCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)' })
+    }
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
     return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1, modelDescription: '(description du mannequin choisi, générée ci-dessus)' })
-  }, [parsed, previewDecor, ratio])
+  }, [parsed, previewDecor, ratio, subMode])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
 
@@ -405,11 +469,26 @@ export default function GoldSilverTab() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 22 }}>🥇</span>
           <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Golden Silver — Lifestyle depuis Notion</h2>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, background: '#F3F4F6', padding: 3, borderRadius: 8 }}>
+            {(['front', 'back'] as SubMode[]).map(m => (
+              <button key={m} onClick={() => switchSubMode(m)} disabled={running} style={{
+                padding: '6px 14px', border: 'none', borderRadius: 6, cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600,
+                background: subMode === m ? '#0D4A5C' : 'transparent', color: subMode === m ? '#C8F07D' : '#374151',
+              }}>{m === 'front' ? '🧍 Face' : '🔄 Back'}</button>
+            ))}
+          </div>
         </div>
-        <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-          Un visuel <strong>de face</strong> par ligne. Entrées : toutes les photos <code>Files (Front)</code> (la tenue portée), puis <code>FACE PHOTO</code> + <code>FRONT-model</code> du mannequin, puis <code>Details</code> si présents — uniquement pour guider la fidélité du vêtement. Back et Profil ignorés.
-          Prompt = REFERENCES (pieds et chaussures identiques toujours visibles, mannequin grande et élancée) + description du décor + ratio. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
-        </p>
+        {subMode === 'front' ? (
+          <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
+            Un visuel <strong>de face</strong> par ligne. Entrées : toutes les photos <code>Files (Front)</code> (la tenue portée), puis <code>FACE PHOTO</code> + <code>FRONT-model</code> du mannequin, puis <code>Details</code> si présents — uniquement pour guider la fidélité du vêtement.
+            Prompt = REFERENCES (pieds et chaussures identiques toujours visibles, mannequin grande et élancée) + description du décor + ratio. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
+          </p>
+        ) : (
+          <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
+            Un visuel <strong>de dos</strong> par ligne. <strong>Image 1</strong> = <code>Files (Front)</code> = le visuel de face <strong>final</strong> (mannequin, décor, lumière et style à conserver). <strong>Images 2…</strong> = <code>Files (Back)</code> = la tenue vue de dos (une ou plusieurs photos).
+            Prompt : même mannequin, même lieu, même lumière, vue de dos, pose naturelle et décontractée, pieds et chaussures visibles. Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
+          </p>
+        )}
       </div>
 
       <div style={card}>
@@ -489,7 +568,7 @@ export default function GoldSilverTab() {
         <label style={{ marginTop: 12, fontSize: 12, color: '#0D4A5C', display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
           <input type="checkbox" checked={maskFaces} onChange={e => setMaskFaces(e.target.checked)} style={{ marginTop: 2 }} />
           <span>
-            <strong>Masquer visage + cheveux du mannequin d'origine</strong> sur les photos de tenue portée
+            <strong>Masquer visage + cheveux du mannequin d'origine</strong> sur les photos de tenue portée{subMode === 'back' ? ' (photos de dos — souvent pas de visage détecté, c\'est normal)' : ''}
             <span style={{ display: 'block', fontSize: 11, color: '#6B7A8A' }}>
               Détection par Gemini Flash (~0,001 $/photo), pixelisation de la tête, vêtement intact. Vêtement non porté (à plat, packshot) → rien n'est masqué. Les photos masquées telles qu'envoyées s'affichent sous chaque résultat.
             </span>
@@ -498,11 +577,16 @@ export default function GoldSilverTab() {
         {previewPrompt && (
           <details style={{ marginTop: 10 }} open={showPrompt} onToggle={e => setShowPrompt((e.target as HTMLDetailsElement).open)}>
             <summary style={{ cursor: 'pointer', fontSize: 12, color: '#0D4A5C' }}>
-              Voir le prompt assemblé —{' '}
-              <select value={previewDecor || parsed?.decors[0]?.name || ''} onChange={e => setPreviewDecor(e.target.value)}
-                      onClick={e => e.stopPropagation()} style={{ fontSize: 12 }}>
-                {parsed?.decors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
-              </select>
+              Voir le prompt assemblé{subMode === 'back' ? ' (dos)' : ''}
+              {subMode === 'front' && (
+                <>
+                  {' — '}
+                  <select value={previewDecor || parsed?.decors[0]?.name || ''} onChange={e => setPreviewDecor(e.target.value)}
+                          onClick={e => e.stopPropagation()} style={{ fontSize: 12 }}>
+                    {parsed?.decors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
+                  </select>
+                </>
+              )}
             </summary>
             <pre style={{ fontSize: 11, background: '#F9FAFB', padding: 10, borderRadius: 6, whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{previewPrompt}</pre>
           </details>
@@ -561,6 +645,13 @@ export default function GoldSilverTab() {
                               style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14 }}>↺</button>
                     )}
                   </div>
+                  {subMode === 'back' ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                    <span style={pill(t0.outfitKeys.length ? '#E8F2F5' : '#FEE2E2', t0.outfitKeys.length ? '#0D4A5C' : '#991B1B')}>🧍 {t0.outfitKeys.length ? 'visuel face final' : 'pas de visuel face'}</span>
+                    <span style={pill(t0.backKeys.length ? '#DCFCE7' : '#FEE2E2', t0.backKeys.length ? '#166534' : '#991B1B')}>🔄 {t0.backKeys.length ? `${t0.backKeys.length} photo${t0.backKeys.length > 1 ? 's' : ''} de dos` : 'pas de photo de dos'}</span>
+                    {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 détail texte</span>}
+                  </div>
+                  ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: srcStyle(mSrc), borderRadius: 999, padding: '2px 6px 2px 8px' }} title={`Mannequin : ${mSrc}`}>
                       <span style={{ fontSize: 11 }}>👤</span>
@@ -591,18 +682,28 @@ export default function GoldSilverTab() {
                       {t0.detailKeys.length ? `🔍 ${t0.detailKeys.length} détail${t0.detailKeys.length > 1 ? 's' : ''} en guide` : 'sans détail'}
                     </span>
                   </div>
+                  )}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8 }}>
                     <div style={{ fontSize: 10, color: '#6B7280' }}>
                       <div style={{ marginBottom: 2 }}>Entrées → 1 sortie</div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-                        {t0.outfitKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.outfitKeys.length > 1 ? `Front ${i + 1}` : 'Front'} />)}
-                        {resolveModel(t0)?.faceKey && <InputThumb key={resolveModel(t0)!.faceKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.faceKey!} label="Visage" />}
-                        {resolveModel(t0)?.bodyKey && <InputThumb key={resolveModel(t0)!.bodyKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.bodyKey!} label="Corps" />}
-                        {t0.detailKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Détail ${i + 1}`} />)}
+                        {subMode === 'back' ? (
+                          <>
+                            {t0.outfitKeys[0] && <InputThumb key={t0.outfitKeys[0]} getFile={parsed!.getFile} zipKey={t0.outfitKeys[0]} label="Face final" />}
+                            {t0.backKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.backKeys.length > 1 ? `Dos ${i + 1}` : 'Dos'} />)}
+                          </>
+                        ) : (
+                          <>
+                            {t0.outfitKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.outfitKeys.length > 1 ? `Front ${i + 1}` : 'Front'} />)}
+                            {resolveModel(t0)?.faceKey && <InputThumb key={resolveModel(t0)!.faceKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.faceKey!} label="Visage" />}
+                            {resolveModel(t0)?.bodyKey && <InputThumb key={resolveModel(t0)!.bodyKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.bodyKey!} label="Corps" />}
+                            {t0.detailKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Détail ${i + 1}`} />)}
+                          </>
+                        )}
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontSize: 10, color: '#10B981', marginBottom: 2 }}>Sortie (face)</div>
+                      <div style={{ fontSize: 10, color: '#10B981', marginBottom: 2 }}>Sortie ({subMode === 'back' ? 'dos' : 'face'})</div>
                       {s.imageUrl ? (
                         <a href={s.imageUrl} target="_blank" rel="noreferrer">
                           <img src={s.imageUrl} alt={s.task.id} style={{ width: '100%', borderRadius: 4, display: 'block' }} />

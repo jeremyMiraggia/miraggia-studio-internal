@@ -30,6 +30,7 @@ export type GSTask = {
   sku:        string
   outfitKeys: string[]
   detailKeys: string[]
+  backKeys:   string[]    // Files (Back) — utilisé par le sous-onglet Back (tenue vue de dos)
   modelName?: string      // colonne Model du LOOK (vide → tirage aléatoire côté onglet)
   decorName?: string      // colonne Décor du LOOK (vide → tirage aléatoire côté onglet)
   detailText?: string     // colonne "Detail texte" (optionnelle) — ajoutée au prompt
@@ -174,12 +175,13 @@ export async function parseGoldSilverExport(
   const idCol      = findCol(['ID', 'Numero'])
   const skuCol     = findCol(['SKU', 'Nom', 'Name'])
   const frontCol   = findCol(['FILES (FRONT)', 'FRONT'], ['model'])
-  // BACK / PROFIL : volontairement ignorés pour le moment
+  const backCol    = findCol(['FILES (BACK)', 'BACK'])
+  // PROFIL : volontairement ignoré pour le moment
   const detailsCol = findCol(['DETAILS', 'DETAIL'], ['texte', 'text'])
   const detailTextCol = findCol(['Detail texte', 'Détail texte', 'Details texte', 'Detail text', 'Commentaire', 'Description'])
   const modelCol   = findCol(['Model', 'Mannequin'], ['front-model'])
   const decorCol   = findCol(['Décor', 'Decor', 'Decors definition', 'Decors Definition', 'Fond'])
-  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}" detail-texte="${detailTextCol || '—'}"`)
+  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" back="${backCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}" detail-texte="${detailTextCol || '—'}"`)
 
   const tasks: GSTask[] = []
   let idx = 0
@@ -199,6 +201,7 @@ export async function parseGoldSilverExport(
     }
     const frontRefs  = allRefs(frontCol)
     const detailRefs = allRefs(detailsCol)
+    const backRefs   = allRefs(backCol)
     if (frontRefs.length === 0) { warnings.push(`⚠ Look ${lookId} (${sku}) : Files (Front) vide — ignoré.`); continue }
 
     const frontKeys = frontRefs.map(r => ({ ref: r, key: baseToKey.get(r) }))
@@ -213,6 +216,12 @@ export async function parseGoldSilverExport(
       if (k) detailKeys.push(k)
       else w.push(`Détail "${r}" introuvable dans le ZIP — ignoré.`)
     }
+    const backKeys: string[] = []
+    for (const r of backRefs) {
+      const k = baseToKey.get(r)
+      if (k) backKeys.push(k)
+      else w.push(`Back "${r}" introuvable dans le ZIP — ignoré.`)
+    }
     // Mannequin / décor renseignés mais introuvables → signalé (l'onglet tirera au sort)
     if (modelName && !models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition → aléatoire.`)
     if (decorName && !decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition → aléatoire.`)
@@ -220,14 +229,15 @@ export async function parseGoldSilverExport(
     tasks.push({
       id: lookId, lookId, sku,
       outfitKeys: validFronts.map(f => f.key),
-      detailKeys, modelName, decorName, detailText, warnings: w,
+      detailKeys, backKeys, modelName, decorName, detailText, warnings: w,
     })
   }
 
   const randomLooks = tasks.filter(t => !t.modelName || !t.decorName || t.warnings.some(x => x.includes('aléatoire'))).length
   const withDetail  = tasks.filter(t => t.detailKeys.length > 0).length
   const multiFront  = tasks.filter(t => t.outfitKeys.length > 1).length
-  warnings.push(`✅ ${tasks.length} look(s) → ${tasks.length} visuel(s) de face (${multiFront} avec plusieurs photos Front, ${withDetail} avec détail(s) en guide), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
+  const withBack    = tasks.filter(t => t.backKeys.length > 0).length
+  warnings.push(`✅ ${tasks.length} look(s) (${multiFront} avec plusieurs photos Front, ${withDetail} avec détail(s), ${withBack} avec photo(s) Back), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
   return { tasks, models, decors, warnings, getFile }
 }
 

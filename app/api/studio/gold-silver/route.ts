@@ -25,9 +25,13 @@ export async function POST(request: Request) {
     const quality: string   = body.quality ?? '2K'
     const sku: string       = body.sku ?? ''
     const maskFaces: boolean = body.maskFaces !== false
+    // mode 'back' : IMAGE 1 = visuel de face final (frontVisualUrl), outfitUrls = tenue vue de dos
+    const mode: 'front' | 'back' = body.mode === 'back' ? 'back' : 'front'
+    const frontVisualUrl: string = isUrl(body.frontVisualUrl) ? body.frontVisualUrl : ''
 
     if (outfitUrls.length === 0) return NextResponse.json({ error: 'Au moins une outfitUrl requise.' }, { status: 400 })
-    if (!isUrl(faceUrl))         return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
+    if (mode === 'front' && !isUrl(faceUrl)) return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
+    if (mode === 'back' && !frontVisualUrl)  return NextResponse.json({ error: 'frontVisualUrl requise en mode back.' }, { status: 400 })
     if (!prompt.trim())                  return NextResponse.json({ error: 'prompt requis.' }, { status: 400 })
 
     const apiKey = process.env.GEMINI_API_KEY
@@ -62,6 +66,20 @@ export async function POST(request: Request) {
     const sessionId = Date.now()
     const parts: any[] = [{ text: `[SESSION ${sessionId}]\n${prompt}` }]
     const nOut = outfits.length
+
+    if (mode === 'back') {
+      // IMAGE 1 = visuel de face final ; IMAGES 2..n+1 = tenue de dos
+      if (anyMasked) {
+        parts.push({ text: 'NOTE ON THE BACK-VIEW OUTFIT REFERENCES: the head of the person wearing the garment may be INTENTIONALLY pixelated. Ignore that person — the model is the one in IMAGE 1. Do not reproduce any pixelation.' })
+      }
+      parts.push({ text: '=== IMAGE 1 — FINAL FRONT PHOTOGRAPH: same model, same place, same light, same style to keep ===' })
+      parts.push(await toInlinePart(frontVisualUrl))
+      for (let i = 0; i < nOut; i++) {
+        parts.push({ text: `=== IMAGE ${i + 2} — OUTFIT seen from the BACK${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''} (reproduce the back of this garment exactly) ===` })
+        parts.push(outfits[i].part)
+      }
+      parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model and same scene as IMAGE 1 · back of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · same shoes, feet fully visible · natural relaxed pose · same light, film look and mood as IMAGE 1 · no text, no collage.` })
+    } else {
     if (anyMasked) {
       parts.push({ text: `NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The ONLY identity reference is the MODEL FACE image (IMAGE ${nOut + 1}). Do not reproduce any pixelation in the output.` })
     }
@@ -85,6 +103,7 @@ export async function POST(request: Request) {
       parts.push(await toInlinePart(detailUrls[i]))
     }
     parts.push({ text: `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE ${modelIdx} · TALL elongated model · scene, light, film look and mood exactly as described · no text, no collage.` })
+    }
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
     const geminiRes = await fetch(

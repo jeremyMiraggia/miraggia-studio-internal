@@ -1,4 +1,65 @@
 /**
+ * Prompt Golden Silver — sous-onglet BACK.
+ *
+ *   IMAGE 1        = le visuel de FACE final (mannequin + décor + lumière à CONSERVER)
+ *   IMAGES 2…n+1   = la tenue vue de DOS (photos produit / portées)
+ *
+ * Sortie : le même mannequin, dans le même décor, vu de dos, pose naturelle.
+ */
+export function buildGoldSilverBackPrompt(opts: {
+  ratio: string
+  sku?: string
+  backCount?: number
+  detailText?: string
+  modelDescription?: string
+}): string {
+  const n = Math.max(1, opts.backCount ?? 1)
+  const backLabel = n === 1 ? 'IMAGE 2' : `IMAGES 2 to ${n + 1}`
+  const lines = [
+    'EDITORIAL FASHION PHOTOGRAPH — BACK VIEW OF AN EXISTING SHOT',
+    '',
+    'REFERENCES (strict):',
+    '- IMAGE 1 = the FINAL FRONT photograph of this look. It defines EVERYTHING that must',
+    '  stay identical: the SAME model (identity, hair color/texture/length, skin tone,',
+    '  build, height), the SAME location and background, the SAME light direction, time',
+    '  of day, color palette, film look and grain, and the same photographic style and',
+    '  distance to camera. Treat it as the previous frame of the same shoot, taken',
+    '  seconds later from behind.',
+    `- ${backLabel} = the OUTFIT seen from the BACK. Reproduce the back of the garment`,
+    '  exactly: back seams, closure (zip, buttons, ties), straps, neckline, waist, hem',
+    '  length, fabric, color, print. No reinterpretation. The front of the garment is',
+    '  the one worn in IMAGE 1 — this is the same outfit.',
+    '  SHOES: exactly the same shoes as in IMAGE 1.',
+  ]
+  if (opts.modelDescription?.trim()) {
+    lines.push(
+      '  MODEL DESCRIPTION (must match IMAGE 1):',
+      ...opts.modelDescription.trim().split('\n').map(l => `  ${l.trim()}`).filter(l => l.trim()),
+    )
+  }
+  lines.push(
+    '',
+    'OUTPUT: ONE photograph of the same model, in the same place, seen from BEHIND',
+    '(full back view or a slight three-quarter back). Natural, relaxed, candid pose —',
+    'walking away mid-step, standing with weight on one leg, glancing over the',
+    'shoulder, hand in hair or resting on the wall; nothing stiff or symmetrical. The',
+    'back of the garment must be fully readable. FEET (non-negotiable): feet and shoes',
+    'always fully visible, never cut by the frame. Full-length figure, small margin',
+    'below the shoes. Same aspect ratio and framing distance as IMAGE 1.',
+  )
+  if (opts.detailText?.trim()) {
+    lines.push('', 'ADDITIONAL DIRECTION (from the brief):', opts.detailText.trim())
+  }
+  lines.push(
+    '---------------',
+    'TECHNICAL:',
+    `Aspect ratio ${opts.ratio}. High resolution. Photorealistic. Same film stock, grain and color rendering as IMAGE 1.`,
+  )
+  if (opts.sku) lines.push(`Reference: ${opts.sku}.`)
+  return lines.join('\n')
+}
+
+/**
  * Prompt Golden Silver — bloc REFERENCES fixe + description du décor (Notion) + bloc TECHNICAL.
  *
  * Ordre des images envoyées :
