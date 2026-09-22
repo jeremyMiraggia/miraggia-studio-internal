@@ -15,7 +15,7 @@ import JSZip from 'jszip'
 import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
-import { parseGoldSilverExport, normName, type GSExport, type GSTask } from '@/lib/notion/parseGoldSilverExport'
+import { parseGoldSilverExport, normName, type GSExport, type GSTask, type GSModel } from '@/lib/notion/parseGoldSilverExport'
 import { buildGoldSilverPrompt } from '@/lib/goldSilverPrompt'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'saved' | 'error' | 'skipped'
@@ -78,6 +78,54 @@ export default function GoldSilverTab() {
   const [concurrency, setConcurrency] = useState(2)
   // Masquer visage + cheveux du mannequin d'origine sur les photos de tenue portée
   const [maskFaces, setMaskFaces] = useState(true)
+
+  // Descriptions courtes des mannequins (générées UNE fois, cache localStorage, éditables)
+  type ModelDesc = { text: string; status: 'pending' | 'running' | 'done' | 'error'; error?: string; fromCache?: boolean }
+  const [modelDescs, setModelDescs] = useState<Record<string, ModelDesc>>({})
+  const modelDescsRef = useRef<Record<string, ModelDesc>>({})
+  const setDesc = (name: string, patch: Partial<ModelDesc>) => {
+    setModelDescs(prev => {
+      const next = { ...prev, [name]: { ...(prev[name] ?? { text: '', status: 'pending' as const }), ...patch } }
+      modelDescsRef.current = next
+      return next
+    })
+  }
+  const descCacheKey = (m: GSModel) => `gs-model-desc:${normName(m.name)}:${(m.faceKey ?? '').split('/').pop()}`
+  const describeModel = async (m: GSModel, force = false) => {
+    if (!m.faceKey) return
+    const key = descCacheKey(m)
+    if (!force) {
+      try {
+        const cached = localStorage.getItem(key)
+        if (cached) { setDesc(m.name, { text: cached, status: 'done', fromCache: true }); return }
+      } catch { /* pas de localStorage */ }
+    }
+    setDesc(m.name, { status: 'running', error: undefined })
+    try {
+      const [faceUrl, bodyUrl] = await Promise.all([uploadKey(m.faceKey), m.bodyKey ? uploadKey(m.bodyKey) : Promise.resolve('')])
+      const r = await fetch('/api/studio/gold-silver/describe-model', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ faceUrl, bodyUrl: bodyUrl || undefined, name: m.name }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+      setDesc(m.name, { text: j.description, status: 'done', fromCache: false })
+      try { localStorage.setItem(key, j.description) } catch { /* ignore */ }
+    } catch (e: any) {
+      setDesc(m.name, { status: 'error', error: e?.message ?? String(e) })
+    }
+  }
+  const editDesc = (m: GSModel, text: string) => {
+    setDesc(m.name, { text, status: 'done' })
+    try { localStorage.setItem(descCacheKey(m), text) } catch { /* ignore */ }
+  }
+  // Au chargement d'un ZIP : décrit chaque mannequin (cache localStorage sinon Gemini Flash)
+  useEffect(() => {
+    if (!parsed) return
+    setModelDescs({}); modelDescsRef.current = {}
+    for (const m of parsed.models) if (m.faceKey) describeModel(m)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsed])
   const [running, setRunning]   = useState(false)
   const [zipping, setZipping]   = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
@@ -214,9 +262,14 @@ export default function GoldSilverTab() {
         model.bodyKey ? uploadKey(model.bodyKey) : Promise.resolve(''),
         Promise.all(t.detailKeys.map(uploadKey)),
       ])
+      // Description du mannequin : on attend si elle est encore en cours (max ~20 s)
+      for (let i = 0; i < 40 && modelDescsRef.current[model.name]?.status === 'running'; i++) {
+        await new Promise(r => setTimeout(r, 500))
+      }
+      const modelDescription = modelDescsRef.current[model.name]?.status === 'done' ? modelDescsRef.current[model.name].text : undefined
       const prompt = buildGoldSilverPrompt({
         decorName: decor.name, decorDescription: decor.description, ratio, sku: t.sku, detailText: t.detailText,
-        outfitCount: outfitUrls.length, hasBody: !!bodyUrl, detailCount: detailUrls.length,
+        outfitCount: outfitUrls.length, hasBody: !!bodyUrl, detailCount: detailUrls.length, modelDescription,
       })
       const resp = await fetch('/api/studio/gold-silver', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -315,7 +368,7 @@ export default function GoldSilverTab() {
   const previewPrompt = useMemo(() => {
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
-    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1 })
+    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1, modelDescription: '(description du mannequin choisi, générée ci-dessus)' })
   }, [parsed, previewDecor, ratio])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
@@ -355,6 +408,37 @@ export default function GoldSilverTab() {
           </div>
         )}
       </div>
+
+      {parsed && parsed.models.length > 0 && (
+        <div style={card}>
+          <div style={label}>Mannequins — description courte (générée une fois, réutilisée dans chaque prompt)</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 10 }}>
+            {parsed.models.map(m => {
+              const d = modelDescs[m.name]
+              return (
+                <div key={m.name} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 8, display: 'grid', gridTemplateColumns: '64px 1fr', gap: 8 }}>
+                  <div>
+                    {m.faceKey ? <InputThumb getFile={parsed.getFile} zipKey={m.faceKey} label="" /> : <div style={{ fontSize: 10, color: '#991B1B' }}>sans visage</div>}
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <strong style={{ fontSize: 12, color: '#0D4A5C' }}>{m.name}</strong>
+                      {d?.status === 'running' && <span style={pill('#F59E0B')}>⏳ analyse</span>}
+                      {d?.status === 'done' && <span style={pill(d.fromCache ? '#E5E7EB' : '#DCFCE7', d.fromCache ? '#374151' : '#166534')}>{d.fromCache ? 'cache' : 'généré'}</span>}
+                      {d?.status === 'error' && <span style={pill('#FEE2E2', '#991B1B')} title={d.error}>✕ {d.error?.slice(0, 40)}</span>}
+                      {m.faceKey && d?.status !== 'running' && (
+                        <button onClick={() => describeModel(m, true)} style={{ marginLeft: 'auto', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}>↺ regénérer</button>
+                      )}
+                    </div>
+                    <textarea value={d?.text ?? ''} onChange={e => editDesc(m, e.target.value)} placeholder={d?.status === 'running' ? 'Analyse en cours…' : 'Description (éditable)'}
+                              style={{ width: '100%', minHeight: 88, fontSize: 11, lineHeight: 1.4, border: '1px solid #E5E7EB', borderRadius: 6, padding: 6, boxSizing: 'border-box', fontFamily: 'system-ui', resize: 'vertical' }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div style={card}>
         <div style={label}>2 — Paramètres</div>

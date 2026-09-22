@@ -18,6 +18,7 @@ export function buildGoldSilverPrompt(opts: {
   outfitCount?: number
   hasBody?: boolean
   detailCount?: number
+  modelDescription?: string   // description courte du mannequin (générée une fois, réutilisée)
 }): string {
   const nOut = Math.max(1, opts.outfitCount ?? 1)
   const nDet = opts.detailCount ?? 0
@@ -44,6 +45,12 @@ export function buildGoldSilverPrompt(opts: {
     '  texture and length. She must be unmistakably the same person. Keep her',
     '  natural skin — visible pores and texture, no retouching.',
   ]
+  if (opts.modelDescription?.trim()) {
+    lines.push(
+      `  MODEL DESCRIPTION (must match IMAGE ${modelIdx} — if the generated face deviates from this, it is wrong):`,
+      ...opts.modelDescription.trim().split('\n').map(l => `  ${l.trim()}`).filter(l => l.trim()),
+    )
+  }
   if (bodyIdx) {
     lines.push(
       `- IMAGE ${bodyIdx} = MODEL BODY, the same person. Use it for skin tone, build and`,
