@@ -152,6 +152,7 @@ export default function GoldSilverTab() {
     if (t) {
       setRandomPick(prev => ({ ...prev, [lookId]: rollLook(t, parsed) }))
       setOverrides(prev => { const n = { ...prev }; delete n[lookId]; return n })
+      invalidateLook(lookId)
     }
   }
 
@@ -201,8 +202,18 @@ export default function GoldSilverTab() {
 
   /* ----------- Résolution mannequin / décor : choix manuel > colonne du LOOK > tirage aléatoire ----------- */
   const [overrides, setOverrides] = useState<Record<string, { model?: string; decor?: string }>>({})
-  const setOverride = (lookId: string, patch: { model?: string; decor?: string }) =>
+  /** Le mannequin / décor d'un look a changé → la carte repasse en attente (les versions sont gardées). */
+  const invalidateLook = (lookId: string) => setStates(prev => {
+    const next = prev.map(s => s.task.lookId === lookId && s.status !== 'running'
+      ? { ...s, status: 'pending' as TaskStatus, enabled: true, error: undefined, imageUrl: undefined, masks: undefined }
+      : s)
+    statesRef.current = next
+    return next
+  })
+  const setOverride = (lookId: string, patch: { model?: string; decor?: string }) => {
     setOverrides(prev => ({ ...prev, [lookId]: { ...(prev[lookId] ?? {}), ...patch } }))
+    invalidateLook(lookId)
+  }
   const effectiveModelName = (t: GSTask) => overrides[t.lookId]?.model ?? randomPick[t.lookId]?.model ?? t.modelName
   const effectiveDecorName = (t: GSTask) => overrides[t.lookId]?.decor ?? randomPick[t.lookId]?.decor ?? t.decorName
   type Source = 'manuel' | 'aléatoire' | 'colonne' | 'aucun'
