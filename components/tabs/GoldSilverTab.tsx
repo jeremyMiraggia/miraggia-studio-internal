@@ -149,7 +149,10 @@ export default function GoldSilverTab() {
   const rerollLook = (lookId: string) => {
     if (!parsed) return
     const t = parsed.tasks.find(x => x.lookId === lookId)
-    if (t) setRandomPick(prev => ({ ...prev, [lookId]: rollLook(t, parsed) }))
+    if (t) {
+      setRandomPick(prev => ({ ...prev, [lookId]: rollLook(t, parsed) }))
+      setOverrides(prev => { const n = { ...prev }; delete n[lookId]; return n })
+    }
   }
 
   // Cache des uploads Blob (clé ZIP → URL) : un visage sert à toutes les vues
@@ -188,6 +191,7 @@ export default function GoldSilverTab() {
       const picks: Record<string, { model?: string; decor?: string }> = {}
       for (const t of res.tasks) picks[t.lookId] = rollLook(t, res)
       setRandomPick(picks)
+      setOverrides({})
     } catch (e: any) {
       setError(e?.message ?? String(e))
     } finally {
@@ -195,11 +199,15 @@ export default function GoldSilverTab() {
     }
   }
 
-  /* ----------- Résolution mannequin / décor : colonne du LOOK, sinon tirage aléatoire du look ----------- */
-  const effectiveModelName = (t: GSTask) => randomPick[t.lookId]?.model ?? t.modelName
-  const effectiveDecorName = (t: GSTask) => randomPick[t.lookId]?.decor ?? t.decorName
-  const isRandomModel = (t: GSTask) => !!randomPick[t.lookId]?.model
-  const isRandomDecor = (t: GSTask) => !!randomPick[t.lookId]?.decor
+  /* ----------- Résolution mannequin / décor : choix manuel > colonne du LOOK > tirage aléatoire ----------- */
+  const [overrides, setOverrides] = useState<Record<string, { model?: string; decor?: string }>>({})
+  const setOverride = (lookId: string, patch: { model?: string; decor?: string }) =>
+    setOverrides(prev => ({ ...prev, [lookId]: { ...(prev[lookId] ?? {}), ...patch } }))
+  const effectiveModelName = (t: GSTask) => overrides[t.lookId]?.model ?? randomPick[t.lookId]?.model ?? t.modelName
+  const effectiveDecorName = (t: GSTask) => overrides[t.lookId]?.decor ?? randomPick[t.lookId]?.decor ?? t.decorName
+  type Source = 'manuel' | 'aléatoire' | 'colonne' | 'aucun'
+  const modelSource = (t: GSTask): Source => overrides[t.lookId]?.model ? 'manuel' : randomPick[t.lookId]?.model ? 'aléatoire' : t.modelName ? 'colonne' : 'aucun'
+  const decorSource = (t: GSTask): Source => overrides[t.lookId]?.decor ? 'manuel' : randomPick[t.lookId]?.decor ? 'aléatoire' : t.decorName ? 'colonne' : 'aucun'
   const resolveModel = (t: GSTask) => {
     const n = effectiveModelName(t)
     return n ? parsed?.models.find(m => normName(m.name) === normName(n)) : undefined
@@ -518,9 +526,11 @@ export default function GoldSilverTab() {
               const lookId = t0.lookId
               const modelOk = !!resolveModel(t0)?.faceKey
               const decorOk = !!resolveDecor(t0)
-              const modelLbl = effectiveModelName(t0)
-              const decorLbl = effectiveDecorName(t0)
-              const anyRandom = isRandomModel(t0) || isRandomDecor(t0)
+              const modelLbl = effectiveModelName(t0) ?? ''
+              const decorLbl = effectiveDecorName(t0) ?? ''
+              const mSrc = modelSource(t0), dSrc = decorSource(t0)
+              const srcStyle = (s: Source) => s === 'manuel' ? '#DBEAFE' : s === 'aléatoire' ? '#FEF3C7' : s === 'colonne' ? '#E8F2F5' : '#FEE2E2'
+              const selStyle: React.CSSProperties = { fontSize: 11, padding: '2px 4px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#fff', maxWidth: 140 }
               return (
                 <div key={s.task.id} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10, background: s.enabled ? '#fff' : '#F9FAFB', opacity: s.enabled ? 1 : 0.55 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -541,18 +551,29 @@ export default function GoldSilverTab() {
                     )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-                    <span style={pill(modelOk ? '#E8F2F5' : '#FEE2E2', modelOk ? '#0D4A5C' : '#991B1B')}>
-                      👤 {modelLbl || 'aucun mannequin'}{isRandomModel(t0) ? ' 🎲' : ''}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: srcStyle(mSrc), borderRadius: 999, padding: '2px 6px 2px 8px' }} title={`Mannequin : ${mSrc}`}>
+                      <span style={{ fontSize: 11 }}>👤</span>
+                      <select value={modelLbl} onChange={e => setOverride(lookId, { model: e.target.value || undefined })} disabled={running} style={selStyle}>
+                        {!modelLbl && <option value="">— aucun —</option>}
+                        {parsed!.models.filter(m => m.faceKey).map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+                      </select>
+                      <span style={{ fontSize: 9, color: '#6B7280' }}>{mSrc === 'manuel' ? '✎' : mSrc === 'aléatoire' ? '🎲' : mSrc === 'colonne' ? '📋' : '⚠'}</span>
                     </span>
-                    <span style={pill(decorOk ? '#FEF3C7' : '#FEE2E2', decorOk ? '#92400E' : '#991B1B')}>
-                      🏞 {decorLbl || 'aucun décor'}{isRandomDecor(t0) ? ' 🎲' : ''}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: srcStyle(dSrc), borderRadius: 999, padding: '2px 6px 2px 8px' }} title={`Décor : ${dSrc}`}>
+                      <span style={{ fontSize: 11 }}>🏞</span>
+                      <select value={decorLbl} onChange={e => setOverride(lookId, { decor: e.target.value || undefined })} disabled={running} style={selStyle}>
+                        {!decorLbl && <option value="">— aucun —</option>}
+                        {parsed!.decors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
+                      </select>
+                      <span style={{ fontSize: 9, color: '#6B7280' }}>{dSrc === 'manuel' ? '✎' : dSrc === 'aléatoire' ? '🎲' : dSrc === 'colonne' ? '📋' : '⚠'}</span>
                     </span>
-                    {anyRandom && !running && (
-                      <button onClick={() => rerollLook(lookId)} title="Re-tirer mannequin / décor aléatoires"
+                    {(mSrc === 'aléatoire' || dSrc === 'aléatoire' || mSrc === 'manuel' || dSrc === 'manuel') && !running && (
+                      <button onClick={() => rerollLook(lookId)} title="Re-tirer au sort (efface le choix manuel)"
                               style={{ background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}>
-                        🎲 re-tirer
+                        🎲
                       </button>
                     )}
+                    {(!modelOk || !decorOk) && <span style={pill('#FEE2E2', '#991B1B')}>{!modelOk ? 'mannequin invalide' : 'décor invalide'}</span>}
                     {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 détail texte</span>}
                     <span style={pill('#E5E7EB', '#374151')}>🧥 {t0.outfitKeys.length} front</span>
                     <span style={pill(t0.detailKeys.length ? '#DCFCE7' : '#F3F4F6', t0.detailKeys.length ? '#166534' : '#6B7280')}>
