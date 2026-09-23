@@ -27,6 +27,7 @@ export async function POST(request: Request) {
     const maskFaces: boolean = body.maskFaces !== false
     // mode 'back' : IMAGE 1 = visuel de face final (frontVisualUrl), outfitUrls = tenue vue de dos
     const mode: 'front' | 'back' = body.mode === 'back' ? 'back' : 'front'
+    const closeup: boolean = body.framing === 'closeup'
     const frontVisualUrl: string = isUrl(body.frontVisualUrl) ? body.frontVisualUrl : ''
 
     if (outfitUrls.length === 0) return NextResponse.json({ error: 'Au moins une outfitUrl requise.' }, { status: 400 })
@@ -78,7 +79,7 @@ export async function POST(request: Request) {
         parts.push({ text: `=== IMAGE ${i + 2} — OUTFIT seen from the BACK${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''} (reproduce the back of this garment exactly) ===` })
         parts.push(outfits[i].part)
       }
-      parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model and same scene as IMAGE 1 · back of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · same shoes, feet fully visible · natural relaxed pose · same light, film look and mood as IMAGE 1 · no text, no collage.` })
+      parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model and same scene as IMAGE 1 · back of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · same shoes, feet fully visible · standing still, relaxed and composed (no walking) · same light, film look and mood as IMAGE 1 · no text, no collage.` })
     } else {
     if (anyMasked) {
       parts.push({ text: `NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The ONLY identity reference is the MODEL FACE image (IMAGE ${nOut + 1}). Do not reproduce any pixelation in the output.` })
@@ -102,7 +103,9 @@ export async function POST(request: Request) {
       parts.push({ text: `=== IMAGE ${next + i} — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===` })
       parts.push(await toInlinePart(detailUrls[i]))
     }
-    parts.push({ text: `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE ${modelIdx} · TALL elongated model · scene, light, film look and mood exactly as described · no text, no collage.` })
+    parts.push({ text: closeup
+      ? `⚠ FINAL CHECK : ONE front-view CLOSE-UP / upper mid-body photograph (head to hips at most, no legs, no feet, no shoes) · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · face identical to IMAGE ${modelIdx}, sharp · scene, light, film look and mood exactly as described · no text, no collage.`
+      : `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE ${modelIdx} · TALL elongated model · scene, light, film look and mood exactly as described · no text, no collage.` })
     }
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'

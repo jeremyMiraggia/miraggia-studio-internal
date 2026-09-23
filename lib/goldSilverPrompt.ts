@@ -40,10 +40,11 @@ export function buildGoldSilverBackPrompt(opts: {
   lines.push(
     '',
     'OUTPUT: ONE photograph of the same model, in the same place, seen from BEHIND',
-    '(full back view or a slight three-quarter back). Natural, relaxed, candid pose —',
-    'walking away mid-step, standing with weight on one leg, glancing over the',
-    'shoulder, hand in hair or resting on the wall; nothing stiff or symmetrical. The',
-    'back of the garment must be fully readable. FEET (non-negotiable): feet and shoes',
+    '(full back view or a slight three-quarter back). POSE: standing still, relaxed',
+    'and composed — a calm, settled posture, weight on one leg, arms loose or one',
+    'hand lightly resting; no walking, no mid-step, no dynamic movement, no twisting.',
+    'Quiet and natural, never stiff. The back of the garment must be fully readable.',
+    'FEET (non-negotiable): feet and shoes',
     'always fully visible, never cut by the frame. Full-length figure, small margin',
     'below the shoes. Same aspect ratio and framing distance as IMAGE 1.',
   )
@@ -56,7 +57,8 @@ export function buildGoldSilverBackPrompt(opts: {
     `Aspect ratio ${opts.ratio}. High resolution. Photorealistic. Same film stock, grain and color rendering as IMAGE 1.`,
   )
   if (opts.sku) lines.push(`Reference: ${opts.sku}.`)
-  return lines.join('\n')
+  // supprime les lignes vides consécutives (les blocs optionnels peuvent en laisser)
+  return lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n')
 }
 
 /**
@@ -80,7 +82,9 @@ export function buildGoldSilverPrompt(opts: {
   hasBody?: boolean
   detailCount?: number
   modelDescription?: string   // description courte du mannequin (générée une fois, réutilisée)
+  framing?: 'full' | 'closeup'   // closeup = gros plan / mi-corps haut, chaussures ignorées
 }): string {
+  const closeup = opts.framing === 'closeup'
   const nOut = Math.max(1, opts.outfitCount ?? 1)
   const nDet = opts.detailCount ?? 0
   const modelIdx = nOut + 1
@@ -99,8 +103,10 @@ export function buildGoldSilverPrompt(opts: {
       : `- ${outfitLabel} = THE SAME OUTFIT, several photos of it worn. Combine them into ONE faithful garment: same cut,`,
     '  silhouette, fabric texture, drape, color, print, seams, buttons, sleeve and',
     '  hem length. No reinterpretation, no added accessories, no altered color.',
-    `  SHOES: the model wears EXACTLY the same shoes as in ${outfitLabel} — same model,`,
-    '  same color, same material. Never replace, hide or crop them.',
+    ...(closeup
+      ? ['  SHOES: not part of this shot — the framing stops well above the feet.']
+      : [`  SHOES: the model wears EXACTLY the same shoes as in ${outfitLabel} — same model,`,
+         '  same color, same material. Never replace, hide or crop them.']),
     `- IMAGE ${modelIdx} = MODEL FACE. Preserve identity exactly: same face, facial structure,`,
     '  eyes, eyebrows, lips, skin tone and undertone, freckles/marks, hair color,',
     '  texture and length. She must be unmistakably the same person. Keep her',
@@ -131,23 +137,39 @@ export function buildGoldSilverPrompt(opts: {
       '  not a detail shot.',
     )
   }
-  lines.push(
-    '',
-    'OUTPUT: ONE photograph of the model wearing the outfit, seen from the FRONT,',
-    'garment fully readable. FEET (non-negotiable): the model\'s feet and shoes are',
-    'ALWAYS fully visible in the frame, never cut by the bottom edge, never hidden',
-    'behind an object or the foreground. Small margin below the shoes.',
-  )
+  if (closeup) {
+    lines.push(
+      '',
+      'OUTPUT — CLOSE-UP: ONE photograph of the model wearing the outfit, seen from the',
+      'FRONT, framed as a CLOSE-UP or UPPER MID-BODY shot: from the top of the head down',
+      'to the hips/waist at most. The face and the upper part of the garment (neckline,',
+      'shoulders, sleeves, chest, print) must be sharp and fully readable. Legs, feet and',
+      'shoes are OUT of frame — do not show them. 85-105 mm portrait feel, natural',
+      'headroom, garment and face given equal importance.',
+    )
+  } else {
+    lines.push(
+      '',
+      'OUTPUT: ONE photograph of the model wearing the outfit, seen from the FRONT,',
+      'garment fully readable. FEET (non-negotiable): the model\'s feet and shoes are',
+      'ALWAYS fully visible in the frame, never cut by the bottom edge, never hidden',
+      'behind an object or the foreground. Small margin below the shoes.',
+    )
+  }
   if (opts.detailText?.trim()) {
     lines.push('', 'ADDITIONAL DIRECTION (from the brief):', opts.detailText.trim())
   }
   lines.push(
     '-----------------',
+    closeup
+      ? 'SCENE (the framing instructions above take precedence over any framing mentioned below):'
+      : '',
     opts.decorDescription.trim(),
     '---------------',
     'TECHNICAL:',
     `Aspect ratio ${opts.ratio}. High resolution. Photorealistic.`,
   )
   if (opts.sku) lines.push(`Reference: ${opts.sku}.`)
-  return lines.join('\n')
+  // supprime les lignes vides consécutives (les blocs optionnels peuvent en laisser)
+  return lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n')
 }

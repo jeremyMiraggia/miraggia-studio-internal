@@ -70,6 +70,8 @@ export default function GoldSilverTab() {
   // Sous-onglet : 'front' = tenue + mannequin + décor → visuel de face
   //               'back'  = visuel de face final + tenue de dos → visuel de dos
   const [subMode, setSubMode]   = useState<SubMode>('front')
+  // Cadrage (mode Face) : plein-pied (pieds visibles) ou close-up / mi-corps haut (chaussures ignorées)
+  const [framing, setFraming]   = useState<'full' | 'closeup'>('full')
   const [zips, setZips]         = useState<File[]>([])
   const [parsing, setParsing]   = useState(false)
   const [parsed, setParsed]     = useState<GSExport | null>(null)
@@ -246,7 +248,7 @@ export default function GoldSilverTab() {
     }
   }
   const fileNameFor = (s: State, version: number) =>
-    `${sanitizeFilename(s.task.sku)}${subMode === 'back' ? '_Back' : ''}${version > 1 ? `_${version}` : ''}.jpg`
+    `${sanitizeFilename(s.task.sku)}${subMode === 'back' ? '_Back' : framing === 'closeup' ? '-closeup' : ''}${version > 1 ? `_${version}` : ''}.jpg`
 
   /** En mode Back, une ligne sans visuel de face OU sans photo de dos est écartée d'office (décochée, jamais tentée). */
   const backIneligible = (t: GSTask): string | null => {
@@ -359,11 +361,11 @@ export default function GoldSilverTab() {
       const modelDescription = modelDescsRef.current[model.name]?.status === 'done' ? modelDescsRef.current[model.name].text : undefined
       const prompt = buildGoldSilverPrompt({
         decorName: decor.name, decorDescription: decor.description, ratio, sku: t.sku, detailText: t.detailText,
-        outfitCount: outfitUrls.length, hasBody: !!bodyUrl, detailCount: detailUrls.length, modelDescription,
+        outfitCount: outfitUrls.length, hasBody: !!bodyUrl, detailCount: detailUrls.length, modelDescription, framing,
       })
       const resp = await fetch('/api/studio/gold-silver', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outfitUrls, faceUrl, bodyUrl: bodyUrl || undefined, detailUrls, prompt, ratio, quality, sku: t.sku, maskFaces }),
+        body: JSON.stringify({ outfitUrls, faceUrl, bodyUrl: bodyUrl || undefined, detailUrls, prompt, ratio, quality, sku: framing === 'closeup' ? `${t.sku}-closeup` : t.sku, maskFaces, framing }),
       })
       const text = await resp.text()
       let json: any
@@ -462,8 +464,8 @@ export default function GoldSilverTab() {
     }
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
-    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1, modelDescription: '(description du mannequin choisi, générée ci-dessus)' })
-  }, [parsed, previewDecor, ratio, subMode])
+    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1, modelDescription: '(description du mannequin choisi, générée ci-dessus)', framing })
+  }, [parsed, previewDecor, ratio, subMode, framing])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
 
@@ -551,7 +553,22 @@ export default function GoldSilverTab() {
 
       <div style={card}>
         <div style={label}>2 — Paramètres</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: subMode === 'front' ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)', gap: 12 }}>
+          {subMode === 'front' && (
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Cadrage</div>
+              <select value={framing} disabled={running} style={inp}
+                      onChange={e => {
+                        const f = e.target.value as 'full' | 'closeup'
+                        setFraming(f)
+                        // les visuels déjà faits sont d'un autre cadrage → on repart de zéro
+                        setStates(prev => { const next = resetStatesForMode('front', prev); statesRef.current = next; return next })
+                      }}>
+                <option value="full">Plein-pied (pieds + chaussures visibles)</option>
+                <option value="closeup">Close-up / mi-corps haut (chaussures ignorées) → NOMDULOOK-closeup</option>
+              </select>
+            </div>
+          )}
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
             <select value={ratio} onChange={e => setRatio(e.target.value)} style={inp}>
