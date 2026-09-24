@@ -1,13 +1,9 @@
 'use client'
 import { useState } from 'react'
 import SimpleTab     from '@/components/tabs/SimpleTab'
-import BatchTab      from '@/components/tabs/BatchTab'
 import FreePromptTab from '@/components/tabs/FreePromptTab'
 import ExtractTab    from '@/components/tabs/ExtractTab'
-import LookbookTab   from '@/components/tabs/LookbookTab'
-import GhostTab      from '@/components/tabs/GhostTab'
 import LinTab        from '@/components/tabs/LinTab'
-import LifestyleTab  from '@/components/tabs/LifestyleTab'
 import VideoTab      from '@/components/tabs/VideoTab'
 import NotionTab        from '@/components/tabs/NotionTab'
 import NotionInternalTab from '@/components/tabs/NotionInternalTab'
@@ -19,25 +15,23 @@ import GhostFSTab from '@/components/tabs/GhostFSTab'
 import NatureMorteTab from '@/components/tabs/NatureMorteTab'
 import VisageTab from '@/components/tabs/VisageTab'
 import GoldSilverTab from '@/components/tabs/GoldSilverTab'
+import GabaritTab from '@/components/tabs/GabaritTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
   { id: 'visage',          label: '🎭 Visage' },
-  { id: 'gold-silver',     label: '🥇 Gold&Silver' },
+  { id: 'gold-silver',     label: '🥇 Golden Silver' },
+  { id: 'gabarit',         label: '📐 Gabarit' },
   { id: 'notion',          label: '📥 Notion' },
   { id: 'notion-internal', label: '📥 Notion Internal' },
   { id: 'composite',       label: '🎯 Composite (Gemini)' },
   { id: 'pipeline',        label: '🔬 Pipeline (fond exact)' },
   { id: 'pipeline-v2',     label: '🧪 Pipeline V2 Test' },
   { id: 'ecom-newtech',    label: '🛍 E-Com New Tech' },
-  { id: 'lookbook',        label: '👗 Lookbook' },
-  { id: 'ghost',           label: '👻 Ghost' },
   { id: 'ghost-fs',        label: '👻 Ghost F&S' },
   { id: 'nature-morte',    label: '🍃 Nature Morte' },
   { id: 'lin',             label: '🧺 Lin' },
-  { id: 'lifestyle',       label: '🌴 Lifestyle' },
   { id: 'video',           label: '🎬 Video' },
-  { id: 'batch',           label: '📋 Batch' },
   { id: 'free',            label: '🧠 Free Prompt' },
   { id: 'extract',         label: '🔍 Extracteur' },
 ]
@@ -71,20 +65,17 @@ export default function StudioPage() {
         {tab === 'simple'          && <SimpleTab />}
         {tab === 'visage'          && <VisageTab />}
         {tab === 'gold-silver'     && <GoldSilverTab />}
+        {tab === 'gabarit'         && <GabaritTab />}
         {tab === 'notion'          && <NotionTab />}
         {tab === 'notion-internal' && <NotionInternalTab />}
         {tab === 'composite'       && <CompositeTab />}
         {tab === 'pipeline'        && <PipelineTab />}
         {tab === 'pipeline-v2'     && <PipelineV2TestTab />}
         {tab === 'ecom-newtech'    && <ECommerceNewTechTab />}
-        {tab === 'lookbook'        && <LookbookTab />}
-        {tab === 'ghost'           && <GhostTab />}
         {tab === 'ghost-fs'        && <GhostFSTab />}
         {tab === 'nature-morte'    && <NatureMorteTab />}
         {tab === 'lin'             && <LinTab />}
-        {tab === 'lifestyle'       && <LifestyleTab />}
         {tab === 'video'           && <VideoTab />}
-                {tab === 'batch'           && <BatchTab />}
         {tab === 'free'            && <FreePromptTab />}
         {tab === 'extract'         && <ExtractTab />}
       </div>
