@@ -331,7 +331,7 @@ export default function LingerieTab() {
             <textarea value={background} onChange={e => setBackground(e.target.value)} style={{ ...area, minHeight: 70 }} />
           </div>
           <div>
-            <div style={sub}>Direction additionnelle (optionnel, pour tous les looks)</div>
+            <div style={sub}>Pose & attitude (optionnel, tous les looks) — remplace la pose catalogue par défaut</div>
             <textarea value={direction} onChange={e => setDirection(e.target.value)} placeholder="ex. légère rotation de trois-quarts, main gauche sur la hanche"
                       style={{ ...area, minHeight: 70 }} />
           </div>

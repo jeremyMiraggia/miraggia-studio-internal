@@ -122,7 +122,9 @@ export function buildLingeriePrompt(o: {
 }): string {
   const imgs = o.imageCount > 1 ? `IMAGES 1 to ${o.imageCount}` : 'IMAGE 1'
   return [
-    'Professional e-commerce product photograph for a lingerie brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.',
+    o.direction?.trim()
+      ? 'Professional fashion photograph for a lingerie brand\'s online catalogue, editorial style. Tasteful, elegant and non-suggestive: the product stays clearly visible on the body.'
+      : 'Professional e-commerce product photograph for a lingerie brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.',
     '',
     `PRODUCT — ${imgs}: product packshot${o.imageCount > 1 ? 's' : ''} of ${PRODUCT_LABEL[o.type]}. ${o.imageCount > 1 ? 'These images show' : 'This image shows'} the product only, with no model. Reproduce the product with absolute fidelity: exact color, fabric, lace pattern, transparency level, cut, coverage, straps, hooks, underwire, seams, trims, elastic bands, prints and logos. Same coverage as the product — do not make it smaller or more revealing, do not add or remove any part. The product is fitted to the model's body size. The model wears ONLY this product${o.type === 'haut' || o.type === 'bas' ? ' (anything else stays outside the frame)' : ''}.`,
     '',
@@ -133,10 +135,12 @@ export function buildLingeriePrompt(o: {
     '',
     `FRAMING (STRICT, non-negotiable) — ${FRAMING[o.type]}`,
     '',
-    'POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. Arms relaxed along the body or one hand lightly on the hip; hands never cover the product. Calm, neutral attitude.',
+    // Direction saisie = elle REMPLACE la pose par défaut (sinon la pose « catalogue » figée, placée avant, l'emporte).
+    o.direction?.trim()
+      ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing above and the product fidelity stay mandatory; anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown. Hands never hide the product.\n${o.direction.trim()}`
+      : 'POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. Arms relaxed along the body or one hand lightly on the hip; hands never cover the product. Calm, neutral attitude.',
     '',
     `BACKGROUND & LIGHT — ${o.background.trim() || DEFAULT_LINGERIE_BACKGROUND}`,
-    ...(o.direction?.trim() ? ['', `ADDITIONAL DIRECTION — ${o.direction.trim()}`] : []),
     '',
     `TECHNICAL — ${o.ratio} format. Sharp focus on the product, true-to-life colors, high-end catalogue quality. No text, no logo, no watermark, no border.`,
   ].join('\n')
