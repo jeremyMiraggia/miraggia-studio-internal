@@ -7,6 +7,7 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const router = useRouter()
+  const expired = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('expired') === '1'
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -38,7 +39,9 @@ export default function LoginPage() {
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>✦</div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0D4A5C', margin: 0 }}>Miraggia Studio</h1>
-          <p style={{ fontSize: 13, color: '#6B7A8A', marginTop: 6 }}>Accès équipe</p>
+          <p style={{ fontSize: 13, color: '#6B7A8A', marginTop: 6 }}>
+            {expired ? 'Session expirée — reconnecte-toi' : 'Accès équipe'}
+          </p>
         </div>
         <form onSubmit={handleLogin}>
           <input

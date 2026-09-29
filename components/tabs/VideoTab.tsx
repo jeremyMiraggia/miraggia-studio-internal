@@ -46,7 +46,7 @@ const ECOM_PRESET: Shot[] = [
   { duration: 3, prompt: 'Full-body shot, camera static. The model stands relaxed, shifts her weight slightly from one leg to the other, breathes naturally. Fabric settles gently. Studio lighting and neutral background unchanged.' },
   { duration: 3, prompt: 'Cut to a slow cinematic push-in from full body to mid-body. The model turns her torso a few degrees toward the camera and back, hands relax at her sides. Smooth, unhurried motion.' },
   { duration: 3, prompt: 'Cut to a close-up on the garment: slow pan across the fabric texture, seams and details, following the model\'s subtle movement. Shallow depth of field, sharp on the textile.' },
-  { duration: 3, prompt: 'Cut back to full body. The model takes one slow step toward the camera and settles into a calm final pose, looking at the lens. Camera static. Same lighting, same background.' },
+  { duration: 3, prompt: 'Cut back to a static full-body shot, the model entirely in frame from head to feet. She turns and walks calmly out of the frame to the right at a natural unhurried pace, fabric moving with her steps. The camera does not follow. The empty background stays visible at the end. Same lighting, same background.' },
 ]
 
 const SINGLE_PRESET = 'Full-body e-commerce fashion video, camera almost static with a very slow push-in. The model shifts her weight, takes one slow step toward the camera and settles into a calm pose, looking at the lens. Fabric and hair move naturally. Studio lighting and neutral background unchanged, no camera shake, no fast motion, no zoom bursts.'

@@ -1,10 +1,24 @@
 'use client'
+import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
 export default function StudioLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   // L'accès est contrôlé côté serveur par proxy.ts (cookie de session signé).
-  // Plus rien à vérifier ici.
+  // Ici on intercepte seulement les 401 des API (session expirée, mot de passe
+  // changé, page ouverte avant un déploiement…) pour renvoyer à la connexion.
+  useEffect(() => {
+    const orig = window.fetch
+    window.fetch = async (...args) => {
+      const res = await orig(...args)
+      const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request)?.url ?? ''
+      if (res.status === 401 && url.startsWith('/api/')) {
+        router.push('/?expired=1')
+      }
+      return res
+    }
+    return () => { window.fetch = orig }
+  }, [router])
 
   const logout = async () => {
     try { await fetch('/api/logout', { method: 'POST' }) } catch { /* ignore */ }
