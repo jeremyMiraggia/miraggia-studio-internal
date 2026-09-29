@@ -46,7 +46,7 @@ export default function StudioPage() {
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 52px)' }}>
       {/* Sidebar */}
-      <div style={{ width: 180, background: '#fff', borderRight: '1px solid rgba(13,74,92,0.1)', padding: '16px 0', flexShrink: 0 }}>
+      <div style={{ width: 180, background: '#fff', borderRight: '1px solid rgba(13,74,92,0.1)', padding: '16px 0', flexShrink: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}>
         {TABS.map(t => (
           <div
             key={t.id}
