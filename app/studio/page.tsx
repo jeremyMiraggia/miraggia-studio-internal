@@ -17,11 +17,13 @@ import VisageTab from '@/components/tabs/VisageTab'
 import GoldSilverTab from '@/components/tabs/GoldSilverTab'
 import GabaritTab from '@/components/tabs/GabaritTab'
 import GrainTab from '@/components/tabs/GrainTab'
+import LingerieTab from '@/components/tabs/LingerieTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
   { id: 'visage',          label: '🎭 Visage' },
   { id: 'gold-silver',     label: '🥇 Golden Silver' },
+  { id: 'lingerie',        label: '🩱 Lingerie' },
   { id: 'gabarit',         label: '📐 Gabarit' },
   { id: 'grain',           label: '🎞️ Grain' },
   { id: 'notion',          label: '📥 Notion' },
@@ -67,6 +69,7 @@ export default function StudioPage() {
         {tab === 'simple'          && <SimpleTab />}
         {tab === 'visage'          && <VisageTab />}
         {tab === 'gold-silver'     && <GoldSilverTab />}
+        {tab === 'lingerie'        && <LingerieTab />}
         {tab === 'gabarit'         && <GabaritTab />}
         {tab === 'grain'           && <GrainTab />}
         {tab === 'notion'          && <NotionTab />}
