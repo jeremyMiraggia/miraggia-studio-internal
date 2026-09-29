@@ -16,12 +16,14 @@ import NatureMorteTab from '@/components/tabs/NatureMorteTab'
 import VisageTab from '@/components/tabs/VisageTab'
 import GoldSilverTab from '@/components/tabs/GoldSilverTab'
 import GabaritTab from '@/components/tabs/GabaritTab'
+import GrainTab from '@/components/tabs/GrainTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
   { id: 'visage',          label: '🎭 Visage' },
   { id: 'gold-silver',     label: '🥇 Golden Silver' },
   { id: 'gabarit',         label: '📐 Gabarit' },
+  { id: 'grain',           label: '🎞️ Grain' },
   { id: 'notion',          label: '📥 Notion' },
   { id: 'notion-internal', label: '📥 Notion Internal' },
   { id: 'composite',       label: '🎯 Composite (Gemini)' },
@@ -66,6 +68,7 @@ export default function StudioPage() {
         {tab === 'visage'          && <VisageTab />}
         {tab === 'gold-silver'     && <GoldSilverTab />}
         {tab === 'gabarit'         && <GabaritTab />}
+        {tab === 'grain'           && <GrainTab />}
         {tab === 'notion'          && <NotionTab />}
         {tab === 'notion-internal' && <NotionInternalTab />}
         {tab === 'composite'       && <CompositeTab />}
