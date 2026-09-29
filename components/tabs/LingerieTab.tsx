@@ -10,17 +10,17 @@ import JSZip from 'jszip'
 import { upload } from '@vercel/blob/client'
 import {
   LINGERIE_TYPES, DEFAULT_LINGERIE_MODELS, DEFAULT_LINGERIE_BACKGROUND,
-  buildLingeriePrompt, ratioFor, type LingerieModel, type LingerieType,
+  MORPHOS, buildLingeriePrompt, ratioFor, type LingerieModel, type LingerieType, type Morpho,
 } from '@/lib/lingerie'
 
 type Status = 'pending' | 'running' | 'done' | 'error'
 type Ref = { file: File; thumb: string; url?: string }
 type Look = {
-  id: string; name: string; refs: Ref[]; type: LingerieType; modelId: string
+  id: string; name: string; refs: Ref[]; type: LingerieType; modelId: string; morpho: Morpho
   status: Status; imageUrl?: string; versions: string[]; error?: string; showPrompt?: boolean
 }
 
-const MODELS_KEY = 'lingerie-models-v1'
+const MODELS_KEY = 'lingerie-models-v2'   // v2 : identité + cheveux + 3 morphologies
 const RATIOS = ['auto', '3:4', '2:3', '4:5', '1:1', '9:16']
 
 const baseName = (name: string) => name.replace(/\.[a-z0-9]+$/i, '').replace(/[\/\\:*?"<>|]/g, '_') || 'look'
@@ -30,7 +30,7 @@ function loadModels(): LingerieModel[] {
   try {
     const raw = localStorage.getItem(MODELS_KEY)
     const arr = raw ? JSON.parse(raw) : null
-    if (Array.isArray(arr) && arr.length && arr.every(m => m?.id && typeof m.description === 'string')) return arr
+    if (Array.isArray(arr) && arr.length && arr.every(m => m?.id && typeof m.identity === 'string' && typeof m.hair === 'string' && MORPHOS.every(x => typeof m.bodies?.[x.id] === 'string'))) return arr
   } catch { /* stockage indisponible */ }
   return DEFAULT_LINGERIE_MODELS
 }
@@ -42,6 +42,7 @@ export default function LingerieTab() {
   const [showModels, setShowModels] = useState(false)
   const [dropType, setDropType]     = useState<LingerieType | null>(null)
   const [defaultModel, setDefaultModel] = useState('random')
+  const [defaultMorpho, setDefaultMorpho] = useState<Morpho>('middle')
   const [grouping, setGrouping]     = useState<'per-file' | 'single'>('per-file')
   const [background, setBackground] = useState(DEFAULT_LINGERIE_BACKGROUND)
   const [direction, setDirection]   = useState('')
@@ -75,7 +76,7 @@ export default function LingerieTab() {
   const modelOf = (l: Look) => models.find(m => m.id === l.modelId) ?? models[0]
   const ratioOf = (l: Look) => (ratioMode === 'auto' ? ratioFor(l.type) : ratioMode)
   const promptOf = (l: Look) => buildLingeriePrompt({
-    type: l.type, model: modelOf(l), imageCount: l.refs.length, background, direction, ratio: ratioOf(l),
+    type: l.type, model: modelOf(l), morpho: l.morpho, imageCount: l.refs.length, background, direction, ratio: ratioOf(l),
   })
 
   /* ----------- Entrée ----------- */
@@ -86,7 +87,7 @@ export default function LingerieTab() {
     if (!refs.length) return
     const make = (r: Ref[]): Look => ({
       id: uid(), name: baseName(r[0].file.name), refs: r,
-      type: dropType, modelId: pickModel(),
+      type: dropType, modelId: pickModel(), morpho: defaultMorpho,
       status: 'pending', versions: [],
     })
     const fresh = grouping === 'single' ? [make(refs)] : refs.map(r => make([r]))
@@ -199,7 +200,20 @@ export default function LingerieTab() {
 
   /* ----------- Mannequins ----------- */
   const updateModel = (id: string, patch: Partial<LingerieModel>) => saveModels(models.map(m => (m.id === id ? { ...m, ...patch } : m)))
-  const addModel = () => saveModels([...models, { id: uid(), name: `Mannequin ${models.length + 1}`, description: 'Adult woman, … years old, … (origin). Skin: … Height …, silhouette (French size …): shoulders, bust, waist, stomach, hips, legs. Lips … , chin … Hair … Nails … No tattoos, no piercings, no jewelry.' }])
+  const addModel = () => saveModels([...models, {
+    id: uid(), name: `Mannequin ${models.length + 1}`,
+    identity: 'Adult woman, … years old, … (origin), height … m. Skin: … Jaw / chin …, lips …, closed mouth, neutral expression. Nails … No tattoos, no piercings, no jewelry.',
+    hair: 'Long … hair, clearly visible in the image: it frames both sides of the neck and is swept BEHIND the shoulders, falling down her back. No strand falls in front of the shoulders, over the chest or over the product.',
+    bodies: {
+      mince:  'SLIM body (French size 34-36 / XS-S): shoulders …, small bust, flat stomach, narrow waist, slim hips, slender legs.',
+      middle: 'MEDIUM body (French size 38-40 / M): shoulders …, medium bust, soft flat stomach, defined waist, rounded hips, natural thighs.',
+      ronde:  'PLUS-SIZE CURVY body (French size 44-46 / XL): soft rounded shoulders and arms, full bust, softly rounded stomach, wide rounded hips, full thighs. Confident healthy plus-size catalogue model.',
+    },
+  }])
+  const updateBody = (id: string, morpho: Morpho, text: string) => {
+    const m = models.find(x => x.id === id)
+    if (m) updateModel(id, { bodies: { ...m.bodies, [morpho]: text } })
+  }
   const deleteModel = (id: string) => {
     if (models.length <= 1) return
     saveModels(models.filter(m => m.id !== id))
@@ -228,7 +242,7 @@ export default function LingerieTab() {
           <h2 style={{ margin: 0, color: '#0D4A5C', fontSize: 18 }}>Lingerie — packshot → porté, mannequin décrit en texte</h2>
         </div>
         <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-          Aucune photo de mannequin n'est envoyée (sinon Gemini bloque) : seulement les photos produit et une description détaillée du mannequin.
+          Aucune photo de mannequin n'est envoyée (sinon Gemini bloque) : seulement les photos produit et une description détaillée du mannequin (identité, cheveux passés dans le dos, morphologie mince / middle / ronde au choix par look).
           Cadrage coupé à la bouche selon le type — ensemble : jusqu'en haut des cuisses · pyjama : jusqu'aux pieds · haut : jusqu'au ventre · bas : du ventre au haut des cuisses.
         </p>
       </div>
@@ -275,12 +289,18 @@ export default function LingerieTab() {
       {/* ---- 2. Réglages ---- */}
       <div style={card}>
         <div style={label}>2 — Réglages</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
           <div>
             <div style={sub}>Mannequin par défaut</div>
             <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)} style={inp}>
               <option value="random">🎲 Aléatoire</option>
               {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={sub}>Morphologie par défaut</div>
+            <select value={defaultMorpho} onChange={e => setDefaultMorpho(e.target.value as Morpho)} style={inp}>
+              {MORPHOS.map(x => <option key={x.id} value={x.id}>{x.label} ({x.size})</option>)}
             </select>
           </div>
           <div>
@@ -330,9 +350,21 @@ export default function LingerieTab() {
               <div key={m.id} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                   <input value={m.name} onChange={e => updateModel(m.id, { name: e.target.value })} style={{ ...inp, width: 200, fontWeight: 600 }} />
+                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>mince · middle · ronde</span>
                   <button onClick={() => deleteModel(m.id)} disabled={models.length <= 1} style={{ ...small(), marginLeft: 'auto' }}>🗑 Supprimer</button>
                 </div>
-                <textarea value={m.description} onChange={e => updateModel(m.id, { description: e.target.value })} style={{ ...area, minHeight: 90, fontSize: 12 }} />
+                <div style={sub}>Identité (âge, origine, peau, bouche, ongles)</div>
+                <textarea value={m.identity} onChange={e => updateModel(m.id, { identity: e.target.value })} style={{ ...area, minHeight: 60, fontSize: 12 }} />
+                <div style={{ ...sub, marginTop: 6 }}>Cheveux (visibles, passés derrière dans le dos)</div>
+                <textarea value={m.hair} onChange={e => updateModel(m.id, { hair: e.target.value })} style={{ ...area, minHeight: 50, fontSize: 12 }} />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 6 }}>
+                  {MORPHOS.map(x => (
+                    <div key={x.id}>
+                      <div style={sub}>Morphologie {x.label} ({x.size})</div>
+                      <textarea value={m.bodies[x.id]} onChange={e => updateBody(m.id, x.id, e.target.value)} style={{ ...area, minHeight: 90, fontSize: 12 }} />
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
             <div style={{ display: 'flex', gap: 8 }}>
@@ -399,6 +431,13 @@ export default function LingerieTab() {
                             }}
                             disabled={busy} title="Tirer un autre mannequin" style={{ ...small(), padding: '2px 8px' }}>🎲</button>
                   </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+                  {MORPHOS.map(x => (
+                    <button key={x.id} disabled={busy} title={x.size}
+                            onClick={() => { if (l.morpho !== x.id) patchLook(l.id, { morpho: x.id, status: 'pending' }) }}
+                            style={{ ...small(l.morpho === x.id), padding: '3px 6px' }}>{x.label}</button>
+                  ))}
                 </div>
 
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
