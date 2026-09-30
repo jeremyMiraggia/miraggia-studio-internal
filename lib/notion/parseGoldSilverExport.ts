@@ -120,16 +120,26 @@ export async function parseGoldSilverExport(
 
   const parseCsv = (text: string) =>
     Papa.parse(text.replace(/^﻿/, ''), { header: true, skipEmptyLines: true }).data as any[]
+  /** Valeur de la 1re colonne trouvée, sans tenir compte de la casse, des accents ni des espaces (Notion : « prompt », « Decor description »…). */
+  const normCol = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+  const col = (r: any, names: string[]): string => {
+    const keys = Object.keys(r)
+    for (const n of names) {
+      const k = keys.find(x => normCol(x) === normCol(n))
+      if (k && String(r[k] ?? '').trim()) return String(r[k]).trim()
+    }
+    return ''
+  }
 
   // === Models ===
   const models: GSModel[] = []
   if (modelsKey) {
     for (const r of parseCsv((await readCsvText(modelsKey)) ?? '')) {
-      const name = String(r['Name your Model'] ?? r['Name'] ?? '').trim()
+      const name = col(r, ['Name your Model', 'Name', 'Nom'])
       if (!name) continue
       // Une cellule Notion peut contenir plusieurs fichiers séparés par des virgules → premier
-      const faceRef = decodeRef(String(r['FACE PHOTO'] ?? r['FACE'] ?? r['Face'] ?? '').trim().split(',')[0].trim())
-      const bodyRef = decodeRef(String(r['FRONT-model'] ?? r['FRONT-Model'] ?? r['Body'] ?? r['BODY'] ?? '').trim().split(',')[0].trim())
+      const faceRef = decodeRef(col(r, ['FACE PHOTO', 'FACE']).split(',')[0].trim())
+      const bodyRef = decodeRef(col(r, ['FRONT-model', 'Body']).split(',')[0].trim())
       const m: GSModel = {
         name,
         faceKey: faceRef ? baseToKey.get(faceRef) : undefined,
@@ -145,9 +155,9 @@ export async function parseGoldSilverExport(
   const decors: GSDecor[] = []
   if (decorsKey) {
     for (const r of parseCsv((await readCsvText(decorsKey)) ?? '')) {
-      const name = String(r['Name your Model'] ?? r['Name your Decor'] ?? r['Name your Background'] ?? r['Name'] ?? '').trim()
+      const name = col(r, ['Name your Model', 'Name your Decor', 'Name your Background', 'Name', 'Nom'])
       if (!name) continue
-      const description = String(r['Decor Description'] ?? r['Description'] ?? r['Prompt'] ?? '').trim()
+      const description = col(r, ['Decor Description', 'Description', 'Prompt', 'Decor Prompt', 'Texte'])
       if (!description) { warnings.push(`⚠ Décor "${name}" : description vide — ignoré.`); continue }
       decors.push({ name, description })
     }
