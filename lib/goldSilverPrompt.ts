@@ -12,7 +12,11 @@ export function buildGoldSilverBackPrompt(opts: {
   backCount?: number
   detailText?: string
   modelDescription?: string
+  framing?: 'full' | 'closeup'   // closeup = gros plan de dos / mi-corps haut, jambes et chaussures hors cadre
+  poseDirection?: string         // texte libre de l'onglet : REMPLACE la pose par défaut
 }): string {
+  const closeup = opts.framing === 'closeup'
+  const pose = opts.poseDirection?.trim()
   const n = Math.max(1, opts.backCount ?? 1)
   const backLabel = n === 1 ? 'IMAGE 2' : `IMAGES 2 to ${n + 1}`
   const lines = [
@@ -29,7 +33,9 @@ export function buildGoldSilverBackPrompt(opts: {
     '  exactly: back seams, closure (zip, buttons, ties), straps, neckline, waist, hem',
     '  length, fabric, color, print. No reinterpretation. The front of the garment is',
     '  the one worn in IMAGE 1 — this is the same outfit.',
-    '  SHOES: exactly the same shoes as in IMAGE 1.',
+    closeup
+      ? '  SHOES: not part of this shot — the framing stops well above the legs.'
+      : '  SHOES: exactly the same shoes as in IMAGE 1.',
   ]
   if (opts.modelDescription?.trim()) {
     lines.push(
@@ -37,17 +43,40 @@ export function buildGoldSilverBackPrompt(opts: {
       ...opts.modelDescription.trim().split('\n').map(l => `  ${l.trim()}`).filter(l => l.trim()),
     )
   }
-  lines.push(
-    '',
-    'OUTPUT: ONE photograph of the same model, in the same place, seen from BEHIND',
-    '(full back view or a slight three-quarter back). POSE: standing still, relaxed',
-    'and composed — a calm, settled posture, weight on one leg, arms loose or one',
-    'hand lightly resting; no walking, no mid-step, no dynamic movement, no twisting.',
-    'Quiet and natural, never stiff. The back of the garment must be fully readable.',
-    'FEET (non-negotiable): feet and shoes',
-    'always fully visible, never cut by the frame. Full-length figure, small margin',
-    'below the shoes. Same aspect ratio and framing distance as IMAGE 1.',
-  )
+  if (closeup) {
+    lines.push(
+      '',
+      'OUTPUT — CLOSE-UP BACK: ONE photograph of the same model, in the same place, seen',
+      'from BEHIND (full back view or a slight three-quarter back), framed as a CLOSE-UP /',
+      'UPPER MID-BODY shot: from just above the head down to the waist/hips at most. The',
+      'upper back of the garment (back neckline, collar, shoulders, back yoke, closure,',
+      'print, fabric texture) is sharp and fully readable. Her hair is seen from behind,',
+      'same color, texture and length as in IMAGE 1. Legs, feet and shoes are OUT of frame.',
+      'The background is the SAME location as IMAGE 1, seen closer — same walls, materials,',
+      'light direction and color palette; slight natural depth of field allowed. 85-105 mm',
+      'portrait feel, natural headroom.',
+    )
+  } else {
+    lines.push(
+      '',
+      'OUTPUT: ONE photograph of the same model, in the same place, seen from BEHIND',
+      '(full back view or a slight three-quarter back). The back of the garment must be',
+      'fully readable. FEET (non-negotiable): feet and shoes always fully visible, never',
+      'cut by the frame. Full-length figure, small margin below the shoes. Same aspect',
+      'ratio and framing distance as IMAGE 1.',
+    )
+  }
+  // Pose : le texte saisi REMPLACE la pose par défaut (sinon la consigne « immobile » l'emporte)
+  if (pose) {
+    lines.push('', 'POSE & ADJUSTMENTS (art direction — takes priority over any default pose; the framing and garment fidelity above stay mandatory):', pose)
+  } else {
+    lines.push(
+      '',
+      closeup
+        ? 'POSE: still, relaxed shoulders, head facing away or turned very slightly to the side (a hint of profile at most), arms loose. Calm and natural, never stiff.'
+        : 'POSE: standing still, relaxed and composed — a calm, settled posture, weight on one leg, arms loose or one hand lightly resting; no walking, no mid-step, no dynamic movement, no twisting. Quiet and natural, never stiff.',
+    )
+  }
   if (opts.detailText?.trim()) {
     lines.push('', 'ADDITIONAL DIRECTION (from the brief):', opts.detailText.trim())
   }

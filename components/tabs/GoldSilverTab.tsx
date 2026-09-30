@@ -72,6 +72,10 @@ export default function GoldSilverTab() {
   const [subMode, setSubMode]   = useState<SubMode>('front')
   // Cadrage (mode Face) : plein-pied (pieds visibles) ou close-up / mi-corps haut (chaussures ignorées)
   const [framing, setFraming]   = useState<'full' | 'closeup'>('full')
+  // Mode Back : texte libre (pose, ajustements) qui REMPLACE la pose par défaut — mémorisé dans le navigateur
+  const [backPose, setBackPose] = useState('')
+  useEffect(() => { try { setBackPose(localStorage.getItem('gs-back-pose') ?? '') } catch { /* ignore */ } }, [])
+  const updateBackPose = (v: string) => { setBackPose(v); try { localStorage.setItem('gs-back-pose', v) } catch { /* ignore */ } }
   const [zips, setZips]         = useState<File[]>([])
   const [parsing, setParsing]   = useState(false)
   const [parsed, setParsed]     = useState<GSExport | null>(null)
@@ -248,7 +252,7 @@ export default function GoldSilverTab() {
     }
   }
   const fileNameFor = (s: State, version: number) =>
-    `${sanitizeFilename(s.task.sku)}${subMode === 'back' ? '_Back' : framing === 'closeup' ? '-closeup' : ''}${version > 1 ? `_${version}` : ''}.jpg`
+    `${sanitizeFilename(s.task.sku)}${subMode === 'back' ? '_Back' : ''}${framing === 'closeup' ? '-closeup' : ''}${version > 1 ? `_${version}` : ''}.jpg`
 
   /** En mode Back, une ligne sans visuel de face OU sans photo de dos est écartée d'office (décochée, jamais tentée). */
   const backIneligible = (t: GSTask): string | null => {
@@ -312,10 +316,13 @@ export default function GoldSilverTab() {
         const mName = model?.name
         if (mName) for (let i = 0; i < 40 && modelDescsRef.current[mName]?.status === 'running'; i++) await new Promise(r => setTimeout(r, 500))
         const modelDescription = mName && modelDescsRef.current[mName]?.status === 'done' ? modelDescsRef.current[mName].text : undefined
-        const prompt = buildGoldSilverBackPrompt({ ratio, sku: t.sku, backCount: backUrls.length, detailText: t.detailText, modelDescription })
+        const prompt = buildGoldSilverBackPrompt({ ratio, sku: t.sku, backCount: backUrls.length, detailText: t.detailText, modelDescription, framing, poseDirection: backPose })
         const resp = await fetch('/api/studio/gold-silver', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'back', frontVisualUrl, outfitUrls: backUrls, prompt, ratio, quality, sku: `${t.sku}_Back`, maskFaces }),
+          body: JSON.stringify({
+            mode: 'back', frontVisualUrl, outfitUrls: backUrls, prompt, ratio, quality, maskFaces,
+            sku: `${t.sku}_Back${framing === 'closeup' ? '-closeup' : ''}`, framing, customPose: !!backPose.trim(),
+          }),
         })
         const text = await resp.text()
         let json: any
@@ -460,12 +467,12 @@ export default function GoldSilverTab() {
   const [previewDecor, setPreviewDecor] = useState('')
   const previewPrompt = useMemo(() => {
     if (subMode === 'back') {
-      return buildGoldSilverBackPrompt({ ratio, sku: 'SKU', backCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)' })
+      return buildGoldSilverBackPrompt({ ratio, sku: 'SKU', backCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)', framing, poseDirection: backPose })
     }
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
     return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1, modelDescription: '(description du mannequin choisi, générée ci-dessus)', framing })
-  }, [parsed, previewDecor, ratio, subMode, framing])
+  }, [parsed, previewDecor, ratio, subMode, framing, backPose])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
 
@@ -499,7 +506,7 @@ export default function GoldSilverTab() {
         ) : (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
             Un visuel <strong>de dos</strong> par ligne. <strong>Image 1</strong> = <code>Files (Front)</code> = le visuel de face <strong>final</strong> (mannequin, décor, lumière et style à conserver). <strong>Images 2…</strong> = <code>Files (Back)</code> = la tenue vue de dos (une ou plusieurs photos).
-            Prompt : même mannequin, même lieu, même lumière, vue de dos, pose posée et décontractée (debout, immobile, pas de marche), pieds et chaussures visibles. Fichiers <code>NOMDULOOK_Back.jpg</code>. Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
+            Prompt : même mannequin, même lieu, même lumière, vue de dos, pose posée et décontractée (debout, immobile, pas de marche). Cadrage <strong>plein-pied</strong> (pieds et chaussures visibles, <code>NOMDULOOK_Back.jpg</code>) ou <strong>Close-up Back</strong> (de la tête à la taille, <code>NOMDULOOK_Back-closeup.jpg</code>). Pose modifiable via le champ « Pose & ajustements ». Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
           </p>
         )}
       </div>
@@ -553,22 +560,29 @@ export default function GoldSilverTab() {
 
       <div style={card}>
         <div style={label}>2 — Paramètres</div>
-        <div style={{ display: 'grid', gridTemplateColumns: subMode === 'front' ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)', gap: 12 }}>
-          {subMode === 'front' && (
-            <div>
-              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Cadrage</div>
-              <select value={framing} disabled={running} style={inp}
-                      onChange={e => {
-                        const f = e.target.value as 'full' | 'closeup'
-                        setFraming(f)
-                        // les visuels déjà faits sont d'un autre cadrage → on repart de zéro
-                        setStates(prev => { const next = resetStatesForMode('front', prev); statesRef.current = next; return next })
-                      }}>
-                <option value="full">Plein-pied (pieds + chaussures visibles)</option>
-                <option value="closeup">Close-up / mi-corps haut (chaussures ignorées) → NOMDULOOK-closeup</option>
-              </select>
-            </div>
-          )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Cadrage</div>
+            <select value={framing} disabled={running} style={inp}
+                    onChange={e => {
+                      const f = e.target.value as 'full' | 'closeup'
+                      setFraming(f)
+                      // les visuels déjà faits sont d'un autre cadrage → on repart de zéro
+                      setStates(prev => { const next = resetStatesForMode(subMode, prev); statesRef.current = next; return next })
+                    }}>
+              {subMode === 'front' ? (
+                <>
+                  <option value="full">Plein-pied (pieds + chaussures visibles)</option>
+                  <option value="closeup">Close-up / mi-corps haut (chaussures ignorées) → NOMDULOOK-closeup</option>
+                </>
+              ) : (
+                <>
+                  <option value="full">Back plein-pied (pieds + chaussures visibles) → NOMDULOOK_Back</option>
+                  <option value="closeup">Close-up Back / mi-corps haut de dos → NOMDULOOK_Back-closeup</option>
+                </>
+              )}
+            </select>
+          </div>
           <div>
             <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Ratio</div>
             <select value={ratio} onChange={e => setRatio(e.target.value)} style={inp}>
@@ -602,6 +616,17 @@ export default function GoldSilverTab() {
             </span>
           </span>
         </label>
+        {subMode === 'back' && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span><strong style={{ color: '#0D4A5C' }}>Pose & ajustements (dos)</strong> — optionnel, pour tous les looks. Remplace la pose par défaut ; cadrage et fidélité du vêtement restent imposés.</span>
+              {backPose && <button onClick={() => updateBackPose('')} style={{ marginLeft: 'auto', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}>Effacer</button>}
+            </div>
+            <textarea value={backPose} onChange={e => updateBackPose(e.target.value)}
+                      placeholder="ex. Elle regarde par-dessus son épaule gauche, main droite dans les cheveux, léger trois-quarts dos. Épaules détendues."
+                      style={{ width: '100%', minHeight: 70, fontSize: 12, lineHeight: 1.45, border: '1px solid #D1D5DB', borderRadius: 8, padding: 8, boxSizing: 'border-box', fontFamily: 'system-ui', resize: 'vertical' }} />
+          </div>
+        )}
         {previewPrompt && (
           <details style={{ marginTop: 10 }} open={showPrompt} onToggle={e => setShowPrompt((e.target as HTMLDetailsElement).open)}>
             <summary style={{ cursor: 'pointer', fontSize: 12, color: '#0D4A5C' }}>
