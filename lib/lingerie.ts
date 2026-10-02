@@ -117,6 +117,8 @@ export function buildLingeriePrompt(o: {
   morpho: Morpho
   imageCount: number
   background: string
+  /** Une image de fond est envoyée APRÈS les photos produit (IMAGE imageCount+1) */
+  hasBackgroundImage?: boolean
   direction?: string
   ratio: string
 }): string {
@@ -140,7 +142,13 @@ export function buildLingeriePrompt(o: {
       ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing above and the product fidelity stay mandatory; anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown. Hands never hide the product.\n${o.direction.trim()}`
       : 'POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. Arms relaxed along the body or one hand lightly on the hip; hands never cover the product. Calm, neutral attitude.',
     '',
-    `BACKGROUND & LIGHT — ${o.background.trim() || DEFAULT_LINGERIE_BACKGROUND}`,
+    o.hasBackgroundImage
+      ? [
+          `BACKGROUND — IMAGE ${o.imageCount + 1} is the BACKGROUND / LOCATION reference (it contains no model and no product). Reproduce this exact place behind the model: same walls, floor, materials, textures, colors, furniture and objects, same light direction, color temperature and ambience. Keep its look exactly — do not redesign, recolor, add or remove elements. Only the viewpoint adapts to the framing above (seen closer, cropped like the shot), with natural perspective and the model standing in the space, lit by the same light, with a soft natural contact shadow where relevant.`,
+          // Notes texte seulement si l'utilisateur a écrit autre chose que le fond studio par défaut
+          ...(o.background.trim() && o.background.trim() !== DEFAULT_LINGERIE_BACKGROUND ? [`Additional notes on background and light: ${o.background.trim()}`] : []),
+        ].join('\n')
+      : `BACKGROUND & LIGHT — ${o.background.trim() || DEFAULT_LINGERIE_BACKGROUND}`,
     '',
     `TECHNICAL — ${o.ratio} format. Sharp focus on the product, true-to-life colors, high-end catalogue quality. No text, no logo, no watermark, no border.`,
   ].join('\n')

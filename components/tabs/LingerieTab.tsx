@@ -45,6 +45,12 @@ export default function LingerieTab() {
   const [defaultMorpho, setDefaultMorpho] = useState<Morpho>('middle')
   const [grouping, setGrouping]     = useState<'per-file' | 'single'>('per-file')
   const [background, setBackground] = useState(DEFAULT_LINGERIE_BACKGROUND)
+  // Image de fond (optionnelle, commune à tous les looks) — envoyée après les photos produit, jamais compressée
+  const [bgImage, setBgImage] = useState<Ref | null>(null)
+  const bgImageRef = useRef<Ref | null>(null)
+  const bgUploadRef = useRef<{ file: File; url: Promise<string> } | null>(null)
+  const bgInputRef = useRef<HTMLInputElement>(null)
+  const [bgHover, setBgHover] = useState(false)
   const [direction, setDirection]   = useState('')
   const [ratioMode, setRatioMode]   = useState('auto')
   const [quality, setQuality]       = useState('2K')
@@ -77,6 +83,7 @@ export default function LingerieTab() {
   const ratioOf = (l: Look) => (ratioMode === 'auto' ? ratioFor(l.type) : ratioMode)
   const promptOf = (l: Look) => buildLingeriePrompt({
     type: l.type, model: modelOf(l), morpho: l.morpho, imageCount: l.refs.length, background, direction, ratio: ratioOf(l),
+    hasBackgroundImage: !!bgImage,
   })
 
   /* ----------- Entrée ----------- */
@@ -116,6 +123,31 @@ export default function LingerieTab() {
     commit([])
   }
 
+  /* ----------- Image de fond ----------- */
+  const setBackgroundImage = (f: File | null) => {
+    if (f && !f.type.startsWith('image/')) return
+    if (bgImageRef.current) URL.revokeObjectURL(bgImageRef.current.thumb)
+    const next = f ? { file: f, thumb: URL.createObjectURL(f) } : null
+    bgImageRef.current = next; setBgImage(next); bgUploadRef.current = null
+    // le texte « studio gris » par défaut n'a pas de sens avec une photo de fond → vidé, et remis si on retire la photo
+    setBackground(prev => (next && prev.trim() === DEFAULT_LINGERIE_BACKGROUND ? '' : !next && !prev.trim() ? DEFAULT_LINGERIE_BACKGROUND : prev))
+    // le fond change le visuel → les looks déjà faits repassent en attente (versions conservées)
+    commit(looksRef.current.map(l => (l.status === 'done' ? { ...l, status: 'pending' } : l)))
+  }
+  /** Upload unique du fond (partagé par les générations parallèles), relancé si échec. */
+  const backgroundUrl = (): Promise<string> | undefined => {
+    const bg = bgImageRef.current
+    if (!bg) return undefined
+    if (bgUploadRef.current?.file !== bg.file) {
+      const url = upload(`lingerie-backgrounds/${Date.now()}-${bg.file.name}`, bg.file, {
+        access: 'public', handleUploadUrl: '/api/blob-upload', contentType: bg.file.type || 'application/octet-stream',
+      }).then(b => b.url)
+      url.catch(() => { if (bgUploadRef.current?.url === url) bgUploadRef.current = null })
+      bgUploadRef.current = { file: bg.file, url }
+    }
+    return bgUploadRef.current.url
+  }
+
   /* ----------- Génération ----------- */
   const runOne = async (id: string) => {
     const l = looksRef.current.find(x => x.id === id)
@@ -133,10 +165,11 @@ export default function LingerieTab() {
         refs[i] = { ...refs[i], url: b.url }
       }
       patchLook(id, { refs })
+      const bgUrl = await backgroundUrl()
       const cur = looksRef.current.find(x => x.id === id)!
       const res = await fetch('/api/studio/free', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptOf(cur), ratio: ratioOf(cur), quality, refUrls: refs.map(r => r.url) }),
+        body: JSON.stringify({ prompt: promptOf(cur), ratio: ratioOf(cur), quality, refUrls: [...refs.map(r => r.url), ...(bgUrl ? [bgUrl] : [])] }),
       })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`)
@@ -324,11 +357,33 @@ export default function LingerieTab() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
           <div>
-            <div style={{ ...sub, display: 'flex', justifyContent: 'space-between' }}>
-              <span>Fond & lumière</span>
-              <button onClick={() => setBackground(DEFAULT_LINGERIE_BACKGROUND)} style={{ ...small(), padding: '1px 8px', fontSize: 11 }}>↺ défaut</button>
+            <div style={sub}>Image de fond (optionnel, tous les looks) — reproduite derrière le mannequin</div>
+            <div onDrop={e => { e.preventDefault(); setBgHover(false); setBackgroundImage(e.dataTransfer.files[0] ?? null) }}
+                 onDragOver={e => { e.preventDefault(); setBgHover(true) }}
+                 onDragLeave={e => { e.preventDefault(); setBgHover(false) }}
+                 style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 8, borderRadius: 8, marginBottom: 8,
+                          border: `1.5px dashed ${bgHover ? '#0D4A5C' : 'rgba(13,74,92,0.25)'}`, background: bgHover ? '#E8F2F5' : '#FAFBFC' }}>
+              {bgImage
+                ? <img src={bgImage.thumb} alt="fond" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid #E5E7EB' }} />
+                : <div style={{ width: 72, height: 72, borderRadius: 6, border: '1px dashed #D1D5DB', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: '#9CA3AF' }}>🖼</div>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <div style={{ fontSize: 11, color: '#6B7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {bgImage ? bgImage.file.name : 'Glisse une photo du lieu / décor, ou clique'}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => bgInputRef.current?.click()} disabled={running} style={small()}>{bgImage ? 'Changer' : '＋ Ajouter un fond'}</button>
+                  {bgImage && <button onClick={() => setBackgroundImage(null)} disabled={running} style={small()}>Retirer</button>}
+                </div>
+              </div>
+              <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+                     onChange={e => { setBackgroundImage(e.target.files?.[0] ?? null); e.target.value = '' }} />
             </div>
-            <textarea value={background} onChange={e => setBackground(e.target.value)} style={{ ...area, minHeight: 70 }} />
+            <div style={{ ...sub, display: 'flex', justifyContent: 'space-between' }}>
+              <span>{bgImage ? 'Notes fond & lumière (optionnel — la photo de fond fait foi)' : 'Fond & lumière'}</span>
+              <button onClick={() => setBackground(bgImage ? '' : DEFAULT_LINGERIE_BACKGROUND)} style={{ ...small(), padding: '1px 8px', fontSize: 11 }}>{bgImage ? 'Vider' : '↺ défaut'}</button>
+            </div>
+            <textarea value={background} onChange={e => setBackground(e.target.value)} style={{ ...area, minHeight: 70 }}
+                      placeholder={bgImage ? 'ex. lumière de fin de journée venant de la gauche' : ''} />
           </div>
           <div>
             <div style={sub}>Pose & attitude (optionnel, tous les looks) — remplace la pose catalogue par défaut</div>
