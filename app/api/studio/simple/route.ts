@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
 import { compressGeminiImage } from '@/lib/serverImageCompress'
-import { imageFetch, imageProviderOf } from '@/lib/imageModel'
+import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const provider = imageProviderOf(request)
   try {
     const formData   = await request.formData()
@@ -94,3 +94,6 @@ Résultat photographique professionnel, lumière cohérente entre sujet et fond,
     return NextResponse.json({ error: error?.message ?? 'Erreur inconnue' }, { status: 500 })
   }
 }
+
+// Coût réel des générations renvoyé en en-tête x-image-cost
+export const POST = withImageCost(handlePOST)

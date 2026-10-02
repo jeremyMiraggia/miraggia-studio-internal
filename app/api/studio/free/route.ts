@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { compressGeminiImage } from '@/lib/serverImageCompress'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
-import { imageFetch, imageProviderOf, type ImageProvider } from '@/lib/imageModel'
+import { imageFetch, imageProviderOf, withImageCost, type ImageProvider } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -36,7 +36,7 @@ export const runtime = 'nodejs'
 /** Modèle image (surchargeable par env GEMINI_IMAGE_MODEL). */
 const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const provider = imageProviderOf(request)
   try {
     // ============= MODE BRUT (JSON) : prompt exact + images en URL, rien d'autre =============
@@ -406,3 +406,6 @@ function mapFramingToInstructions(cadrage: string): string {
   }
   return cadrage
 }
+
+// Coût réel des générations renvoyé en en-tête x-image-cost
+export const POST = withImageCost(handlePOST)

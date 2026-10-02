@@ -20,12 +20,12 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import { fal } from '@fal-ai/client'
 import sharp from 'sharp'
-import { imageFetch, imageProviderOf } from '@/lib/imageModel'
+import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const provider = imageProviderOf(request)
   try {
     const formData = await request.formData()
@@ -360,3 +360,6 @@ function describeFraming(framing: string): string {
   if (f.includes('detail') || f.includes('macro')) return 'extreme macro on garment detail (no full body, no model context)'
   return 'full body, head to feet. ⚠ Leave comfortable headroom : 5-10% empty space above the head AND a small margin below the feet. The head must NOT touch the top edge of the frame. The feet must NOT touch the bottom edge of the frame. The model is fully visible with breathing space all around.'
 }
+
+// Coût réel des générations renvoyé en en-tête x-image-cost
+export const POST = withImageCost(handlePOST)

@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
-import { imageFetch, imageProviderOf } from '@/lib/imageModel'
+import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -46,7 +46,7 @@ const ANTI_HALLUCINATION_PROMPT = [
   "  • Rendu ultra piqué, netteté maximale, qualité catalogue e-commerce professionnel.",
 ].join('\n')
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const provider = imageProviderOf(request)
   try {
     const formData = await request.formData()
@@ -154,3 +154,6 @@ async function toInlinePart(file: File) {
   const buf = Buffer.from(new Uint8Array(await file.arrayBuffer())).toString('base64')
   return { inlineData: { mimeType: file.type || 'image/jpeg', data: buf } }
 }
+
+// Coût réel des générations renvoyé en en-tête x-image-cost
+export const POST = withImageCost(handlePOST)

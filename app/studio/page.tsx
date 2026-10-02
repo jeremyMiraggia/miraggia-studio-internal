@@ -1,7 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
 import ProviderSwitch from '@/components/ui/ProviderSwitch'
-import { loadTabProvider, saveTabProvider, setCurrentProvider, type ImageProvider } from '@/lib/imageProviderClient'
+import {
+  loadTabProvider, saveTabProvider, loadTabQuality, saveTabQuality, setCurrent,
+  type ImageProvider, type OpenAIQuality,
+} from '@/lib/imageProviderClient'
 import SimpleTab     from '@/components/tabs/SimpleTab'
 import FreePromptTab from '@/components/tabs/FreePromptTab'
 import ExtractTab    from '@/components/tabs/ExtractTab'
@@ -49,10 +52,16 @@ export default function StudioPage() {
   const [tab, setTab] = useState('simple')
   // Moteur d'image choisi, onglet par onglet (mémorisé dans le navigateur)
   const [providers, setProviders] = useState<Record<string, ImageProvider>>({})
-  useEffect(() => { setProviders(Object.fromEntries(TABS.map(t => [t.id, loadTabProvider(t.id)]))) }, [])
+  const [qualities, setQualities] = useState<Record<string, OpenAIQuality>>({})
+  useEffect(() => {
+    setProviders(Object.fromEntries(TABS.map(t => [t.id, loadTabProvider(t.id)])))
+    setQualities(Object.fromEntries(TABS.map(t => [t.id, loadTabQuality(t.id)])))
+  }, [])
   const provider: ImageProvider = providers[tab] ?? 'gemini'
-  useEffect(() => { setCurrentProvider(IMAGE_TABS.has(tab) ? provider : 'gemini') }, [tab, provider])
+  const quality: OpenAIQuality = qualities[tab] ?? 'auto'
+  useEffect(() => { setCurrent(tab, IMAGE_TABS.has(tab) ? provider : 'gemini', quality) }, [tab, provider, quality])
   const changeProvider = (p: ImageProvider) => { setProviders(prev => ({ ...prev, [tab]: p })); saveTabProvider(tab, p) }
+  const changeQuality = (q: OpenAIQuality) => { setQualities(prev => ({ ...prev, [tab]: q })); saveTabQuality(tab, q) }
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 52px)' }}>
@@ -80,7 +89,7 @@ export default function StudioPage() {
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
-        {IMAGE_TABS.has(tab) && <ProviderSwitch value={provider} onChange={changeProvider} />}
+        {IMAGE_TABS.has(tab) && <ProviderSwitch tab={tab} value={provider} onChange={changeProvider} quality={quality} onQualityChange={changeQuality} />}
         {tab === 'simple'          && <SimpleTab />}
         {tab === 'visage'          && <VisageTab />}
         {tab === 'gold-silver'     && <GoldSilverTab />}

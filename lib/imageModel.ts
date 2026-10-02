@@ -8,21 +8,74 @@
  *     et envoyé à GPT Image ; la réponse est remise au FORMAT GEMINI
  *     (candidates[0].content.parts[].inlineData) pour que la suite de chaque route ne change pas.
  *
- * Le choix vient de l'en-tête `x-image-provider` ajouté côté navigateur (onglet par onglet).
+ * Le choix vient de l'en-tête `x-image-provider` ajouté côté navigateur (onglet par onglet),
+ * la qualité ChatGPT de `x-openai-quality`.
+ *
+ * Coût réel : chaque appel calcule son coût d'après les tokens facturés (usage OpenAI /
+ * usageMetadata Gemini). `withImageCost` additionne les appels d'une requête (retries compris)
+ * et renvoie le total dans l'en-tête `x-image-cost` (USD).
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 export type ImageProvider = 'gemini' | 'openai'
+export type OpenAIQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh'
 
 /** Modèle OpenAI (surchargeable par env OPENAI_IMAGE_MODEL, ex. gpt-image-2.5-flare, plus rapide). */
 export const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-sunburst'
 const OPENAI_MAX_IMAGES = 16
 
+/** Tarifs USD par token (pages tarifs officielles, oct. 2026). */
+const PRICE = {
+  openai: { textIn: 5e-6, imageIn: 8e-6, out: 30e-6 },              // gpt-image-2.5 (Sunburst = Flare)
+  gemini: { in: 2e-6, textOut: 12e-6, imageOut: 120e-6 },           // gemini-3-pro-image-preview
+}
+
+type CostCtx = { cost: number; calls: number; quality: OpenAIQuality }
+const costCtx = new AsyncLocalStorage<CostCtx>()
+
 export function imageProviderOf(request: Request): ImageProvider {
   return request.headers.get('x-image-provider') === 'openai' ? 'openai' : 'gemini'
 }
 
+/** Enveloppe un handler de route : mesure le coût des générations et l'ajoute en en-tête. */
+export function withImageCost(handler: (request: Request) => Promise<Response>) {
+  return async (request: Request): Promise<Response> => {
+    const q = request.headers.get('x-openai-quality')
+    const ctx: CostCtx = { cost: 0, calls: 0, quality: (['low', 'medium', 'high', 'xhigh'] as const).find(x => x === q) ?? 'auto' }
+    const res = await costCtx.run(ctx, () => handler(request))
+    if (ctx.calls === 0) return res
+    try {
+      res.headers.set('x-image-cost', ctx.cost.toFixed(5))
+      res.headers.set('x-image-calls', String(ctx.calls))
+      return res
+    } catch {
+      // en-têtes immuables → on recopie la réponse
+      const h = new Headers(res.headers)
+      h.set('x-image-cost', ctx.cost.toFixed(5)); h.set('x-image-calls', String(ctx.calls))
+      return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h })
+    }
+  }
+}
+
+const addCost = (usd: number) => {
+  const ctx = costCtx.getStore()
+  if (ctx && Number.isFinite(usd)) { ctx.cost += usd; ctx.calls++ }
+}
+
 export async function imageFetch(provider: ImageProvider, url: string, init: RequestInit): Promise<Response> {
-  if (provider !== 'openai') return fetch(url, init)
+  if (provider !== 'openai') {
+    const res = await fetch(url, init)
+    // Coût Gemini d'après usageMetadata (lu sur une copie, la route lit l'original)
+    try {
+      const u = (await res.clone().json())?.usageMetadata
+      if (u) {
+        const imageOut = (u.candidatesTokensDetails ?? []).filter((d: any) => d.modality === 'IMAGE').reduce((s: number, d: any) => s + (d.tokenCount ?? 0), 0)
+        const textOut = (u.candidatesTokenCount ?? 0) - imageOut + (u.thoughtsTokenCount ?? 0)
+        addCost((u.promptTokenCount ?? 0) * PRICE.gemini.in + imageOut * PRICE.gemini.imageOut + Math.max(0, textOut) * PRICE.gemini.textOut)
+      }
+    } catch { /* pas de JSON lisible : pas de coût */ }
+    return res
+  }
   return callOpenAIFromGeminiBody(typeof init.body === 'string' ? init.body : '')
 }
 
@@ -58,7 +111,9 @@ async function callOpenAIFromGeminiBody(bodyStr: string): Promise<Response> {
   if (!prompt) return geminiError(400, 'Prompt vide.')
 
   const size = openAISize(cfg.aspectRatio ?? '1:1', cfg.imageSize ?? '2K')
-  const quality = cfg.imageSize === '1K' ? 'medium' : 'high'
+  // Qualité : choix de l'onglet, sinon auto (1K → medium, 2K/4K → high)
+  const chosen = costCtx.getStore()?.quality ?? 'auto'
+  const quality = chosen !== 'auto' ? chosen : cfg.imageSize === '1K' ? 'medium' : 'high'
 
   const send = async (withModeration: boolean) => {
     if (kept.length === 0) {
@@ -96,6 +151,13 @@ async function callOpenAIFromGeminiBody(bodyStr: string): Promise<Response> {
   if (!res.ok && /moderation/i.test(data?.error?.param ?? '') ) {
     res = await send(false)
     data = await res.json().catch(() => null)
+  }
+  // Coût réel d'après les tokens facturés
+  const u = data?.usage
+  if (u) {
+    const imgIn = u.input_tokens_details?.image_tokens ?? 0
+    const txtIn = u.input_tokens_details?.text_tokens ?? Math.max(0, (u.input_tokens ?? 0) - imgIn)
+    addCost(txtIn * PRICE.openai.textIn + imgIn * PRICE.openai.imageIn + (u.output_tokens ?? 0) * PRICE.openai.out)
   }
 
   if (!res.ok) {

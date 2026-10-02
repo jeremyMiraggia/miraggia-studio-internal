@@ -17,12 +17,12 @@ import { fal } from '@fal-ai/client'
 import sharp from 'sharp'
 import { refineMatte } from '@/lib/matting'
 import { extractShadowRatio, applyRatio } from '@/lib/shadowExtract'
-import { imageFetch, imageProviderOf } from '@/lib/imageModel'
+import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const provider = imageProviderOf(request)
   try {
     const formData = await request.formData()
@@ -984,3 +984,6 @@ async function findAlphaBoundingBox(imgBuf: Buffer, threshold = 20)
   if (maxX < 0 || maxY < 0) return null
   return { left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 }
 }
+
+// Coût réel des générations renvoyé en en-tête x-image-cost
+export const POST = withImageCost(handlePOST)

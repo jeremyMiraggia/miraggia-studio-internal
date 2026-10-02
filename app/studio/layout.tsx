@@ -1,7 +1,7 @@
 'use client'
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { getCurrentProvider } from '@/lib/imageProviderClient'
+import { getCurrentProvider, getCurrentQuality, recordCost } from '@/lib/imageProviderClient'
 
 export default function StudioLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -13,12 +13,17 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
     const orig = window.fetch
     window.fetch = async (...args) => {
       const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request)?.url ?? ''
-      if (typeof args[0] === 'string' && url.startsWith('/api/studio/')) {
+      const studioCall = typeof args[0] === 'string' && url.startsWith('/api/studio/')
+      if (studioCall) {
         const headers = new Headers(args[1]?.headers)
         headers.set('x-image-provider', getCurrentProvider())
+        headers.set('x-openai-quality', getCurrentQuality())
         args = [args[0], { ...args[1], headers }]
       }
       const res = await orig(...args)
+      // Coût réel des générations (calculé côté serveur d'après les tokens facturés)
+      const cost = studioCall ? res.headers.get('x-image-cost') : null
+      if (cost !== null) recordCost(parseFloat(cost), parseInt(res.headers.get('x-image-calls') ?? '1', 10))
       if (res.status === 401 && url.startsWith('/api/')) {
         router.push('/?expired=1')
       }

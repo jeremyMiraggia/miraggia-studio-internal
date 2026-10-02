@@ -6,14 +6,14 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
 import { detectHead, maskHead } from '@/lib/faceMask'
-import { imageFetch, imageProviderOf } from '@/lib/imageModel'
+import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
 const GEMINI_SUPPORTED = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const provider = imageProviderOf(request)
   try {
     const body = await request.json().catch(() => ({}))
@@ -179,3 +179,6 @@ async function toInlinePart(url: string) {
   const { buf, mime } = await fetchImage(url)
   return toPart(buf, mime)
 }
+
+// Coût réel des générations renvoyé en en-tête x-image-cost
+export const POST = withImageCost(handlePOST)

@@ -16,7 +16,7 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import { fal } from '@fal-ai/client'
 import sharp from 'sharp'
-import { imageFetch, imageProviderOf } from '@/lib/imageModel'
+import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -58,7 +58,7 @@ async function findAlphaBoundingBox(imgBuf: Buffer, threshold = 20)
   return { left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 }
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const provider = imageProviderOf(request)
   try {
     const formData = await request.formData()
@@ -268,3 +268,6 @@ async function toInlinePart(file: File) {
   const buf = Buffer.from(await file.arrayBuffer()).toString('base64')
   return { inlineData: { mimeType: file.type || 'image/jpeg', data: buf } }
 }
+
+// Coût réel des générations renvoyé en en-tête x-image-cost
+export const POST = withImageCost(handlePOST)
