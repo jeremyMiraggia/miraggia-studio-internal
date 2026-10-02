@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { compressGeminiImage } from '@/lib/serverImageCompress'
+import { imageFetch, imageProviderOf } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
 export async function POST(request: Request) {
+  const provider = imageProviderOf(request)
   try {
     const formData   = await request.formData()
     const subject    = formData.get('subject')    as File
@@ -40,7 +42,7 @@ Résultat photographique professionnel, lumière cohérente entre sujet et fond,
     }
 
     // Appel Gemini 3 Pro Image Preview
-    const geminiRes = await fetch(
+    const geminiRes = await imageFetch(provider,
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       {
         method: 'POST',

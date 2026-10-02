@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
+import { imageFetch, imageProviderOf } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -46,6 +47,7 @@ const ANTI_HALLUCINATION_PROMPT = [
 ].join('\n')
 
 export async function POST(request: Request) {
+  const provider = imageProviderOf(request)
   try {
     const formData = await request.formData()
     const reference = formData.get('reference') as File | null
@@ -91,7 +93,7 @@ export async function POST(request: Request) {
       ],
     })
 
-    const geminiRes = await fetch(
+    const geminiRes = await imageFetch(provider,
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: geminiBody },
     )

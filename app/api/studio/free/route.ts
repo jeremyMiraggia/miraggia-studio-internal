@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { compressGeminiImage } from '@/lib/serverImageCompress'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
+import { imageFetch, imageProviderOf, type ImageProvider } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -36,6 +37,7 @@ export const runtime = 'nodejs'
 const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
 
 export async function POST(request: Request) {
+  const provider = imageProviderOf(request)
   try {
     // ============= MODE BRUT (JSON) : prompt exact + images en URL, rien d'autre =============
     // Reproduit au plus près ce que fait l'app Gemini : aucun texte ajouté, aucune
@@ -65,7 +67,7 @@ export async function POST(request: Request) {
           { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
         ],
       })
-      const att = await callGemini(apiKey, bodyStr)
+      const att = await callGemini(apiKey, bodyStr, provider)
       if (!att.ok) return NextResponse.json({ error: att.error, raw: trimRaw(att.raw) }, { status: att.status })
       if (att.imageUrl) return NextResponse.json({ imageUrl: att.imageUrl, attempt: 1, raw: true, model: IMAGE_MODEL, blobError: att.blobError })
       return NextResponse.json({ error: `Aucune image générée. ${buildDetailMessage(att)}`, raw: trimRaw(att.raw) }, { status: 502 })
@@ -210,7 +212,7 @@ export async function POST(request: Request) {
       const a = attempts[i]
       if (a.delay > 0) await sleep(a.delay)
       const body = await buildBody(a.withFace)
-      const att = await callGemini(apiKey, body)
+      const att = await callGemini(apiKey, body, provider)
       if (att.ok && att.imageUrl) {
         return NextResponse.json({
           imageUrl:    att.imageUrl,
@@ -270,8 +272,8 @@ async function urlToInlinePart(url: string) {
   return { inlineData: { mimeType: mime, data: buf.toString('base64') } }
 }
 
-async function callGemini(apiKey: string, body: string): Promise<GeminiAttempt> {
-  const res = await fetch(
+async function callGemini(apiKey: string, body: string, provider: ImageProvider = 'gemini'): Promise<GeminiAttempt> {
+  const res = await imageFetch(provider,
     `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${apiKey}`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
   )

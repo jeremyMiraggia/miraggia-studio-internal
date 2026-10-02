@@ -1,6 +1,7 @@
 'use client'
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { getCurrentProvider } from '@/lib/imageProviderClient'
 
 export default function StudioLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -8,10 +9,16 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
   // Ici on intercepte seulement les 401 des API (session expirée, mot de passe
   // changé, page ouverte avant un déploiement…) pour renvoyer à la connexion.
   useEffect(() => {
+    // On y ajoute aussi le moteur d'image choisi dans l'onglet (en-tête x-image-provider).
     const orig = window.fetch
     window.fetch = async (...args) => {
-      const res = await orig(...args)
       const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request)?.url ?? ''
+      if (typeof args[0] === 'string' && url.startsWith('/api/studio/')) {
+        const headers = new Headers(args[1]?.headers)
+        headers.set('x-image-provider', getCurrentProvider())
+        args = [args[0], { ...args[1], headers }]
+      }
+      const res = await orig(...args)
       if (res.status === 401 && url.startsWith('/api/')) {
         router.push('/?expired=1')
       }

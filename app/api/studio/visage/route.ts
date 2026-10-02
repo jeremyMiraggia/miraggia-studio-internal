@@ -9,6 +9,7 @@
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
+import { imageFetch, imageProviderOf } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -16,6 +17,7 @@ export const runtime = 'nodejs'
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent'
 
 export async function POST(request: Request) {
+  const provider = imageProviderOf(request)
   try {
     const body = await request.json()
     const facePrompt:     string  = body.facePrompt     ?? ''
@@ -38,7 +40,7 @@ export async function POST(request: Request) {
     const debug: any = {}
 
     const callGemini = async (parts: any[]) => {
-      const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+      const res = await imageFetch(provider, `${GEMINI_URL}?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

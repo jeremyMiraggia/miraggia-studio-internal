@@ -17,11 +17,13 @@ import { fal } from '@fal-ai/client'
 import sharp from 'sharp'
 import { refineMatte } from '@/lib/matting'
 import { extractShadowRatio, applyRatio } from '@/lib/shadowExtract'
+import { imageFetch, imageProviderOf } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
 export async function POST(request: Request) {
+  const provider = imageProviderOf(request)
   try {
     const formData = await request.formData()
     // Fond : soit un fichier multipart (legacy, limité à 4.5 MB et souvent compressé),
@@ -158,7 +160,7 @@ export async function POST(request: Request) {
       ],
     })
 
-    const geminiRes = await fetch(
+    const geminiRes = await imageFetch(provider,
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: geminiBody },
     )

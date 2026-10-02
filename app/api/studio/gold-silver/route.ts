@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
 import { detectHead, maskHead } from '@/lib/faceMask'
+import { imageFetch, imageProviderOf } from '@/lib/imageModel'
 
 export const maxDuration = 300
 export const runtime = 'nodejs'
@@ -13,6 +14,7 @@ export const runtime = 'nodejs'
 const GEMINI_SUPPORTED = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
 
 export async function POST(request: Request) {
+  const provider = imageProviderOf(request)
   try {
     const body = await request.json().catch(() => ({}))
     const isUrl = (u: any) => typeof u === 'string' && /^https?:\/\//.test(u)
@@ -111,7 +113,7 @@ export async function POST(request: Request) {
     }
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
-    const geminiRes = await fetch(
+    const geminiRes = await imageFetch(provider,
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,7 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import ProviderSwitch from '@/components/ui/ProviderSwitch'
+import { loadTabProvider, saveTabProvider, setCurrentProvider, type ImageProvider } from '@/lib/imageProviderClient'
 import SimpleTab     from '@/components/tabs/SimpleTab'
 import FreePromptTab from '@/components/tabs/FreePromptTab'
 import ExtractTab    from '@/components/tabs/ExtractTab'
@@ -28,7 +30,7 @@ const TABS = [
   { id: 'grain',           label: '🎞️ Grain' },
   { id: 'notion',          label: '📥 Notion' },
   { id: 'notion-internal', label: '📥 Notion Internal' },
-  { id: 'composite',       label: '🎯 Composite (Gemini)' },
+  { id: 'composite',       label: '🎯 Composite' },
   { id: 'pipeline',        label: '🔬 Pipeline (fond exact)' },
   { id: 'pipeline-v2',     label: '🧪 Pipeline V2 Test' },
   { id: 'ecom-newtech',    label: '🛍 E-Com New Tech' },
@@ -40,8 +42,17 @@ const TABS = [
   { id: 'extract',         label: '🔍 Extracteur' },
 ]
 
+/** Onglets qui génèrent des images (Grain, Video, Extracteur n'en génèrent pas → pas d'interrupteur). */
+const IMAGE_TABS = new Set(TABS.map(t => t.id).filter(id => !['grain', 'video', 'extract'].includes(id)))
+
 export default function StudioPage() {
   const [tab, setTab] = useState('simple')
+  // Moteur d'image choisi, onglet par onglet (mémorisé dans le navigateur)
+  const [providers, setProviders] = useState<Record<string, ImageProvider>>({})
+  useEffect(() => { setProviders(Object.fromEntries(TABS.map(t => [t.id, loadTabProvider(t.id)]))) }, [])
+  const provider: ImageProvider = providers[tab] ?? 'gemini'
+  useEffect(() => { setCurrentProvider(IMAGE_TABS.has(tab) ? provider : 'gemini') }, [tab, provider])
+  const changeProvider = (p: ImageProvider) => { setProviders(prev => ({ ...prev, [tab]: p })); saveTabProvider(tab, p) }
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 52px)' }}>
@@ -60,12 +71,16 @@ export default function StudioPage() {
             }}
           >
             {t.label}
+            {IMAGE_TABS.has(t.id) && providers[t.id] === 'openai' && (
+              <span title="Cet onglet génère via ChatGPT" style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#fff', background: '#10A37F', borderRadius: 4, padding: '1px 4px', verticalAlign: 'middle' }}>GPT</span>
+            )}
           </div>
         ))}
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
+        {IMAGE_TABS.has(tab) && <ProviderSwitch value={provider} onChange={changeProvider} />}
         {tab === 'simple'          && <SimpleTab />}
         {tab === 'visage'          && <VisageTab />}
         {tab === 'gold-silver'     && <GoldSilverTab />}
