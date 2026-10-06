@@ -104,7 +104,7 @@ const FRAMING: Record<LingerieType, string> = {
   ensemble: `${MOUTH_TOP} BOTTOM EDGE of the frame at the UPPER THIGHS, a few centimetres below the bottom of the briefs. Knees and lower legs are OUTSIDE the frame. The complete set — top AND briefs — is entirely visible. Shoulders, arms and hands are in frame.`,
   pyjama:   `${MOUTH_TOP} BOTTOM EDGE of the frame just below the FEET: the model is shown from the mouth down to the feet, both feet entirely visible (standing on, or resting on, the floor) with a small margin around them. The complete pyjama — top AND bottom — is entirely visible. Barefoot.`,
   haut:     `${MOUTH_TOP} BOTTOM EDGE of the frame at the BELLY, around navel level, a little below the bottom band of the bra. Hips, briefs and legs are OUTSIDE the frame. The bra is entirely visible, including straps and bottom band. Shoulders and upper arms are in frame.`,
-  bas:      'TOP EDGE of the frame at the BELLY, just above the navel. The chest, bust and everything above the stomach are OUTSIDE the frame. BOTTOM EDGE of the frame at the UPPER THIGHS, a few centimetres below the bottom of the briefs. Knees and lower legs are OUTSIDE the frame. The briefs are entirely visible, front view, including waistband and leg openings. Hands may rest lightly at the sides without covering the product.',
+  bas:      'TOP EDGE of the frame at the BELLY, just above the navel. The chest, bust and everything above the stomach are OUTSIDE the frame. BOTTOM EDGE of the frame at the UPPER THIGHS, a few centimetres below the bottom of the briefs. Knees and lower legs are OUTSIDE the frame. The briefs are entirely visible, including waistband and leg openings; hands never cover them.',
 }
 
 /* ============================== Poses ============================== */
@@ -116,21 +116,29 @@ export type PoseMode = 'neutre' | 'dynamique'
  * agenouillée main sur le genou, déhanché, main sur la bretelle…). Le cadrage reste coupé à la bouche.
  */
 export const DYNAMIC_POSES: { id: string; label: string; types: LingerieType[]; text: string }[] = [
-  { id: 'hanche', label: 'Déhanché, main sur la hanche', types: ['ensemble', 'pyjama', 'haut', 'bas'],
-    text: 'standing in a relaxed contrapposto, weight on one leg, the hip pushed gently to the side, one hand resting on the hip, the other arm loose along the body, shoulders relaxed and slightly asymmetrical.' },
-  { id: 'trois-quarts', label: 'Trois-quarts, genou avancé', types: ['ensemble', 'pyjama', 'haut', 'bas'],
-    text: 'body turned three-quarters to the camera, shoulders rotated back toward the lens, one knee bent slightly forward and inward, arms relaxed, a natural S-curve through the body.' },
-  { id: 'cheveux', label: 'Main dans les cheveux', types: ['ensemble', 'pyjama', 'haut'],
-    text: 'one hand raised to the hair at the side of the neck as if pushing it back over the shoulder, elbow lifted, the other hand resting loosely on the thigh, torso slightly twisted, relaxed and candid.' },
-  { id: 'bretelle', label: 'Main sur la bretelle / la ceinture', types: ['ensemble', 'haut', 'bas'],
-    text: 'one hand lightly touching the shoulder strap (or the waistband of the briefs), a natural fleeting gesture, fingers relaxed, without pulling or covering the product; the other arm loose, weight on one leg.' },
-  { id: 'marche', label: 'En mouvement, un pas en avant', types: ['ensemble', 'pyjama', 'bas'],
-    text: 'caught in motion taking a step toward the camera, one leg crossing slightly in front of the other, arms swinging naturally, a sense of movement in the body while the product stays sharp.' },
-  { id: 'assise-sol', label: 'Assise au sol, appui sur un bras', types: ['ensemble', 'pyjama', 'haut', 'bas'],
-    text: 'seated on the floor, leaning back on one straight arm planted behind her, legs bent and folded to the side, the other hand resting on her knee or thigh, torso upright and open toward the camera.' },
-  { id: 'genou', label: 'Agenouillée, main sur le genou', types: ['ensemble', 'haut', 'bas'],
-    text: 'half-kneeling, sitting back on one side with one knee raised, one hand resting on the raised knee, the other arm relaxed, torso upright with a slight lean forward, dynamic diagonal line through the body.' },
+  // Textes = mécanique du corps précise (poids, angles, genoux/coudes pliés) : une description vague donne une pose droite.
+  { id: 'hanche', label: 'Déhanché marqué, main sur la hanche', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Strong contrapposto: ALL her weight on the back leg, the hip pushed clearly out to the side; the free leg bent, knee turned inward, heel lifted. Shoulders tilted the opposite way to the hips (one shoulder clearly lower), torso leaning slightly toward the dropped shoulder. One hand on the pushed-out hip with the elbow pointing outward; the other arm bent, hand resting on the front of the upper thigh. A clear S-curve runs through the whole body.' },
+  { id: 'trois-quarts', label: 'Trois-quarts, regard par-dessus l\'épaule', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Body rotated about 45° away from the camera, then the shoulders twisted back toward the lens; the near knee bent and crossing in front of the other leg, back gently arched, chin turned toward the camera over the near shoulder. Arms bent: one hand resting on the opposite thigh, the other hand at the waist. The twist between hips and shoulders must be clearly visible.' },
+  { id: 'cheveux', label: 'Bras levés, mains dans les cheveux', types: ['ensemble', 'pyjama', 'haut'],
+    text: 'Both arms raised: one hand lifting the hair at the back of the neck with the elbow high and pointing out to the side, the other hand touching the hair near the opposite shoulder. Ribcage lifted, torso slightly twisted, hips shifted to one side, one knee bent and turned inward. Relaxed and candid, as if caught fixing her hair.' },
+  { id: 'bretelle', label: 'Doigt sous la bretelle / la ceinture', types: ['ensemble', 'haut', 'bas'],
+    text: 'One finger hooked lightly under the shoulder strap (or the side of the briefs\' waistband), lifting it a few millimetres — a playful, fleeting gesture; the product stays intact and fully visible. The shoulder on that side raised and rolled slightly forward, the other hand on the waist with the elbow out, hips angled away from the camera, weight on one leg, opposite knee bent.' },
+  { id: 'marche', label: 'En marche, pas en avant', types: ['ensemble', 'pyjama', 'bas'],
+    text: 'Mid-stride, walking toward the camera: the front leg crossing slightly in front of the back leg, front knee bent, back heel lifted off the floor; hips swinging to one side, arms in natural opposite motion (one forward, one back, elbows soft), hair moving slightly. A visible sense of movement, the product still sharp.' },
+  { id: 'assise-sol', label: 'Assise au sol, en appui sur un bras', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Sitting on the floor, the camera lowered toward her: she leans back on one straight arm planted on the floor behind her hip, the other hand resting on her raised knee. One knee up, the other leg folded flat to the side on the floor. Torso leaning back on a diagonal, shoulders at an angle, body open toward the camera.' },
+  { id: 'genou', label: 'Un genou au sol, main sur le genou levé', types: ['ensemble', 'haut', 'bas'],
+    text: 'Kneeling on one knee with the other leg bent forward, foot flat on the floor; sitting back slightly. One hand resting on the raised knee, the other hand on the hip or touching the hair. Torso leaning forward a little, shoulders angled, a strong diagonal line from the shoulder to the knee.' },
+  { id: 'assise-talons', label: 'Assise de côté sur les talons', types: ['ensemble', 'pyjama', 'bas'],
+    text: 'Sitting sideways on her heels on the floor, both legs folded to one side, hips turned three-quarters; one hand placed on the floor beside her for support, the other hand on her thigh. Torso twisted back toward the camera, one shoulder lower than the other, a soft curve through the waist.' },
 ]
+
+/** Règles communes à toutes les poses dynamiques (ce qui fait la différence avec une pose droite). */
+const DYNAMIC_RULES =
+  'BODY LANGUAGE RULES (mandatory): asymmetry everywhere — the shoulders are NOT level, the hips are NOT level, the weight is clearly on one side; at least one knee and one elbow are bent; the torso is angled, leaning or twisted relative to the camera, never square to the lens. Natural, relaxed and confident, as if the photographer caught her between two movements. ' +
+  'AVOID: standing straight and stiff, a symmetrical stance, arms hanging straight along the body, feet side by side, torso facing the camera squarely, mannequin-like rigidity.'
 
 export function posesFor(type: LingerieType) { return DYNAMIC_POSES.filter(p => p.types.includes(type)) }
 
@@ -160,28 +168,33 @@ export function buildLingeriePrompt(o: {
 }): string {
   const imgs = o.imageCount > 1 ? `IMAGES 1 to ${o.imageCount}` : 'IMAGE 1'
   const dyn = o.poseMode === 'dynamique' ? (DYNAMIC_POSES.find(p => p.id === o.poseId && p.types.includes(o.type)) ?? posesFor(o.type)[0]) : null
+  const custom = o.direction?.trim()
+
+  // Priorité : texte « Pose & attitude » > pose dynamique tirée > pose catalogue neutre.
+  // La pose (texte libre ou dynamique) est placée AVANT le cadrage : placée après, Gemini garde la pose droite.
+  const poseBlock = custom
+    ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing and the product fidelity stay mandatory; anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown. Hands never hide the product.\n${custom}`
+    : dyn
+      ? `POSE (essential to this image) — a DYNAMIC lingerie-campaign pose like contemporary lingerie e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}\n${DYNAMIC_RULES}\nConfident and elegant, never vulgar; the product stays fully visible and unobstructed.`
+      : null
+
   return [
-    o.direction?.trim() || o.poseMode === 'dynamique'
-      ? 'Professional fashion photograph for a lingerie brand\'s online catalogue, editorial style. Tasteful, elegant and non-suggestive: the product stays clearly visible on the body.'
+    custom || dyn
+      ? 'Professional lingerie campaign photograph for a brand\'s online catalogue, editorial e-commerce style with a natural, dynamic pose. Tasteful, elegant and non-suggestive: the product stays clearly visible on the body.'
       : 'Professional e-commerce product photograph for a lingerie brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.',
     '',
     `PRODUCT — ${imgs}: product packshot${o.imageCount > 1 ? 's' : ''} of ${PRODUCT_LABEL[o.type]}. ${o.imageCount > 1 ? 'These images show' : 'This image shows'} the product only, with no model. Reproduce the product with absolute fidelity: exact color, fabric, lace pattern, transparency level, cut, coverage, straps, hooks, underwire, seams, trims, elastic bands, prints and logos. Same coverage as the product — do not make it smaller or more revealing, do not add or remove any part. The product is fitted to the model's body size. The model wears ONLY this product${o.type === 'haut' || o.type === 'bas' ? ' (anything else stays outside the frame)' : ''}.`,
     '',
+    ...(poseBlock ? [poseBlock, ''] : []),
     `MODEL — described in text only, there is no reference photo of her. ${o.model.identity}`,
     `BODY — ${o.model.bodies[o.morpho]} Respect this body type exactly, do not slim it down or enlarge it.`,
     `HAIR — ${o.model.hair}`,
     'SKIN — realistic natural texture with subtle pores, even skin tone over the whole body, no plastic retouching look.',
     '',
-    `FRAMING (STRICT, non-negotiable) — ${FRAMING[o.type]}`,
+    `FRAMING (STRICT, non-negotiable) — ${FRAMING[o.type]}` +
+      (poseBlock ? ' The crop is defined on her body and follows the pose (standing, twisted, seated or kneeling): it does not force a frontal, upright stance. A slight head tilt is fine; the eyes are never visible.' : ''),
     '',
-    // Direction saisie = elle REMPLACE la pose par défaut (sinon la pose « catalogue » figée, placée avant, l'emporte).
-    // Priorité : texte « Pose & attitude » > pose dynamique tirée > pose catalogue neutre
-    o.direction?.trim()
-      ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing above and the product fidelity stay mandatory; anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown. Hands never hide the product.\n${o.direction.trim()}`
-      : dyn
-        ? `POSE — dynamic lingerie-catalogue pose, natural and alive, never stiff, in the spirit of contemporary lingerie e-commerce shoots: ${dyn.text} Confident and elegant, never vulgar. The product stays fully visible and unobstructed. The framing above is unchanged: the top edge stays at the mouth (a slight head tilt is fine, the eyes are never visible), and the pose is adapted so the whole product fits in the frame.`
-        : 'POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. Arms relaxed along the body or one hand lightly on the hip; hands never cover the product. Calm, neutral attitude.',
-    '',
+    ...(poseBlock ? [] : ['POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. Arms relaxed along the body or one hand lightly on the hip; hands never cover the product. Calm, neutral attitude.', '']),
     o.hasBackgroundImage
       ? [
           `BACKGROUND — IMAGE ${o.imageCount + 1} is the BACKGROUND / LOCATION reference (it contains no model and no product). Reproduce this exact place behind the model: same walls, floor, materials, textures, colors, furniture and objects, same light direction, color temperature and ambience. Keep its look exactly — do not redesign, recolor, add or remove elements. Only the viewpoint adapts to the framing above (seen closer, cropped like the shot), with natural perspective and the model placed naturally in the space, lit by the same light, with a soft natural contact shadow where relevant.`,
@@ -191,5 +204,6 @@ export function buildLingeriePrompt(o: {
       : `BACKGROUND & LIGHT — ${o.background.trim() || DEFAULT_LINGERIE_BACKGROUND}`,
     '',
     `TECHNICAL — ${o.ratio} format. Sharp focus on the product, true-to-life colors, high-end catalogue quality. No text, no logo, no watermark, no border.`,
+    ...(dyn && !custom ? ['', 'FINAL POSE CHECK — before rendering, verify the body is NOT upright and symmetrical: weight on one side, shoulders and hips tilted, knee(s) and elbow(s) bent, torso angled or twisted. If the pose looks like a straight standing catalogue stance, it is wrong.'] : []),
   ].join('\n')
 }
