@@ -107,6 +107,47 @@ const FRAMING: Record<LingerieType, string> = {
   bas:      'TOP EDGE of the frame at the BELLY, just above the navel. The chest, bust and everything above the stomach are OUTSIDE the frame. BOTTOM EDGE of the frame at the UPPER THIGHS, a few centimetres below the bottom of the briefs. Knees and lower legs are OUTSIDE the frame. The briefs are entirely visible, including waistband and leg openings; hands never cover them.',
 }
 
+/**
+ * Cadrage LARGE (pose dynamique / pose libre) : Gemini génère tête comprise, le Studio coupe
+ * ensuite sous le nez (lib/lingerieCrop.ts). Pas pour « bas » : il faudrait générer le buste nu.
+ */
+const WIDE_HEAD =
+  'Her whole head, face and hair are INSIDE the frame, with a little space above the head: the image will be cropped afterwards, so do not crop it yourself. Natural relaxed face, mouth closed.'
+
+const WIDE_BODY = 'from slightly above the top of her head down to just below the knees (if she is seated or kneeling: down to the floor)'
+
+const WIDE_FRAMING: Record<LingerieType, string> = {
+  ensemble: `Show the model ${WIDE_BODY}. ${WIDE_HEAD} The complete set — top AND briefs — is entirely visible. The body fills the frame, with only a small margin on the sides.`,
+  pyjama:   `Full figure, from slightly above the top of her head down to below the feet, both feet entirely visible with a small margin. ${WIDE_HEAD} The complete pyjama — top AND bottom — is entirely visible. Barefoot. The body fills the frame, with only a small margin on the sides.`,
+  haut:     `Show the model ${WIDE_BODY}. ${WIDE_HEAD} The bra is entirely visible, including straps and bottom band. The body fills the frame, with only a small margin on the sides.`,
+  bas:      `Show the model ${WIDE_BODY}. ${WIDE_HEAD} The briefs are entirely visible, including waistband and leg openings. The body fills the frame, with only a small margin on the sides.`,
+}
+
+/**
+ * En cadrage large, la partie NON vendue doit être couverte (sinon Gemini génère le corps nu) :
+ * vêtement neutre couleur peau, toujours supprimé par le recadrage (ventre / cuisses).
+ */
+const COVER: Partial<Record<LingerieType, string>> = {
+  haut: 'Below the bra she also wears plain, seamless, skin-tone briefs. They are NOT part of the product and will be cropped out of the final visual.',
+  bas:  'Above the briefs she also wears a plain, seamless, skin-tone bralette. It is NOT part of the product and will be cropped out of the final visual.',
+}
+
+const GEMINI_RATIOS = ['9:16', '2:3', '3:4', '4:5', '1:1', '5:4', '4:3', '3:2', '16:9', '21:9']
+const rv = (r: string) => { const [a, b] = r.split(':').map(Number); return a / b }
+
+/** Cadrage large = pose dynamique ou pose libre : Gemini génère tête comprise, le Studio recadre. */
+export const isWideFraming = (_type: LingerieType, poseMode: PoseMode | undefined, direction?: string) =>
+  poseMode === 'dynamique' || !!direction?.trim()
+
+/**
+ * Ratio de génération en cadrage large. Pyjama : la coupe ne retire que la tête (~10 %) → ratio un peu
+ * plus haut que la cible. Autres types : on garde une petite partie de l'image → 2:3 laisse toute la marge.
+ */
+export function generationRatio(target: string, type: LingerieType): string {
+  const need = type === 'pyjama' ? rv(target) * 0.9 : Math.min(rv(target), 2 / 3)
+  return GEMINI_RATIOS.filter(r => rv(r) >= need).sort((a, b) => rv(a) - rv(b))[0] ?? target
+}
+
 /* ============================== Poses ============================== */
 
 export type PoseMode = 'neutre' | 'dynamique'
@@ -128,7 +169,7 @@ export const DYNAMIC_POSES: { id: string; label: string; types: LingerieType[]; 
   { id: 'marche', label: 'En marche, pas en avant', types: ['ensemble', 'pyjama', 'bas'],
     text: 'Mid-stride, walking toward the camera: the front leg crossing slightly in front of the back leg, front knee bent, back heel lifted off the floor; hips swinging to one side, arms in natural opposite motion (one forward, one back, elbows soft), hair moving slightly. A visible sense of movement, the product still sharp.' },
   { id: 'assise-sol', label: 'Assise au sol, en appui sur un bras', types: ['ensemble', 'pyjama', 'haut', 'bas'],
-    text: 'Sitting on the floor, the camera lowered toward her: she leans back on one straight arm planted on the floor behind her hip, the other hand resting on her raised knee. One knee up, the other leg folded flat to the side on the floor. Torso leaning back on a diagonal, shoulders at an angle, body open toward the camera.' },
+    text: 'Sitting on the floor, the camera at her chest height: she props herself on one straight arm placed on the floor beside and slightly behind her hip, the other hand resting on her raised knee. One knee up, the other leg folded to the side on the floor, knees together. Torso upright with a slight diagonal, shoulders at an angle, torso turned toward the camera. Relaxed, casual sitting pose.' },
   { id: 'genou', label: 'Un genou au sol, main sur le genou levé', types: ['ensemble', 'haut', 'bas'],
     text: 'Kneeling on one knee with the other leg bent forward, foot flat on the floor; sitting back slightly. One hand resting on the raised knee, the other hand on the hip or touching the hair. Torso leaning forward a little, shoulders angled, a strong diagonal line from the shoulder to the knee.' },
   { id: 'assise-talons', label: 'Assise de côté sur les talons', types: ['ensemble', 'pyjama', 'bas'],
@@ -165,17 +206,24 @@ export function buildLingeriePrompt(o: {
   ratio: string
   poseMode?: PoseMode
   poseId?: string
+  /** Un croquis de pose (bonhomme bâton) est envoyé en DERNIÈRE image */
+  hasPoseSketch?: boolean
 }): string {
   const imgs = o.imageCount > 1 ? `IMAGES 1 to ${o.imageCount}` : 'IMAGE 1'
   const dyn = o.poseMode === 'dynamique' ? (DYNAMIC_POSES.find(p => p.id === o.poseId && p.types.includes(o.type)) ?? posesFor(o.type)[0]) : null
   const custom = o.direction?.trim()
+  const wide = isWideFraming(o.type, o.poseMode, o.direction)
+  const sketchIdx = o.imageCount + (o.hasBackgroundImage ? 1 : 0) + 1
+  const sketchLine = dyn && !custom && o.hasPoseSketch
+    ? `\nPOSE DIAGRAM — IMAGE ${sketchIdx} is a stick-figure diagram of this pose (a drawing, not a person, not a style reference). Reproduce its body pose closely: torso angle, head tilt, where the weight is, the positions of arms, hands, legs and feet, which knees and elbows bend. A mirrored version is fine. Ignore its proportions, line style and white background.`
+    : ''
 
   // Priorité : texte « Pose & attitude » > pose dynamique tirée > pose catalogue neutre.
   // La pose (texte libre ou dynamique) est placée AVANT le cadrage : placée après, Gemini garde la pose droite.
   const poseBlock = custom
-    ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing and the product fidelity stay mandatory; anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown. Hands never hide the product.\n${custom}`
+    ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing and the product fidelity stay mandatory; ${wide ? 'the image will be cropped just below the nose afterwards, so the eyes and gaze will not appear in the final visual' : 'anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown'}. Hands never hide the product.\n${custom}`
     : dyn
-      ? `POSE (essential to this image) — a DYNAMIC lingerie-campaign pose like contemporary lingerie e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}\n${DYNAMIC_RULES}\nConfident and elegant, never vulgar; the product stays fully visible and unobstructed.`
+      ? `POSE (essential to this image) — a DYNAMIC lingerie-campaign pose like contemporary lingerie e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}${sketchLine}\n${DYNAMIC_RULES}\nConfident and elegant, never vulgar; the product stays fully visible and unobstructed.`
       : null
 
   return [
@@ -183,7 +231,7 @@ export function buildLingeriePrompt(o: {
       ? 'Professional lingerie campaign photograph for a brand\'s online catalogue, editorial e-commerce style with a natural, dynamic pose. Tasteful, elegant and non-suggestive: the product stays clearly visible on the body.'
       : 'Professional e-commerce product photograph for a lingerie brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.',
     '',
-    `PRODUCT — ${imgs}: product packshot${o.imageCount > 1 ? 's' : ''} of ${PRODUCT_LABEL[o.type]}. ${o.imageCount > 1 ? 'These images show' : 'This image shows'} the product only, with no model. Reproduce the product with absolute fidelity: exact color, fabric, lace pattern, transparency level, cut, coverage, straps, hooks, underwire, seams, trims, elastic bands, prints and logos. Same coverage as the product — do not make it smaller or more revealing, do not add or remove any part. The product is fitted to the model's body size. The model wears ONLY this product${o.type === 'haut' || o.type === 'bas' ? ' (anything else stays outside the frame)' : ''}.`,
+    `PRODUCT — ${imgs}: product packshot${o.imageCount > 1 ? 's' : ''} of ${PRODUCT_LABEL[o.type]}. ${o.imageCount > 1 ? 'These images show' : 'This image shows'} the product only, with no model. Reproduce the product with absolute fidelity: exact color, fabric, lace pattern, transparency level, cut, coverage, straps, hooks, underwire, seams, trims, elastic bands, prints and logos. Same coverage as the product — do not make it smaller or more revealing, do not add or remove any part. The product is fitted to the model's body size. ${wide && COVER[o.type] ? COVER[o.type] : `The model wears ONLY this product${o.type === 'haut' || o.type === 'bas' ? ' (anything else stays outside the frame)' : ''}.`}`,
     '',
     ...(poseBlock ? [poseBlock, ''] : []),
     `MODEL — described in text only, there is no reference photo of her. ${o.model.identity}`,
@@ -191,8 +239,10 @@ export function buildLingeriePrompt(o: {
     `HAIR — ${o.model.hair}`,
     'SKIN — realistic natural texture with subtle pores, even skin tone over the whole body, no plastic retouching look.',
     '',
-    `FRAMING (STRICT, non-negotiable) — ${FRAMING[o.type]}` +
-      (poseBlock ? ' The crop is defined on her body and follows the pose (standing, twisted, seated or kneeling): it does not force a frontal, upright stance. A slight head tilt is fine; the eyes are never visible.' : ''),
+    wide
+      ? `FRAMING — ${WIDE_FRAMING[o.type]} The framing follows the pose (standing, twisted, seated or kneeling): it never forces a frontal, upright stance.`
+      : `FRAMING (STRICT, non-negotiable) — ${FRAMING[o.type]}` +
+        (poseBlock ? ' The crop is defined on her body and follows the pose (standing, twisted, seated or kneeling): it does not force a frontal, upright stance. A slight head tilt is fine; the eyes are never visible.' : ''),
     '',
     ...(poseBlock ? [] : ['POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. Arms relaxed along the body or one hand lightly on the hip; hands never cover the product. Calm, neutral attitude.', '']),
     o.hasBackgroundImage

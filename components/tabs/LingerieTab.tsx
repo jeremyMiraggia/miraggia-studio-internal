@@ -10,9 +10,10 @@ import JSZip from 'jszip'
 import { upload } from '@vercel/blob/client'
 import {
   LINGERIE_TYPES, DEFAULT_LINGERIE_MODELS, DEFAULT_LINGERIE_BACKGROUND,
-  MORPHOS, buildLingeriePrompt, ratioFor, posesFor, pickPose,
+  MORPHOS, buildLingeriePrompt, ratioFor, posesFor, pickPose, isWideFraming, generationRatio,
   type LingerieModel, type LingerieType, type Morpho, type PoseMode,
 } from '@/lib/lingerie'
+import { hasPoseSketch, poseSketchSvg } from '@/lib/poseSketch'
 
 type Status = 'pending' | 'running' | 'done' | 'error'
 type Ref = { file: File; thumb: string; url?: string }
@@ -20,6 +21,8 @@ type Look = {
   id: string; name: string; refs: Ref[]; type: LingerieType; modelId: string; morpho: Morpho
   /** Pose : neutre (catalogue) ou dynamique (pose tirée dans la bibliothèque, compatible avec le type) */
   poseMode: PoseMode; poseId: string
+  /** Cadrage large : visuel avant recadrage (tête comprise), par URL de version recadrée */
+  fulls?: Record<string, string>; cropping?: boolean
   status: Status; imageUrl?: string; versions: string[]; error?: string; showPrompt?: boolean
 }
 
@@ -87,7 +90,7 @@ export default function LingerieTab() {
   const ratioOf = (l: Look) => (ratioMode === 'auto' ? ratioFor(l.type) : ratioMode)
   const promptOf = (l: Look) => buildLingeriePrompt({
     type: l.type, model: modelOf(l), morpho: l.morpho, imageCount: l.refs.length, background, direction, ratio: ratioOf(l),
-    poseMode: l.poseMode, poseId: l.poseId,
+    poseMode: l.poseMode, poseId: l.poseId, hasPoseSketch: usesSketch(l),
     hasBackgroundImage: !!bgImage,
   })
 
@@ -173,18 +176,70 @@ export default function LingerieTab() {
       patchLook(id, { refs })
       const bgUrl = await backgroundUrl()
       const cur = looksRef.current.find(x => x.id === id)!
-      const res = await fetch('/api/studio/free', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptOf(cur), ratio: ratioOf(cur), quality, refUrls: [...refs.map(r => r.url), ...(bgUrl ? [bgUrl] : [])] }),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`)
-      if (!j.imageUrl) throw new Error('Réponse sans image.')
+      // Pose dynamique : croquis de pose en dernière image ; cadrage large puis recadrage auto (bouche / ventre)
+      const sketchUrl = usesSketch(cur) ? await poseSketchUrl(cur.poseId) : undefined
+      const wide = isWideFraming(cur.type, cur.poseMode, direction)
+      const target = ratioOf(cur)
+      const generate = async () => {
+        const res = await fetch('/api/studio/free', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: promptOf(cur), ratio: wide ? generationRatio(target, cur.type) : target, quality,
+            refUrls: [...refs.map(r => r.url), ...(bgUrl ? [bgUrl] : []), ...(sketchUrl ? [sketchUrl] : [])],
+          }),
+        })
+        const j = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`)
+        if (!j.imageUrl) throw new Error('Réponse sans image.')
+        return j.imageUrl as string
+      }
+      // Un refus de sécurité est souvent aléatoire : une seconde tentative automatique
+      let fullUrl: string
+      try { fullUrl = await generate() }
+      catch (e: any) { if (/IMAGE_SAFETY|sécurité/i.test(e?.message ?? '')) fullUrl = await generate(); else throw e }
+
+      let finalUrl = fullUrl
+      if (wide) {
+        patchLook(id, { error: undefined, cropping: true })
+        const cr = await fetch('/api/studio/lingerie-crop', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageUrl: fullUrl, ratio: target, type: cur.type }),
+        })
+        const cj = await cr.json().catch(() => ({}))
+        if (!cr.ok || !cj.imageUrl) throw new Error(`Recadrage : ${cj.error ?? `HTTP ${cr.status}`} — ↺ pour régénérer`)
+        finalUrl = cj.imageUrl
+      }
       const now = looksRef.current.find(x => x.id === id)
-      patchLook(id, { status: 'done', imageUrl: j.imageUrl, versions: [...(now?.versions ?? []), j.imageUrl] })
+      patchLook(id, {
+        status: 'done', cropping: false, imageUrl: finalUrl, versions: [...(now?.versions ?? []), finalUrl],
+        ...(wide ? { fulls: { ...(now?.fulls ?? {}), [finalUrl]: fullUrl } } : {}),
+      })
     } catch (e: any) {
-      patchLook(id, { status: 'error', error: e?.message ?? String(e) })
+      patchLook(id, { status: 'error', cropping: false, error: e?.message ?? String(e) })
     }
+  }
+
+  /* ----------- Croquis de pose (PNG uploadé une fois par pose) ----------- */
+  const sketchUploads = useRef(new Map<string, Promise<string>>())
+  const usesSketch = (l: Look) => l.poseMode === 'dynamique' && !direction.trim() && hasPoseSketch(l.poseId)
+  const poseSketchUrl = (poseId: string): Promise<string> => {
+    let p = sketchUploads.current.get(poseId)
+    if (!p) {
+      p = (async () => {
+        const img = new Image()
+        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(poseSketchSvg(poseId))}`
+        await img.decode()
+        const c = document.createElement('canvas'); c.width = 800; c.height = 1000
+        c.getContext('2d')!.drawImage(img, 0, 0)
+        const blob = await new Promise<Blob | null>(r => c.toBlob(r, 'image/png'))
+        if (!blob) throw new Error('croquis de pose : rendu impossible')
+        const b = await upload(`lingerie-poses/${poseId}-${Date.now()}.png`, blob, { access: 'public', handleUploadUrl: '/api/blob-upload', contentType: 'image/png' })
+        return b.url
+      })()
+      p.catch(() => sketchUploads.current.delete(poseId))
+      sketchUploads.current.set(poseId, p)
+    }
+    return p
   }
 
   const run = async () => {
@@ -553,8 +608,13 @@ export default function LingerieTab() {
                   </a>
                 ) : (
                   <div style={{ aspectRatio: ratioOf(l).replace(':', '/'), borderRadius: 6, border: '1px dashed #E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#9CA3AF' }}>
-                    {busy ? '⏳ génération…' : '—'}
+                    {busy ? (l.cropping ? '✂ recadrage…' : '⏳ génération…') : '—'}
                   </div>
+                )}
+                {busy && l.imageUrl && <div style={{ fontSize: 10, color: '#F59E0B' }}>{l.cropping ? '✂ recadrage de la nouvelle version…' : '⏳ nouvelle version en cours…'}</div>}
+                {l.imageUrl && l.fulls?.[l.imageUrl] && (
+                  <a href={l.fulls[l.imageUrl]} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: '#6B7280' }}
+                     title="Image générée en cadrage large, avant le recadrage automatique (visage visible)">↗ image avant recadrage</a>
                 )}
                 {l.versions.length > 1 && (
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
