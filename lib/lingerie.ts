@@ -174,7 +174,15 @@ export const DYNAMIC_POSES: { id: string; label: string; types: LingerieType[]; 
     text: 'Kneeling on one knee with the other leg bent forward, foot flat on the floor; sitting back slightly. One hand resting on the raised knee, the other hand on the hip or touching the hair. Torso leaning forward a little, shoulders angled, a strong diagonal line from the shoulder to the knee.' },
   { id: 'assise-talons', label: 'Assise de côté sur les talons', types: ['ensemble', 'pyjama', 'bas'],
     text: 'Sitting sideways on her heels on the floor, both legs folded to one side, hips turned three-quarters; one hand placed on the floor beside her for support, the other hand on her thigh. Torso twisted back toward the camera, one shoulder lower than the other, a soft curve through the waist.' },
+  { id: 'mur', label: 'Appuyée contre le mur', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Leaning one shoulder and the upper back against the wall behind her, body on a clear diagonal, hips pushed slightly away from the wall; one leg crossed in front of the other with the knee bent, toes pointed. One hand resting flat on the wall at hip height, the other hand drifting up to the collarbone. Head tilted softly toward the wall shoulder.' },
+  { id: 'epaule', label: 'Main sur la clavicule, tête inclinée', types: ['ensemble', 'pyjama', 'haut'],
+    text: 'Body turned three-quarters, one shoulder slightly raised and brought forward; the near hand resting lightly on the opposite collarbone with soft, loose fingers, the other arm relaxed with the hand grazing the thigh. Chin lowered toward the raised shoulder, head tilted, weight on the back leg, front knee bent and turned in.' },
 ]
+
+/** Ambiance des poses dynamiques : naturelle et sensuelle dans le registre des campagnes lingerie premium (vocabulaire qui passe les filtres). */
+const DYNAMIC_MOOD =
+  'MOOD — natural, feminine and softly sensual in the elegant way of premium lingerie campaigns: relaxed body, soft hands with loose fingers, lips relaxed and slightly parted, a calm, self-assured, slightly dreamy attitude. Intimate but never explicit, never vulgar; the product stays fully visible and unobstructed.'
 
 /** Règles communes à toutes les poses dynamiques (ce qui fait la différence avec une pose droite). */
 const DYNAMIC_RULES =
@@ -223,12 +231,12 @@ export function buildLingeriePrompt(o: {
   const poseBlock = custom
     ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing and the product fidelity stay mandatory; ${wide ? 'the image will be cropped just below the nose afterwards, so the eyes and gaze will not appear in the final visual' : 'anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown'}. Hands never hide the product.\n${custom}`
     : dyn
-      ? `POSE (essential to this image) — a DYNAMIC lingerie-campaign pose like contemporary lingerie e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}${sketchLine}\n${DYNAMIC_RULES}\nConfident and elegant, never vulgar; the product stays fully visible and unobstructed.`
+      ? `POSE (essential to this image) — a DYNAMIC lingerie-campaign pose like contemporary lingerie e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}${sketchLine}\n${DYNAMIC_RULES}\n${DYNAMIC_MOOD}`
       : null
 
   return [
     custom || dyn
-      ? 'Professional lingerie campaign photograph for a brand\'s online catalogue, editorial e-commerce style with a natural, dynamic pose. Tasteful, elegant and non-suggestive: the product stays clearly visible on the body.'
+      ? 'Professional lingerie campaign photograph for a premium brand\'s online catalogue, editorial e-commerce style with a natural, dynamic pose. Tasteful and elegant, softly sensual, never explicit: the product stays clearly visible on the body.'
       : 'Professional e-commerce product photograph for a lingerie brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.',
     '',
     `PRODUCT — ${imgs}: product packshot${o.imageCount > 1 ? 's' : ''} of ${PRODUCT_LABEL[o.type]}. ${o.imageCount > 1 ? 'These images show' : 'This image shows'} the product only, with no model. Reproduce the product with absolute fidelity: exact color, fabric, lace pattern, transparency level, cut, coverage, straps, hooks, underwire, seams, trims, elastic bands, prints and logos. Same coverage as the product — do not make it smaller or more revealing, do not add or remove any part. The product is fitted to the model's body size. ${wide && COVER[o.type] ? COVER[o.type] : `The model wears ONLY this product${o.type === 'haut' || o.type === 'bas' ? ' (anything else stays outside the frame)' : ''}.`}`,

@@ -49,7 +49,12 @@ export default function LingerieTab() {
   const [dropType, setDropType]     = useState<LingerieType | null>(null)
   const [defaultModel, setDefaultModel] = useState('random')
   const [defaultMorpho, setDefaultMorpho] = useState<Morpho>('middle')
-  const [defaultPoseMode, setDefaultPoseMode] = useState<PoseMode>('neutre')
+  const [defaultPoseMode, setDefaultPoseMode] = useState<PoseMode>('dynamique')
+  /** Changer la pose par défaut l'applique aussi aux looks déjà déposés (sinon ils restent dans l'ancien mode). */
+  const applyPoseModeToAll = (m: PoseMode) => {
+    setDefaultPoseMode(m)
+    commit(looksRef.current.map(l => (l.status === 'running' || l.poseMode === m ? l : { ...l, poseMode: m, status: 'pending' })))
+  }
   const [grouping, setGrouping]     = useState<'per-file' | 'single'>('per-file')
   const [background, setBackground] = useState(DEFAULT_LINGERIE_BACKGROUND)
   // Image de fond (optionnelle, commune à tous les looks) — envoyée après les photos produit, jamais compressée
@@ -398,11 +403,14 @@ export default function LingerieTab() {
             </select>
           </div>
           <div>
-            <div style={sub}>Pose par défaut</div>
-            <select value={defaultPoseMode} onChange={e => setDefaultPoseMode(e.target.value as PoseMode)} style={inp}>
+            <div style={sub}>Pose (tous les looks)</div>
+            <select value={defaultPoseMode} onChange={e => applyPoseModeToAll(e.target.value as PoseMode)} style={inp}>
               <option value="neutre">🧍 Neutre (catalogue)</option>
               <option value="dynamique">💃 Dynamique (pose tirée par look)</option>
             </select>
+            {direction.trim() && (
+              <div style={{ fontSize: 10, color: '#B45309', marginTop: 3 }}>⚠ Le champ « Pose & attitude » est rempli : il remplace les poses tirées.</div>
+            )}
           </div>
           <div>
             <div style={sub}>Ratio</div>

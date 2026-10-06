@@ -12,6 +12,8 @@ type Skeleton = {
   sL: P; sR: P; eL: P; eR: P; wL: P; wR: P
   hL: P; hR: P; kL: P; kR: P; aL: P; aR: P
   floor?: number
+  /** x d'un mur vertical (poses en appui) */
+  wall?: number
 }
 
 const SKELETONS: Record<string, Skeleton> = {
@@ -23,6 +25,8 @@ const SKELETONS: Record<string, Skeleton> = {
   'marche':        { head: [52, 9],  neck: [51, 17], sL: [41, 22], sR: [61, 23], eL: [37, 40], wL: [30, 55], eR: [66, 37], wR: [62, 53], hL: [44, 56], hR: [57, 59], kL: [54, 80], aL: [46, 109], kR: [56, 86], aR: [66, 104] },
   'assise-sol':    { head: [44, 44], neck: [47, 52], sL: [39, 56], sR: [56, 54], eL: [33, 68], wL: [36, 80], eR: [67, 72], wR: [76, 110], hL: [50, 96], hR: [62, 94], kL: [36, 78], aL: [34, 110], kR: [80, 106], aR: [58, 111], floor: 112 },
   'genou':         { head: [47, 30], neck: [48, 38], sL: [40, 42], sR: [56, 42], eL: [32, 58], wL: [38, 74], eR: [66, 58], wR: [58, 72], hL: [46, 74], hR: [58, 76], kL: [38, 80], aL: [38, 111], kR: [60, 110], aR: [74, 111], floor: 112 },
+  'mur':           { head: [44, 11], neck: [45, 19], sL: [35, 24], sR: [55, 22], eL: [26, 44], wL: [30, 60], eR: [62, 34], wR: [50, 26], hL: [48, 58], hR: [62, 58], kL: [58, 84], aL: [52, 112], kR: [52, 86], aR: [62, 112], wall: 26 },
+  'epaule':        { head: [56, 12], neck: [53, 20], sL: [43, 26], sR: [62, 22], eL: [44, 40], wL: [58, 26], eR: [68, 42], wR: [64, 62], hL: [44, 58], hR: [57, 60], kL: [44, 86], aL: [48, 113], kR: [54, 85], aR: [50, 110] },
   'assise-talons': { head: [50, 44], neck: [50, 52], sL: [41, 56], sR: [59, 56], eL: [36, 72], wL: [40, 90], eR: [68, 76], wR: [74, 110], hL: [48, 92], hR: [60, 94], kL: [30, 104], aL: [62, 111], kR: [36, 108], aR: [70, 110], floor: 112 },
 }
 
@@ -46,6 +50,7 @@ export function poseSketchSvg(poseId: string): string {
     `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000" viewBox="0 0 800 1000">`,
     `<rect width="800" height="1000" fill="#ffffff"/>`,
     s.floor ? `<line x1="40" y1="${s.floor * k}" x2="760" y2="${s.floor * k}" stroke="#bbbbbb" stroke-width="6"/>` : '',
+    s.wall ? `<line x1="${s.wall * k}" y1="20" x2="${s.wall * k}" y2="980" stroke="#bbbbbb" stroke-width="6"/>` : '',
     `<line x1="${s.head[0] * k}" y1="${s.head[1] * k + 44}" x2="${s.neck[0] * k}" y2="${s.neck[1] * k}" stroke="#111" stroke-width="22" stroke-linecap="round"/>`,
     ...lines.map(([a, b]) => `<line x1="${a[0] * k}" y1="${a[1] * k}" x2="${b[0] * k}" y2="${b[1] * k}" stroke="#111" stroke-width="22" stroke-linecap="round"/>`),
     ...joints.map(j => `<circle cx="${j[0] * k}" cy="${j[1] * k}" r="15" fill="#d33"/>`),
