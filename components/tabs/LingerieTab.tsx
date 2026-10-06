@@ -10,13 +10,16 @@ import JSZip from 'jszip'
 import { upload } from '@vercel/blob/client'
 import {
   LINGERIE_TYPES, DEFAULT_LINGERIE_MODELS, DEFAULT_LINGERIE_BACKGROUND,
-  MORPHOS, buildLingeriePrompt, ratioFor, type LingerieModel, type LingerieType, type Morpho,
+  MORPHOS, buildLingeriePrompt, ratioFor, posesFor, pickPose,
+  type LingerieModel, type LingerieType, type Morpho, type PoseMode,
 } from '@/lib/lingerie'
 
 type Status = 'pending' | 'running' | 'done' | 'error'
 type Ref = { file: File; thumb: string; url?: string }
 type Look = {
   id: string; name: string; refs: Ref[]; type: LingerieType; modelId: string; morpho: Morpho
+  /** Pose : neutre (catalogue) ou dynamique (pose tirée dans la bibliothèque, compatible avec le type) */
+  poseMode: PoseMode; poseId: string
   status: Status; imageUrl?: string; versions: string[]; error?: string; showPrompt?: boolean
 }
 
@@ -43,6 +46,7 @@ export default function LingerieTab() {
   const [dropType, setDropType]     = useState<LingerieType | null>(null)
   const [defaultModel, setDefaultModel] = useState('random')
   const [defaultMorpho, setDefaultMorpho] = useState<Morpho>('middle')
+  const [defaultPoseMode, setDefaultPoseMode] = useState<PoseMode>('neutre')
   const [grouping, setGrouping]     = useState<'per-file' | 'single'>('per-file')
   const [background, setBackground] = useState(DEFAULT_LINGERIE_BACKGROUND)
   // Image de fond (optionnelle, commune à tous les looks) — envoyée après les photos produit, jamais compressée
@@ -83,6 +87,7 @@ export default function LingerieTab() {
   const ratioOf = (l: Look) => (ratioMode === 'auto' ? ratioFor(l.type) : ratioMode)
   const promptOf = (l: Look) => buildLingeriePrompt({
     type: l.type, model: modelOf(l), morpho: l.morpho, imageCount: l.refs.length, background, direction, ratio: ratioOf(l),
+    poseMode: l.poseMode, poseId: l.poseId,
     hasBackgroundImage: !!bgImage,
   })
 
@@ -95,6 +100,7 @@ export default function LingerieTab() {
     const make = (r: Ref[]): Look => ({
       id: uid(), name: baseName(r[0].file.name), refs: r,
       type: dropType, modelId: pickModel(), morpho: defaultMorpho,
+      poseMode: defaultPoseMode, poseId: pickPose(dropType),
       status: 'pending', versions: [],
     })
     const fresh = grouping === 'single' ? [make(refs)] : refs.map(r => make([r]))
@@ -322,7 +328,7 @@ export default function LingerieTab() {
       {/* ---- 2. Réglages ---- */}
       <div style={card}>
         <div style={label}>2 — Réglages</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
           <div>
             <div style={sub}>Mannequin par défaut</div>
             <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)} style={inp}>
@@ -334,6 +340,13 @@ export default function LingerieTab() {
             <div style={sub}>Morphologie par défaut</div>
             <select value={defaultMorpho} onChange={e => setDefaultMorpho(e.target.value as Morpho)} style={inp}>
               {MORPHOS.map(x => <option key={x.id} value={x.id}>{x.label} ({x.size})</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={sub}>Pose par défaut</div>
+            <select value={defaultPoseMode} onChange={e => setDefaultPoseMode(e.target.value as PoseMode)} style={inp}>
+              <option value="neutre">🧍 Neutre (catalogue)</option>
+              <option value="dynamique">💃 Dynamique (pose tirée par look)</option>
             </select>
           </div>
           <div>
@@ -471,7 +484,13 @@ export default function LingerieTab() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                   <div>
-                    <select value={l.type} disabled={busy} onChange={e => patchLook(l.id, { type: e.target.value as LingerieType, status: 'pending' })} style={{ ...inp, minHeight: 28, fontSize: 12 }}>
+                    <select value={l.type} disabled={busy} style={{ ...inp, minHeight: 28, fontSize: 12 }}
+                            onChange={e => {
+                              const type = e.target.value as LingerieType
+                              // pose incompatible avec le nouveau type → nouvelle pose tirée
+                              const poseId = posesFor(type).some(p => p.id === l.poseId) ? l.poseId : pickPose(type)
+                              patchLook(l.id, { type, poseId, status: 'pending' })
+                            }}>
                       {LINGERIE_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
                     </select>
                     <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>✂ {typeInfo.hint} · {ratioOf(l)}</div>
@@ -494,6 +513,23 @@ export default function LingerieTab() {
                             style={{ ...small(l.morpho === x.id), padding: '3px 6px' }}>{x.label}</button>
                   ))}
                 </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                  {(['neutre', 'dynamique'] as PoseMode[]).map(m => (
+                    <button key={m} disabled={busy}
+                            onClick={() => { if (l.poseMode !== m) patchLook(l.id, { poseMode: m, status: 'pending' }) }}
+                            style={{ ...small(l.poseMode === m), padding: '3px 6px' }}>{m === 'neutre' ? '🧍 Pose neutre' : '💃 Pose dynamique'}</button>
+                  ))}
+                </div>
+                {l.poseMode === 'dynamique' && (
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <select value={l.poseId} disabled={busy} onChange={e => patchLook(l.id, { poseId: e.target.value, status: 'pending' })}
+                            style={{ ...inp, minHeight: 28, fontSize: 12 }} title={direction.trim() ? 'Le champ « Pose & attitude » est rempli : il remplace cette pose' : undefined}>
+                      {posesFor(l.type).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                    </select>
+                    <button onClick={() => patchLook(l.id, { poseId: pickPose(l.type, l.poseId), status: 'pending' })}
+                            disabled={busy} title="Tirer une autre pose" style={{ ...small(), padding: '2px 8px' }}>🎲</button>
+                  </div>
+                )}
 
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                   {l.refs.map((r, i) => (
