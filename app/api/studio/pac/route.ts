@@ -6,6 +6,17 @@
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
+
+// Photos de 25-30 Mpx : pas de cache libvips (il garde les images décodées en mémoire) et un seul
+// traitement lourd à la fois par instance — sinon plusieurs requêtes simultanées font tomber la fonction.
+sharp.cache(false)
+sharp.concurrency(1)
+let heavy: Promise<unknown> = Promise.resolve()
+function oneAtATime<T>(job: () => Promise<T>): Promise<T> {
+  const run = heavy.then(job, job)
+  heavy = run.catch(() => {})
+  return run
+}
 import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 import { detectPlaceholder, chooseCrop, buildPacPrompt, pasteBack, nearestRatio } from '@/lib/pac'
 
@@ -40,13 +51,14 @@ async function handlePOST(request: Request) {
     const W = (swap ? meta.height : meta.width) ?? 0, H = (swap ? meta.width : meta.height) ?? 0
     if (!W || !H) throw new Error('Image illisible.')
 
-    // 1. Placeholder
-    const ph = await detectPlaceholder(original, W, H, apiKey)
-
-    // 2. Image envoyée : zone autour du placeholder, ou image entière
-    const crop = mode === 'crop' ? chooseCrop(ph.box, W, H) : { box: { left: 0, top: 0, width: W, height: H }, ratio: nearestRatio(W, H) }
-    const region = await sharp(original).rotate().extract(crop.box)
-      .resize({ width: 3072, height: 3072, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 93 }).toBuffer()
+    // 1. Placeholder + 2. image envoyée (zone autour du placeholder, ou image entière) — étapes lourdes, une à la fois
+    const { ph, crop, region } = await oneAtATime(async () => {
+      const ph = await detectPlaceholder(original, W, H, apiKey)
+      const crop = mode === 'crop' ? chooseCrop(ph.box, W, H) : { box: { left: 0, top: 0, width: W, height: H }, ratio: nearestRatio(W, H) }
+      const region = await sharp(original).rotate().extract(crop.box)
+        .resize({ width: 3072, height: 3072, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 93 }).toBuffer()
+      return { ph, crop, region }
+    })
     const pacs = await Promise.all(pacUrls.map(async u =>
       sharp(await fetchBuf(u)).rotate().resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer()))
 
@@ -79,9 +91,9 @@ async function handlePOST(request: Request) {
     const generated = Buffer.from(img.inlineData.data, 'base64')
 
     // 4. Sortie aux dimensions d'origine
-    const out = mode === 'crop'
-      ? await pasteBack(original, generated, crop.box, ph.box)
-      : await sharp(generated).resize(W, H, { fit: 'fill', kernel: 'lanczos3' }).withMetadata().jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toBuffer()
+    const out = await oneAtATime<Buffer>(() => mode === 'crop'
+      ? pasteBack(original, generated, crop.box, ph.box)
+      : sharp(generated).resize(W, H, { fit: 'fill', kernel: 'lanczos3' }).withMetadata().jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toBuffer())
 
     let url: string
     try {
@@ -89,8 +101,10 @@ async function handlePOST(request: Request) {
         access: 'public', contentType: 'image/jpeg', cacheControlMaxAge: 60, token: process.env.BLOB_READ_WRITE_TOKEN,
       })
       url = b.url
-    } catch {
-      url = `data:image/jpeg;base64,${out.toString('base64')}`   // Blob indisponible (local)
+    } catch (e: any) {
+      // Sur Vercel, une réponse de 15-30 Mo en data URL dépasserait la limite de réponse (4,5 Mo) et ferait planter la fonction
+      if (process.env.VERCEL) return NextResponse.json({ error: `Enregistrement Blob impossible : ${e?.message ?? e}` }, { status: 502 })
+      url = `data:image/jpeg;base64,${out.toString('base64')}`   // local sans Blob
     }
     return NextResponse.json({ imageUrl: url, placeholder: ph, crop, size: { W, H }, mode })
   } catch (e: any) {

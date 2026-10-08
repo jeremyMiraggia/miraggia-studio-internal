@@ -77,6 +77,15 @@ export default function PacTab() {
   const [quality, setQuality] = useState('4K')
   const [concurrency, setConcurrency] = useState(2)
   const [running, setRunning] = useState(false)
+  // Arrêt : plus aucune image lancée ; les requêtes en cours sont abandonnées côté navigateur
+  // (l'appel IA déjà parti côté serveur se termine quand même et reste facturé)
+  const stopRef = useRef(false)
+  const aborts = useRef(new Set<AbortController>())
+  const [stopping, setStopping] = useState(false)
+  const stop = () => {
+    stopRef.current = true; setStopping(true)
+    aborts.current.forEach(a => a.abort()); aborts.current.clear()
+  }
   const [zipping, setZipping] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [outDirName, setOutDirName] = useState<string | null>(null)
@@ -127,13 +136,23 @@ export default function PacTab() {
     try {
       const [imageUrl, pacUrls] = await Promise.all([uploadKey(s.task.imageKey, true), Promise.all(s.task.pacKeys.map(k => uploadKey(k, false)))])
       patch(idx, { info: mode === 'crop' ? 'Détection du placeholder + génération de la zone…' : 'Génération de l\'image entière…' })
-      const res = await fetch('/api/studio/pac', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl, pacUrls, mode, quality }),
-      })
-      const text = await res.text()
-      let j: any
-      try { j = JSON.parse(text) } catch { throw new Error(`HTTP ${res.status} : ${text.replace(/<[^>]+>/g, ' ').trim().slice(0, 160)}`) }
+      const call = async () => {
+        if (stopRef.current) throw new DOMException('arrêt', 'AbortError')
+        const ac = new AbortController(); aborts.current.add(ac)
+        const res = await fetch('/api/studio/pac', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ac.signal,
+          body: JSON.stringify({ imageUrl, pacUrls, mode, quality }),
+        }).finally(() => aborts.current.delete(ac))
+        const text = await res.text()
+        try { return { res, j: JSON.parse(text), crashed: false } }
+        catch { return { res, j: null as any, crashed: true } }   // page d'erreur HTML = la fonction serveur a planté
+      }
+      let { res, j, crashed } = await call()
+      if (crashed && res.status >= 500) {
+        patch(idx, { info: '⚠ le serveur a planté (mémoire ou délai) — nouvelle tentative…' })
+        ;({ res, j, crashed } = await call())
+      }
+      if (crashed) throw new Error(`Le serveur a planté (HTTP ${res.status}) deux fois — photo trop lourde pour le serveur, ou délai dépassé. Mets « Parallèle » à 1 et relance (↺).`)
       if (!res.ok || !j.imageUrl) throw new Error(j.error || `HTTP ${res.status}`)
       const cur = statesRef.current[idx]
       const versions = [...cur.versions, j.imageUrl]
@@ -150,7 +169,8 @@ export default function PacTab() {
         } catch (e: any) { patch(idx, { info: `${statesRef.current[idx].info} · ⚠ écriture dossier : ${e?.message ?? e}` }) }
       }
     } catch (e: any) {
-      patch(idx, { status: 'error', error: e?.message ?? String(e), info: undefined })
+      if (e?.name === 'AbortError') patch(idx, { status: statesRef.current[idx].versions.length ? 'done' : 'pending', error: undefined, info: '⏹ arrêté' })
+      else patch(idx, { status: 'error', error: e?.message ?? String(e), info: undefined })
     }
   }
 
@@ -158,12 +178,13 @@ export default function PacTab() {
     if (running) return
     const todo = statesRef.current.map((s, i) => i).filter(i => statesRef.current[i].enabled && statesRef.current[i].status !== 'done')
     if (!todo.length) return
+    stopRef.current = false; setStopping(false)
     setRunning(true); setError(null)
     let cursor = 0
     await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, 4)) }, async () => {
-      while (cursor < todo.length) await runOne(todo[cursor++])
+      while (cursor < todo.length && !stopRef.current) await runOne(todo[cursor++])
     }))
-    setRunning(false)
+    setRunning(false); setStopping(false)
   }
 
   const pickOutDir = async () => {
@@ -266,6 +287,12 @@ export default function PacTab() {
           <button onClick={downloadZip} disabled={zipping || !stats.withResult} style={{ ...btn(stats.withResult ? '#374151' : '#9CA3AF'), cursor: stats.withResult ? 'pointer' : 'not-allowed' }}>
             {zipping ? '⏳ ZIP…' : `⬇ ZIP (${stats.withResult})`}
           </button>
+          {running && (
+            <button onClick={stop} disabled={stopping} style={{ ...btn(stopping ? '#9CA3AF' : '#DC2626'), cursor: stopping ? 'wait' : 'pointer' }}
+                    title="N'en lance plus aucune et abandonne celles en cours (un appel IA déjà parti reste facturé)">
+              {stopping ? '⏹ Arrêt…' : '⏹ Stop'}
+            </button>
+          )}
           {stats.errors > 0 && <span style={{ fontSize: 12, color: '#B91C1C' }}>✕ {stats.errors} erreur(s) — relance pour réessayer</span>}
         </div>
         {error && <div style={{ marginTop: 10, background: '#FEF2F2', color: '#991B1B', padding: 8, borderRadius: 6, fontSize: 12 }}>❌ {error}</div>}
