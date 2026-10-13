@@ -4,6 +4,9 @@ import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressAll } from '@/lib/compressImage'
 
+/** Nombre de variations générées en même temps. */
+const MAX_PARALLEL = 4
+
 export default function FreePromptTab() {
   const [prompt, setPrompt]   = useState('')
   const [refs, setRefs]       = useState<File[]>([])
@@ -15,6 +18,7 @@ export default function FreePromptTab() {
   const [rawMode, setRawMode] = useState(true)
 
   const [results, setResults] = useState<string[]>([])
+  const [failedCount, setFailedCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState('')
   const [error, setError]     = useState<string | null>(null)
@@ -28,6 +32,7 @@ export default function FreePromptTab() {
 
     setLoading(true)
     setResults([])
+    setFailedCount(0)
 
     try {
       setProgress('Préparation des références…')
@@ -45,8 +50,8 @@ export default function FreePromptTab() {
         compressedRefs = refs.length ? await compressAll(refs) : []
       }
 
-      for (let i = 0; i < count; i++) {
-        setProgress(`Génération ${i + 1}/${count}…`)
+      // Une variation = un appel ; renvoie l'URL de l'image ou lève une erreur lisible
+      const generateOne = async (): Promise<string> => {
         let res: Response
         if (rawMode) {
           res = await fetch('/api/studio/free', {
@@ -63,19 +68,32 @@ export default function FreePromptTab() {
         }
         let data: any = null
         try { data = await res.json() } catch { /* corps non-JSON */ }
-
-        if (!res.ok) {
-          const msg = (data && (data.error || data.message)) || `HTTP ${res.status} ${res.statusText}`
-          setError(`Variation ${i + 1} : ${truncate(msg)}`)
-          break
-        }
-        if (data?.imageUrl) {
-          setResults(prev => [...prev, data.imageUrl])
-        } else {
-          setError(`Variation ${i + 1} : aucune image renvoyée — ${truncate(data?.error ?? 'réponse vide')}`)
-          break
-        }
+        if (!res.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${res.status} ${res.statusText}`)
+        if (!data?.imageUrl) throw new Error(`aucune image renvoyée — ${data?.error ?? 'réponse vide'}`)
+        return data.imageUrl
       }
+
+      // Variations EN PARALLÈLE (4 max à la fois) : chaque image s'affiche dès qu'elle arrive,
+      // une variation en échec n'arrête pas les autres
+      let next = 0, finished = 0
+      const failures: string[] = []
+      setProgress(`Génération de ${count} image${count > 1 ? 's' : ''} en parallèle…`)
+      await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL, count) }, async () => {
+        while (next < count) {
+          const i = next++
+          try {
+            const url = await generateOne()
+            setResults(prev => [...prev, url])
+          } catch (e: any) {
+            failures.push(`Variation ${i + 1} : ${truncate(e?.message ?? String(e))}`)
+            setFailedCount(failures.length)
+          } finally {
+            finished++
+            if (finished < count) setProgress(`${finished}/${count} terminée${finished > 1 ? 's' : ''}…`)
+          }
+        }
+      }))
+      if (failures.length) setError(failures.join(' · '))
     } catch (e: any) {
       setError(e?.message ?? 'Erreur réseau')
     }
@@ -162,11 +180,13 @@ export default function FreePromptTab() {
               Les images générées apparaîtront ici.
             </div>
           )}
-          {loading && results.length === 0 && (
-            <div style={styles.emptyState}>⏳ {progress}</div>
-          )}
-
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+            {/* Emplacements des variations encore en cours */}
+            {loading && Array.from({ length: Math.max(0, count - results.length - failedCount) }).map((_, i) => (
+              <div key={`pending-${i}`} style={{ ...styles.resultCard, aspectRatio: ratio.replace(':', '/'), display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6B7A8A', fontSize: 12 }}>
+                ⏳ en cours…
+              </div>
+            ))}
             {results.map((url, i) => (
               <div key={i} style={styles.resultCard}>
                 <img src={url} alt={`résultat ${i + 1}`} style={{ width: '100%', borderRadius: 8, display: 'block' }} />
