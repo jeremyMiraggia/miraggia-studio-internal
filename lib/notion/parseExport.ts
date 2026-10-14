@@ -82,6 +82,8 @@ export type GenerationTask = {
   bgOverride?:        string     // colonne "Background details" — modifie l'env extrait
   viewOverride?:      string     // colonne "Vue et details"     — modifie la pose extraite
   duoTrioDesc?:       string     // colonne "description photos duo/trio" — précisions pour les visuels multi-mannequins
+  inspiNotes?:        string     // colonne de commentaires généraux ("Commentaires", "Description et commentaires"…) — consignes impératives
+  inspiRefs?:         File[]     // TOUTES les images de REFERENCE (mode « envoi direct » : envoyées telles quelles à l'IA)
   mannequinNames?:    string[]   // liste complète des mannequins du visuel (si plusieurs)
   modelDescriptions?: string[]   // descriptions des mannequins (1 par mannequin)
   // Commun

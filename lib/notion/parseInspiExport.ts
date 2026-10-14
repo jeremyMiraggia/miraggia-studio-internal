@@ -116,6 +116,9 @@ export async function parseInspiExport(
   // Eligible = lignes qui ont au moins un ID (filtrage de base)
   const eligibleLooks = looksRowsAll.filter((r: any) => String(r['ID'] ?? '').trim())
   warnings.push(`📊 CSV LOOK : ${looksRowsAll.length} lignes au total, ${eligibleLooks.length} avec ID.`)
+  for (const c of ignoredInspiColumns(eligibleLooks)) {
+    warnings.push(`⚠ Colonne "${c}" remplie mais IGNORÉE par l'onglet Inspiration — renomme-la en "Vue et details", "Background Description" ou "Commentaires" pour qu'elle soit prise en compte.`)
+  }
 
   // Applique la range
   const looksRowsToUse = (rangeStart !== null && rangeEnd !== null)
@@ -183,19 +186,11 @@ export async function parseInspiExport(
     const filesBackRaw  = String(r['FILES (BACK)']    ?? r['FILES (BACK) (1)']?? '').trim()
     const referenceRaw  = String(r['IMAGE DE REFERENCE'] ?? r['Image de référence'] ?? r['REFERENCE'] ?? '').trim()
 
-    // Nouvelles colonnes (Background details, Vue et details, description duo/trio)
-    const bgOverride   = String(
-      r['Background details'] ?? r['Background Details'] ?? r['background details']
-      ?? r['Background Description'] ?? r['Background description'] ?? ''
-    ).trim() || undefined
-    const viewOverride = String(
-      r['Vue et details'] ?? r['Vue et Details'] ?? r['vue et details']
-      ?? r['View Details'] ?? r['View details'] ?? r['Vue Details'] ?? ''
-    ).trim() || undefined
-    const duoTrioDesc  = String(
-      r['description photos duo/trio'] ?? r['Description photos duo/trio']
-      ?? r['Description photos Duo/Trio'] ?? r['Description duo/trio'] ?? ''
-    ).trim() || undefined
+    // Colonnes texte — noms reconnus sans tenir compte de la casse, des accents ni des espaces
+    const bgOverride   = textCol(r, BG_COLS)
+    const viewOverride = textCol(r, VIEW_COLS)
+    const duoTrioDesc  = textCol(r, DUO_COLS)
+    const inspiNotes   = textCol(r, NOTES_COLS)
 
     const filesFront = await resolveFileListLazy(filesFrontRaw, baseToKey, extractAsFile)
     const filesBack  = await resolveFileListLazy(filesBackRaw,  baseToKey, extractAsFile)
@@ -243,6 +238,7 @@ export async function parseInspiExport(
     // On prend SEULEMENT la première inspiration (ignore les suivantes)
     const inspirationFile = refFiles[0]
     if (!inspirationFile) w.push('Aucune image d\'inspiration dans la colonne REFERENCE.')
+    if (refFiles.length > 1) w.push(`${refFiles.length} images dans REFERENCE : en mode « Extracteur » seule la 1re est utilisée — choisis « Envoi direct » pour toutes les envoyer à l'IA.`)
 
     // Face photo : on prend celle du premier mannequin (utilisée comme ref principale)
     const facePhotoFile = usedModels[0]?.facePhotoFile
@@ -269,6 +265,8 @@ export async function parseInspiExport(
       bgOverride,
       viewOverride,
       duoTrioDesc,
+      inspiNotes,
+      inspiRefs:         refFiles,
       warnings:          w,
     })
   }
@@ -363,9 +361,87 @@ export function buildInspiPrompt(args: {
     parts.push(`⚠ COMPOSITION ${isMulti ? 'DUO/TRIO' : ''} : ${duoTrioDesc}.`)
   }
 
-  if (notes)            parts.push(`Notes : ${notes}.`)
+  if (notes)            parts.push(`⚠ CONSIGNES DU BRIEF (à respecter impérativement, priorité sur les bases extraites) : ${notes}.`)
   parts.push(NOTION_BOILERPLATE_STYLE)
   return parts.join('\n\n')
+}
+
+/**
+ * Mode « envoi direct » : les images de REFERENCE sont envoyées TELLES QUELLES à l'IA (pas d'Extracteur).
+ * Ordre des images envoyées (route free, mode legacy) :
+ *   silhouettes des mannequins → tenue → références d'inspiration → portrait visage (dernière image).
+ */
+export function buildInspiDirectPrompt(args: {
+  mannequinNames:     string[]
+  modelDescriptions?: string[]
+  silhouetteCount:    number
+  outfitCount:        number
+  referenceCount:     number
+  hasFace:            boolean
+  bgOverride?:        string
+  viewOverride?:      string
+  duoTrioDesc?:       string
+  notes?:             string
+}): string {
+  const { mannequinNames, modelDescriptions = [], silhouetteCount, outfitCount, referenceCount, hasFace, bgOverride, viewOverride, duoTrioDesc, notes } = args
+  const names = mannequinNames.join(', ')
+  const isMulti = mannequinNames.length > 1
+  const range = (a: number, n: number) => (n <= 1 ? `IMAGE ${a}` : `IMAGES ${a} à ${a + n - 1}`)
+  let i = 1
+  const lines: string[] = []
+  if (silhouetteCount) { lines.push(`- ${range(i, silhouetteCount)} : silhouette / corps ${isMulti ? `de chaque mannequin (${names}, dans cet ordre)` : `du mannequin "${names}"`} — morphologie, carnation, cheveux. Ne pas copier leur tenue ni leur pose.`); i += silhouetteCount }
+  if (outfitCount) { lines.push(`- ${range(i, outfitCount)} : la TENUE à porter (${outfitCount} fichier${outfitCount > 1 ? 's' : ''}) — reproduire chaque pièce fidèlement (coupe, matière, couleur, détails).`); i += outfitCount }
+  if (referenceCount) {
+    lines.push(`- ${range(i, referenceCount)} : RÉFÉRENCES D'INSPIRATION.${referenceCount > 1
+      ? ` La 1re (IMAGE ${i}) donne la POSE et la COMPOSITION principales ; les suivantes apportent les éléments complémentaires décrits dans les consignes (décor, lumière, mobilier, couleur, accessoire…).`
+      : ' Elle donne la pose, la composition, le décor et la lumière.'} Ne PAS copier les vêtements ni les visages des personnes présentes sur ces références, ni le texte éventuel.`)
+    i += referenceCount
+  }
+  if (hasFace) lines.push(`- IMAGE ${i} (dernière) : portrait visage de "${mannequinNames[0]}" — identité stricte.`)
+
+  const parts: string[] = [NOTION_BOILERPLATE_HEADER + '.']
+  parts.push(isMulti
+    ? `Photographie de mode professionnelle d'un ${mannequinNames.length === 2 ? 'DUO' : 'groupe'} de mannequins : ${names}. ⚠ PRÉSERVATION D'IDENTITÉ STRICTE : chaque mannequin ressemble à sa propre silhouette de référence.`
+    : `Photographie de mode professionnelle du mannequin "${names}". ⚠ PRÉSERVATION D'IDENTITÉ STRICTE : visage instantanément reconnaissable comme celui du portrait de référence (traits, cheveux, grain de peau).`)
+  parts.push(`IMAGES FOURNIES, dans l'ordre :\n${lines.join('\n')}`)
+  if (bgOverride)   parts.push(`⚠ DÉCOR / ENVIRONNEMENT (priorité absolue) : ${bgOverride}.`)
+  if (viewOverride) parts.push(`⚠ VUE / POSE / CADRAGE (priorité absolue) : ${viewOverride}.`)
+  if (notes)        parts.push(`⚠ CONSIGNES DU BRIEF (à respecter impérativement) : ${notes}.`)
+  if (duoTrioDesc)  parts.push(`⚠ COMPOSITION ${isMulti ? 'DUO/TRIO' : ''} : ${duoTrioDesc}.`)
+  mannequinNames.forEach((n, k) => { if (modelDescriptions[k]) parts.push(`Note mannequin "${n}" : ${modelDescriptions[k]}.`) })
+  parts.push(NOTION_BOILERPLATE_STYLE.replace(/⚠ Apply the editorial style ONLY[\s\S]*$/, '').trim())
+  return parts.join('\n\n')
+}
+
+/* ============================== Colonnes texte ============================== */
+
+// Noms de colonnes acceptés (comparés sans casse, accents ni espaces superflus)
+const BG_COLS    = ['Background Description', 'Background details', 'Background', 'Description du fond', 'Fond', 'Décor', 'Decor', 'Décor et lumière']
+const VIEW_COLS  = ['Vue et details', 'View details', 'Vue Details', 'Vue et poses', 'Vue et pose', 'Vue & pose', 'Vues et poses', 'Pose', 'Poses', 'Vue', 'Cadrage']
+const DUO_COLS   = ['description photos duo/trio', 'Description duo/trio', 'Duo/Trio', 'Description duo']
+const NOTES_COLS = ['Description et commentaires', 'Commentaires', 'Commentaire', 'Notes', 'Consignes', 'Description', 'Brief', 'Remarques']
+// Colonnes structurelles (non textuelles) lues ailleurs dans le parser
+const KNOWN_COLS = ['ID', 'SKU', 'NumLook', 'Numero Look', 'Model', 'Mannequin', 'FILES (FRONT)', 'FILES (BACK)', 'FILES (BACK) (1)',
+  'REFERENCE', 'IMAGE DE REFERENCE', 'Image de référence', 'EMPTY']
+
+const normCol = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+
+/** Valeur de la 1re colonne présente et remplie parmi `names` (sans casse ni accents). */
+function textCol(r: any, names: string[]): string | undefined {
+  const keys = Object.keys(r)
+  for (const n of names) {
+    const k = keys.find(x => normCol(x) === normCol(n))
+    const v = k ? String(r[k] ?? '').trim() : ''
+    if (v) return v
+  }
+  return undefined
+}
+
+/** Colonnes remplies dans au moins une ligne mais que l'onglet n'utilise pas → avertissement explicite. */
+export function ignoredInspiColumns(rows: any[]): string[] {
+  const used = new Set([...BG_COLS, ...VIEW_COLS, ...DUO_COLS, ...NOTES_COLS, ...KNOWN_COLS].map(normCol))
+  const headers = new Set(rows.flatMap(r => Object.keys(r)))
+  return [...headers].filter(h => h.trim() && !used.has(normCol(h)) && rows.some(r => String(r[h] ?? '').trim()))
 }
 
 /* ============================== CSV helpers ============================== */

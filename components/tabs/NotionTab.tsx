@@ -5,7 +5,7 @@ import Dropzone from '@/components/ui/Dropzone'
 import { compressAll, compressImage } from '@/lib/compressImage'
 import { cropTopPercent, createWhiteBackground } from '@/lib/imageCrop'
 import { parseNotionExport, type GenerationTask, type ParsedExport } from '@/lib/notion/parseExport'
-import { parseInspiExport, buildInspiPrompt } from '@/lib/notion/parseInspiExport'
+import { parseInspiExport, buildInspiPrompt, buildInspiDirectPrompt } from '@/lib/notion/parseInspiExport'
 import { VIEW_CATALOG, POSE_CATALOG } from '@/lib/poses'
 
 type TaskStatus = 'pending' | 'running' | 'done' | 'skipped' | 'error'
@@ -62,6 +62,8 @@ export default function NotionTab() {
   const [concurrency, setConcurrency] = useState<number>(2)
   const [coherenceMode, setCoherenceMode] = useState<boolean>(false)
   const [twoStepMode, setTwoStepMode]     = useState<boolean>(false)
+  // Inspiration : références décrites en texte par l'Extracteur (1re seulement) ou envoyées telles quelles à l'IA (toutes)
+  const [inspiRefMode, setInspiRefMode]   = useState<'extract' | 'direct'>('extract')
   const [lookLimit, setLookLimit] = useState<string>('')
   const [zips, setZips]               = useState<File[]>([])
   const [parsing, setParsing]         = useState(false)
@@ -280,8 +282,26 @@ export default function NotionTab() {
         let promptToUse = item.task.prompt
         let refsToUse   = item.task.refs
 
-        // ===== INSPI : extract puis generate =====
-        if (item.task.taskType === 'inspi' && item.task.inspirationFile) {
+        // ===== INSPI, envoi direct : TOUTES les références partent telles quelles à l'IA (pas d'Extracteur) =====
+        if (item.task.taskType === 'inspi' && inspiRefMode === 'direct' && (item.task.inspiRefs?.length ?? 0) > 0) {
+          const outfitCount = item.task.outfitFiles?.length ?? 0
+          promptToUse = buildInspiDirectPrompt({
+            mannequinNames:    item.task.mannequinNames?.length ? item.task.mannequinNames : [item.task.mannequinName],
+            modelDescriptions: item.task.modelDescriptions?.length ? item.task.modelDescriptions : [item.task.modelDescription ?? ''],
+            silhouetteCount:   item.task.refs.length - outfitCount,
+            outfitCount,
+            referenceCount:    item.task.inspiRefs!.length,
+            hasFace:           !!item.task.facePhotoFile,
+            bgOverride:        item.task.bgOverride,
+            viewOverride:      item.task.viewOverride,
+            duoTrioDesc:       item.task.duoTrioDesc,
+            notes:             item.task.inspiNotes,
+          })
+          // ordre : silhouettes → tenue → références (le portrait visage est ajouté en dernier par l'envoi)
+          refsToUse = [...item.task.refs, ...item.task.inspiRefs!]
+        }
+        // ===== INSPI, via l'Extracteur : la 1re référence est décrite en texte puis generate =====
+        else if (item.task.taskType === 'inspi' && item.task.inspirationFile) {
           const inspiCompressed = await compressImage(item.task.inspirationFile, { maxSide: 1600, quality: 0.85 })
           const extractFd = new FormData()
           extractFd.append('images', inspiCompressed)
@@ -310,6 +330,7 @@ export default function NotionTab() {
             bgOverride:        item.task.bgOverride,
             viewOverride:      item.task.viewOverride,
             duoTrioDesc:       item.task.duoTrioDesc,
+            notes:             item.task.inspiNotes,
           })
         }
 
@@ -704,6 +725,23 @@ export default function NotionTab() {
                 </select>
               </div>
 
+              {mode === 'inspi' && (
+                <div style={{ marginBottom: 12 }}>
+                  <label style={styles.label}>Images de REFERENCE</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {([['extract', '🔍 Via l\'Extracteur'], ['direct', '🖼 Envoi direct à l\'IA']] as const).map(([v, l]) => (
+                      <button key={v} type="button" onClick={() => setInspiRefMode(v)} disabled={running}
+                              style={{ ...modeBtnStyle(inspiRefMode === v), flex: 1 }}>{l}</button>
+                    ))}
+                  </div>
+                  <p style={styles.hintSubtle}>
+                    {inspiRefMode === 'extract'
+                      ? 'La 1re image de REFERENCE est décrite en texte (décor + pose) par l\'Extracteur ; seul ce texte part à l\'IA. Les références suivantes sont ignorées.'
+                      : 'TOUTES les images de REFERENCE sont envoyées telles quelles à l\'IA, avec leur rôle : la 1re = pose et composition, les suivantes = éléments à reprendre selon les commentaires (décor, lumière, mobilier…). Plus fidèle aux références, sans étape d\'extraction.'}
+                  </p>
+                </div>
+              )}
+
               <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, fontWeight: 600, color: '#0D4A5C', cursor: 'pointer' }}>
                 <input type="checkbox" checked={coherenceMode} onChange={e => setCoherenceMode(e.target.checked)} />
                 🎯 Cohérence entre poses d'un même look
@@ -906,12 +944,10 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, marginTop: 6, alignItems: 'start' }}>
             {task.inspirationFile && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <InspirationThumb file={task.inspirationFile} />
-                <div style={{ fontSize: 9, color: '#6B7A8A', textAlign: 'center' }}>inspi</div>
-                {(task.extraInspiDetails ?? []).map((f, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
+                {(task.inspiRefs?.length ? task.inspiRefs : [task.inspirationFile]).map((f, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: i ? 4 : 0 }}>
                     <InspirationThumb file={f} />
-                    <div style={{ fontSize: 9, color: '#6B7A8A', textAlign: 'center' }}>détail {i + 1}</div>
+                    <div style={{ fontSize: 9, color: '#6B7A8A', textAlign: 'center' }}>{i === 0 ? 'réf 1 · pose' : `réf ${i + 1}`}</div>
                   </div>
                 ))}
               </div>
@@ -939,6 +975,12 @@ function TaskRow({ state, onToggle }: { state: TaskState, onToggle: () => void }
                 <div style={overrideBox}>
                   <div style={overrideLabel}>🎯 Override vue / pose</div>
                   <div style={inspiText}>{task.viewOverride}</div>
+                </div>
+              )}
+              {task.inspiNotes && (
+                <div style={overrideBox}>
+                  <div style={overrideLabel}>📝 Consignes / commentaires</div>
+                  <div style={inspiText}>{task.inspiNotes}</div>
                 </div>
               )}
               {!state.extractedEnv && !state.extractedPose && status === 'pending' && (
