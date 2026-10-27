@@ -124,10 +124,11 @@ export default function MarketingAssetsTab() {
     return p
   }
 
-  const fileName = (it: Item, v: number) => {
-    const { found, isProduct } = resolve(it.row)
-    const who = isProduct ? 'produit' : found.map(m => m.name).join('-')
-    return `${safe(it.row.folder)}/${String(it.row.index).padStart(2, '0')}_${safe(who)}${v > 1 ? `_v${v}` : ''}.jpg`
+  /** « pub parfum/pub parfum_1.jpg » : dossier = colonne 1, numéro = rang du visuel DANS ce dossier (ordre des lignes Notion). */
+  const fileName = (it: Item) => {
+    const folder = safe(it.row.folder)
+    const rank = itemsRef.current.filter(x => x.row.folder === it.row.folder && x.row.index <= it.row.index).length
+    return `${folder}/${folder}_${rank}.jpg`
   }
 
   const runOne = async (idx: number) => {
@@ -151,7 +152,8 @@ export default function MarketingAssetsTab() {
       if (outDirRef.current) {
         try {
           const blob = await (await fetch(j.imageUrl)).blob()
-          const [dir, name] = fileName(itemsRef.current[idx], versions.length).split('/')
+          // même nom à chaque version → la dernière générée remplace la précédente dans le dossier
+          const [dir, name] = fileName(itemsRef.current[idx]).split('/')
           const sub = await outDirRef.current.getDirectoryHandle(dir, { create: true })
           const fh = await sub.getFileHandle(name, { create: true })
           const w = await fh.createWritable(); await w.write(blob); await w.close()
@@ -188,8 +190,9 @@ export default function MarketingAssetsTab() {
     setZipping(true)
     try {
       const zip = new JSZip()
-      for (const it of done) for (let v = 0; v < it.versions.length; v++) {
-        const r = await fetch(it.versions[v]); if (r.ok) zip.file(fileName(it, v + 1), await r.blob())
+      // une image par visuel : la version sélectionnée sur la carte
+      for (const it of done) {
+        const r = await fetch(it.imageUrl ?? it.versions[it.versions.length - 1]); if (r.ok) zip.file(fileName(it), await r.blob())
       }
       const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
       const url = URL.createObjectURL(blob)
