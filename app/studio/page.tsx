@@ -24,6 +24,7 @@ import GabaritTab from '@/components/tabs/GabaritTab'
 import GrainTab from '@/components/tabs/GrainTab'
 import LingerieTab from '@/components/tabs/LingerieTab'
 import PacTab from '@/components/tabs/PacTab'
+import MarketingAssetsTab from '@/components/tabs/MarketingAssetsTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
@@ -31,6 +32,7 @@ const TABS = [
   { id: 'gold-silver',     label: '🥇 Golden Silver' },
   { id: 'lingerie',        label: '🩱 Lingerie' },
   { id: 'pac',             label: '🔧 PAC' },
+  { id: 'marketing',       label: '📣 Marketing assets' },
   { id: 'gabarit',         label: '📐 Gabarit' },
   { id: 'grain',           label: '🎞️ Grain' },
   { id: 'notion',          label: '📥 Notion' },
@@ -97,6 +99,7 @@ export default function StudioPage() {
         {tab === 'gold-silver'     && <GoldSilverTab />}
         {tab === 'lingerie'        && <LingerieTab />}
         {tab === 'pac'             && <PacTab />}
+        {tab === 'marketing'       && <MarketingAssetsTab />}
         {tab === 'gabarit'         && <GabaritTab />}
         {tab === 'grain'           && <GrainTab />}
         {tab === 'notion'          && <NotionTab />}
