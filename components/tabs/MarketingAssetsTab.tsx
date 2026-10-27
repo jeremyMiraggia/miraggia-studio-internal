@@ -102,6 +102,8 @@ export default function MarketingAssetsTab() {
     }
     const nf = row.fileKeys.length
     if (nf) lines.push(`- ${nf > 1 ? `IMAGES ${i} to ${i + nf - 1}` : `IMAGE ${i}`}: ${isProduct ? 'the PRODUCT(S) to feature — reproduce them exactly (shape, color, material, details).' : 'the garments / products to wear or show — reproduce them faithfully.'}`)
+    // Pas de fichier tenue : le prompt décrit lui-même les vêtements → ne pas recopier la tenue des photos du catalogue
+    else if (!isProduct && found.length) lines.push('- No garment images: the OUTFIT is described in the prompt below — dress the model(s) exactly as described there. Never reproduce the white tank top / shorts of the reference photos.')
     if (!lines.length) return ''
     return `REFERENCE IMAGES, in this order:\n${lines.join('\n')}${found.length > 1 ? `\nThere are ${found.length} models: ${found.map(m => m.name).join(' and ')} — each keeps their own face.` : ''}\n\n---\n\n`
   }
@@ -312,7 +314,7 @@ export default function MarketingAssetsTab() {
                   </div>
                   {unknown.length > 0 && <div style={{ fontSize: 10, color: '#B45309' }}>⚠ « {unknown.join(', ')} » hors catalogue{found.length ? ' — ignoré' : ' → visuel produit'}</div>}
                   {it.row.missingFiles.length > 0 && <div style={{ fontSize: 10, color: '#B91C1C' }}>⚠ fichier(s) introuvable(s) : {it.row.missingFiles.join(', ')}</div>}
-                  {isProduct && !it.row.fileKeys.length && <div style={{ fontSize: 10, color: '#6B7280' }}>Aucun fichier produit : prompt seul.</div>}
+                  {!it.row.fileKeys.length && <div style={{ fontSize: 10, color: '#6B7280' }}>{isProduct ? 'Aucun fichier produit : le prompt décrit le produit.' : 'Aucun fichier : la tenue est décrite dans le prompt.'}</div>}
                   {it.imageUrl
                     ? <a href={it.imageUrl} target="_blank" rel="noreferrer"><img src={it.imageUrl} alt="" style={{ width: '100%', borderRadius: 6, display: 'block' }} /></a>
                     : <div style={{ aspectRatio: (ratioMode === 'auto' ? ratioFromPrompt(it.prompt) : ratioMode).replace(':', '/'), maxHeight: 220, borderRadius: 6, border: '1px dashed #E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#9CA3AF' }}>{it.status === 'running' ? '⏳ génération…' : '—'}</div>}
