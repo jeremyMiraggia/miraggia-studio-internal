@@ -16,8 +16,9 @@ import { parseMarketingExport, type MarketingExport, type MarketingRow } from '@
 
 type Mannequin = { id: string; name: string; gender: string; description: string; faceUrl: string; bodyUrl: string }
 type Status = 'pending' | 'running' | 'done' | 'error'
-type Item = { row: MarketingRow; prompt: string; status: Status; imageUrl?: string; versions: string[]; error?: string; enabled: boolean; showPrompt?: boolean }
+type Item = { row: MarketingRow; modelNames: string[]; prompt: string; status: Status; imageUrl?: string; versions: string[]; error?: string; enabled: boolean; showPrompt?: boolean }
 
+const NO_MODEL = '__none__'
 const RATIOS = ['auto', '4:5', '3:4', '2:3', '9:16', '1:1', '16:9', '3:2', '4:3', '5:4', '21:9']
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
 const safe = (s: string) => s.replace(/[\/\\:*?"<>|]/g, '_').trim() || 'visuel'
@@ -67,6 +68,14 @@ export default function MarketingAssetsTab() {
     }).catch(e => setCatalogError(String(e)))
   }, [])
   const byName = useMemo(() => new Map((catalog ?? []).map(m => [norm(m.name), m])), [catalog])
+  const catalogGroups = useMemo(() => {
+    const sorted = [...(catalog ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'fr'))
+    return [
+      { label: 'Femmes', list: sorted.filter(m => m.gender === 'f') },
+      { label: 'Hommes', list: sorted.filter(m => m.gender === 'h') },
+      { label: 'Autres', list: sorted.filter(m => m.gender !== 'f' && m.gender !== 'h') },
+    ].filter(g => g.list.length)
+  }, [catalog])
 
   const commit = (n: Item[]) => { itemsRef.current = n; setItems(n) }
   const patch = (i: number, p: Partial<Item>) => { const n = [...itemsRef.current]; n[i] = { ...n[i], ...p }; commit(n) }
@@ -78,21 +87,29 @@ export default function MarketingAssetsTab() {
     try {
       const res = await parsePacked(files[0])
       setParsed(res)
-      commit(res.rows.map(row => ({ row, prompt: row.prompt, status: 'pending', versions: [], enabled: true })))
+      commit(res.rows.map(row => ({ row, modelNames: row.modelNames, prompt: row.prompt, status: 'pending', versions: [], enabled: true })))
     } catch (e: any) { setError(e?.message ?? String(e)) }
     finally { setParsing(false); setProgress('') }
   }
   const parsePacked = (f: File) => parseMarketingExport(f, m => setProgress(m))
 
-  /** Mannequins reconnus / noms inconnus (→ produit) pour une ligne. */
-  const resolve = (row: MarketingRow) => {
-    const found = row.modelNames.map(n => byName.get(norm(n))).filter(Boolean) as Mannequin[]
-    const unknown = row.modelNames.filter(n => !byName.has(norm(n)))
-    return { found, unknown, isProduct: row.productLike || found.length === 0 }
+  /** Mannequins reconnus / noms inconnus (→ produit) pour un visuel. */
+  const resolve = (it: Item) => {
+    const found = it.modelNames.map(n => byName.get(norm(n))).filter(Boolean) as Mannequin[]
+    const unknown = it.modelNames.filter(n => !byName.has(norm(n)))
+    return { found, unknown, isProduct: found.length === 0 }
   }
+  /** Change les mannequins d'un visuel : s'il était généré, il repasse « à faire » (versions conservées). */
+  const setModels = (idx: number, modelNames: string[]) => {
+    const it = itemsRef.current[idx]
+    patch(idx, { modelNames, status: it.status === 'done' ? 'pending' : it.status })
+  }
+  /** Mannequins différents de la colonne 2 du ZIP : le prompt peut encore décrire l'ancien. */
+  const modelsChanged = (it: Item) => it.modelNames.map(norm).join('|') !== it.row.modelNames.map(norm).join('|')
 
   /** En-tête ajouté au prompt : rôle de chaque image, dans l'ordre d'envoi. */
-  const headerFor = (row: MarketingRow, found: Mannequin[], isProduct: boolean) => {
+  const headerFor = (it: Item, found: Mannequin[], isProduct: boolean) => {
+    const row = it.row
     const lines: string[] = []
     let i = 1
     if (!isProduct) for (const m of found) {
@@ -104,6 +121,7 @@ export default function MarketingAssetsTab() {
     if (nf) lines.push(`- ${nf > 1 ? `IMAGES ${i} to ${i + nf - 1}` : `IMAGE ${i}`}: ${isProduct ? 'the PRODUCT(S) to feature — reproduce them exactly (shape, color, material, details).' : 'the garments / products to wear or show — reproduce them faithfully.'}`)
     // Pas de fichier tenue : le prompt décrit lui-même les vêtements → ne pas recopier la tenue des photos du catalogue
     else if (!isProduct && found.length) lines.push('- No garment images: the OUTFIT is described in the prompt below — dress the model(s) exactly as described there. Never reproduce the white tank top / shorts of the reference photos.')
+    if (!isProduct && modelsChanged(it)) lines.push('- The identity, gender and hair of the model(s) come ONLY from these reference images: ignore any conflicting name or description of them in the prompt below.')
     if (!lines.length) return ''
     return `REFERENCE IMAGES, in this order:\n${lines.join('\n')}${found.length > 1 ? `\nThere are ${found.length} models: ${found.map(m => m.name).join(' and ')} — each keeps their own face.` : ''}\n\n---\n\n`
   }
@@ -134,12 +152,12 @@ export default function MarketingAssetsTab() {
   const runOne = async (idx: number) => {
     const it = itemsRef.current[idx]
     if (!it) return
-    const { found, isProduct } = resolve(it.row)
+    const { found, isProduct } = resolve(it)
     patch(idx, { status: 'running', error: undefined })
     try {
       const modelUrls = isProduct ? [] : found.flatMap(m => [m.faceUrl, ...(m.bodyUrl && m.bodyUrl !== m.faceUrl ? [m.bodyUrl] : [])]).filter(Boolean)
       const fileUrls = await Promise.all(it.row.fileKeys.map(uploadZip))
-      const prompt = (withHeader ? headerFor(it.row, found, isProduct) : '') + it.prompt
+      const prompt = (withHeader ? headerFor(it, found, isProduct) : '') + it.prompt
       const ratio = ratioMode === 'auto' ? ratioFromPrompt(it.prompt) : ratioMode
       const res = await fetch('/api/studio/free', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -209,7 +227,7 @@ export default function MarketingAssetsTab() {
     errors: items.filter(i => i.status === 'error').length,
     toRun: items.filter(i => i.enabled && i.status !== 'done').length,
     withResult: items.filter(i => i.versions.length).length,
-    unknown: [...new Set(items.flatMap(i => resolve(i.row).unknown))],
+    unknown: [...new Set(items.flatMap(i => resolve(i).unknown))],
   }), [items, byName]) // eslint-disable-line react-hooks/exhaustive-deps
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : 0.134)).toFixed(2)
 
@@ -218,6 +236,7 @@ export default function MarketingAssetsTab() {
   const inp: React.CSSProperties = { border: '1px solid #D1D5DB', borderRadius: 8, padding: '6px 10px', fontSize: 14, minHeight: 34, background: '#fff', width: '100%' }
   const btn = (bg: string, color = '#fff'): React.CSSProperties => ({ background: bg, color, border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 600, fontSize: 14, cursor: 'pointer' })
   const small = (on = false): React.CSSProperties => ({ ...btn(on ? '#0D4A5C' : '#E5E7EB', on ? '#fff' : '#374151'), padding: '4px 10px', fontSize: 12 })
+  const modelSelect: React.CSSProperties = { border: '1px solid #D1D5DB', borderRadius: 6, padding: '3px 6px', fontSize: 12, background: '#fff', maxWidth: 150 }
   const pill = (bg: string, color = '#fff'): React.CSSProperties => ({ background: bg, color, borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 600 })
 
   return (
@@ -289,16 +308,22 @@ export default function MarketingAssetsTab() {
         {error && <div style={{ marginTop: 10, background: '#FEF2F2', color: '#991B1B', padding: 8, borderRadius: 6, fontSize: 12 }}>❌ {error}</div>}
       </div>
 
-      {parsed && folders.map(folder => (
+      {parsed && folders.map(folder => {
+        const inFolder = items.filter(i => i.row.folder === folder)
+        const checked = inFolder.filter(i => i.enabled).length
+        return (
         <div key={folder} style={card}>
-          <div style={{ ...label, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ ...label, display: 'flex', alignItems: 'center', gap: 8, cursor: running ? 'default' : 'pointer' }}>
+            <input type="checkbox" disabled={running} checked={checked === inFolder.length}
+                   ref={el => { if (el) el.indeterminate = checked > 0 && checked < inFolder.length }}
+                   onChange={e => commit(itemsRef.current.map(i => (i.row.folder === folder ? { ...i, enabled: e.target.checked } : i)))} />
             📁 {folder}
-            <span style={{ textTransform: 'none', fontWeight: 400 }}>· {items.filter(i => i.row.folder === folder).length} visuel(s)</span>
-          </div>
+            <span style={{ textTransform: 'none', fontWeight: 400 }}>· {checked}/{inFolder.length} coché{checked > 1 ? 's' : ''}</span>
+          </label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
             {items.map((it, idx) => {
               if (it.row.folder !== folder) return null
-              const { found, unknown, isProduct } = resolve(it.row)
+              const { found, unknown, isProduct } = resolve(it)
               return (
                 <div key={idx} style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 6, opacity: it.enabled ? 1 : 0.55 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
@@ -307,12 +332,31 @@ export default function MarketingAssetsTab() {
                     {it.status === 'done' && <span style={pill('#10B981')}>✓</span>}
                     {it.status === 'error' && <span style={pill('#EF4444')}>✕</span>}
                     <strong>#{String(it.row.index).padStart(2, '0')}</strong>
-                    {isProduct
-                      ? <span style={pill('#EDE9FE', '#5B21B6')}>📦 produit</span>
-                      : found.map(m => <span key={m.id} style={pill('#E0F2FE', '#075985')}>{m.name}</span>)}
+                    {isProduct && <span style={pill('#EDE9FE', '#5B21B6')}>📦 produit</span>}
                   </div>
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                    {!isProduct && found.map(m => <img key={m.id} src={m.faceUrl} alt={m.name} title={m.name} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 6, border: '1px solid #E5E7EB' }} />)}
+                    {it.modelNames.map((name, slot) => {
+                      const known = byName.get(norm(name))
+                      return (
+                        <select key={slot} value={known?.name ?? name} disabled={it.status === 'running' || !catalog} style={modelSelect}
+                                onChange={e => setModels(idx, e.target.value === NO_MODEL
+                                  ? it.modelNames.filter((_, k) => k !== slot)
+                                  : it.modelNames.map((n, k) => (k === slot ? e.target.value : n)))}>
+                          {!known && <option value={name}>⚠ {name} (hors catalogue)</option>}
+                          {catalogGroups.map(g => <optgroup key={g.label} label={g.label}>{g.list.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</optgroup>)}
+                          <option value={NO_MODEL}>✕ Retirer ce mannequin</option>
+                        </select>
+                      )
+                    })}
+                    <select value="" disabled={it.status === 'running' || !catalog} style={{ ...modelSelect, color: '#6B7280' }}
+                            onChange={e => { if (e.target.value) setModels(idx, [...it.modelNames, e.target.value]) }}>
+                      <option value="">＋ Mannequin…</option>
+                      {catalogGroups.map(g => <optgroup key={g.label} label={g.label}>{g.list.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</optgroup>)}
+                    </select>
+                  </div>
+                  {modelsChanged(it) && <div style={{ fontSize: 10, color: '#B45309' }}>Mannequin modifié : vérifie que le prompt ne décrit plus l'ancien (cheveux, « her / his »…).</div>}
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {!isProduct && found.map((m, k) => <img key={k} src={m.faceUrl} alt={m.name} title={m.name} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 6, border: '1px solid #E5E7EB' }} />)}
                     {it.row.fileKeys.map(k => <Thumb key={k} getFile={parsed.getFile} zipKey={k} />)}
                   </div>
                   {unknown.length > 0 && <div style={{ fontSize: 10, color: '#B45309' }}>⚠ « {unknown.join(', ')} » hors catalogue{found.length ? ' — ignoré' : ' → visuel produit'}</div>}
@@ -333,7 +377,7 @@ export default function MarketingAssetsTab() {
                     <>
                       <textarea value={it.prompt} onChange={e => patch(idx, { prompt: e.target.value })}
                                 style={{ width: '100%', minHeight: 140, fontSize: 11, lineHeight: 1.4, border: '1px solid #D1D5DB', borderRadius: 6, padding: 6, boxSizing: 'border-box', fontFamily: 'system-ui', resize: 'vertical' }} />
-                      {withHeader && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 10, color: '#6B7280', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 6, padding: 6, margin: 0 }}>{headerFor(it.row, found, isProduct) || '(aucune image : pas d\'en-tête)'}</pre>}
+                      {withHeader && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 10, color: '#6B7280', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 6, padding: 6, margin: 0 }}>{headerFor(it, found, isProduct) || '(aucune image : pas d\'en-tête)'}</pre>}
                     </>
                   )}
                 </div>
@@ -341,7 +385,8 @@ export default function MarketingAssetsTab() {
             })}
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
