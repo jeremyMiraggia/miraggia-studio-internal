@@ -3,8 +3,9 @@
  *
  * - Bruit gaussien déterministe (graine = nom du fichier) : l'aperçu et l'export
  *   d'un même visuel donnent exactement le même grain.
- * - Taille de grain : bruit tiré sur une grille de pas `size` px puis interpolé
- *   (bilinéaire). Les lignes de la grille sont générées au fil de l'eau → mémoire O(largeur).
+ * - Taille de grain : bruit blanc par pixel, filtré par un noyau gaussien normalisé.
+ *   La variance reste la même à chaque position : pas de motif de grille.
+ *   Mémoire O(largeur × noyau).
  * - Réponse en luminance : grain plein dans les tons moyens, atténué (×0.25) dans
  *   les noirs profonds et les blancs purs, comme un vrai film.
  */
@@ -22,6 +23,8 @@ export const DEFAULT_GRAIN: GrainParams = { intensity: 25, size: 1.5, color: fal
 
 /** Écart-type du bruit (sur 0–255) à intensité 100, dans les tons moyens. */
 const MAX_SIGMA = 40
+/** Au-delà de 1 px, garde la force de l'ancienne interpolation, pour que les préréglages ne changent pas d'aspect. */
+const COARSE_GAIN = 0.72
 
 function mulberry32(seed: number) {
   let a = seed >>> 0
@@ -40,15 +43,32 @@ export function hashSeed(s: string): number {
   return h >>> 0
 }
 
+/** Noyau symétrique dont la somme des poids au carré vaut 1, ce qui conserve la variance. */
+export function grainKernel(size: number): Float32Array {
+  const sigma = 0.4 * Math.max(1, size)
+  const radius = Math.max(1, Math.ceil(2.5 * sigma))
+  const k = new Float32Array(2 * radius + 1)
+  let energy = 0
+  for (let i = -radius; i <= radius; i++) {
+    const w = Math.exp(-(i * i) / (2 * sigma * sigma))
+    k[i + radius] = w
+    energy += w * w
+  }
+  const norm = Math.sqrt(energy)
+  for (let i = 0; i < k.length; i++) k[i] /= norm
+  return k
+}
+
 /** Applique le grain en place sur les pixels RGBA. */
 export function applyGrain(img: ImageData, p: GrainParams, seed: number): void {
   const { width: w, height: h, data } = img
-  const sigma = (Math.max(0, Math.min(100, p.intensity)) / 100) * MAX_SIGMA
+  const sigma = (Math.max(0, Math.min(100, p.intensity)) / 100) * MAX_SIGMA * (p.size > 1 ? COARSE_GAIN : 1)
   if (sigma === 0) return
 
-  const size = Math.max(1, p.size)
   const ch = p.color ? 3 : 1
-  const gw = Math.ceil((w - 1) / size) + 2          // points de grille par ligne
+  const kernel = grainKernel(p.size)
+  const taps = kernel.length
+  const radius = (taps - 1) / 2
   const rand = mulberry32(seed)
 
   // Gaussienne par Box-Muller (on garde la 2e valeur)
@@ -61,45 +81,52 @@ export function applyGrain(img: ImageData, p: GrainParams, seed: number): void {
     spare = r * Math.sin(t)
     return r * Math.cos(t)
   }
-  const newRow = () => {
-    const row = new Float32Array(gw * ch)
-    for (let i = 0; i < row.length; i++) row[i] = gauss()
-    return row
+
+  const raw = new Float32Array((w + 2 * radius) * ch)
+  /** Nouvelle ligne de bruit blanc, filtrée horizontalement. */
+  const nextRow = (out: Float32Array) => {
+    for (let i = 0; i < raw.length; i++) raw[i] = gauss()
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < ch; c++) {
+        let sum = 0
+        for (let t = 0; t < taps; t++) sum += kernel[t] * raw[(x + t) * ch + c]
+        out[x * ch + c] = sum
+      }
+    }
+    return out
   }
 
-  // Deux lignes de grille glissantes
-  let rowIdx = 0
-  let r0 = newRow(), r1 = newRow()
+  // Anneau de lignes filtrées horizontalement, combinées verticalement ci-dessous
+  const ring: Float32Array[] = []
+  for (let i = 0; i < taps; i++) ring.push(nextRow(new Float32Array(w * ch)))
+  let head = 0
 
-  // Pré-calcul horizontal : indice de grille et poids pour chaque x
-  const gx0 = new Int32Array(w), fx = new Float32Array(w)
-  for (let x = 0; x < w; x++) { const g = x / size; gx0[x] = Math.floor(g); fx[x] = g - gx0[x] }
-
-  const n = new Float32Array(3)
+  const noise = new Float32Array(w * ch)
   for (let y = 0; y < h; y++) {
-    const gy = y / size
-    const gyi = Math.floor(gy), fy = gy - gyi
-    while (rowIdx < gyi) { r0 = r1; r1 = newRow(); rowIdx++ }
+    noise.fill(0)
+    for (let t = 0; t < taps; t++) {
+      const row = ring[(head + t) % taps]
+      const weight = kernel[t]
+      for (let i = 0; i < noise.length; i++) noise[i] += weight * row[i]
+    }
 
     let o = y * w * 4
     for (let x = 0; x < w; x++, o += 4) {
-      const i0 = gx0[x] * ch, i1 = i0 + ch, a = fx[x]
-      for (let c = 0; c < ch; c++) {
-        const top = r0[i0 + c] + (r0[i1 + c] - r0[i0 + c]) * a
-        const bot = r1[i0 + c] + (r1[i1 + c] - r1[i0 + c]) * a
-        n[c] = top + (bot - top) * fy
-      }
       const R = data[o], G = data[o + 1], B = data[o + 2]
-      const L = (0.299 * R + 0.587 * G + 0.114 * B) / 255
-      const d = 2 * L - 1
+      const d = (2 * (0.299 * R + 0.587 * G + 0.114 * B)) / 255 - 1
       const k = sigma * (1 - 0.75 * d * d)
+      // Uint8ClampedArray : clamp + arrondi auto
       if (ch === 1) {
-        const v = n[0] * k
-        data[o] = R + v; data[o + 1] = G + v; data[o + 2] = B + v   // Uint8ClampedArray : clamp + arrondi auto
+        const v = noise[x] * k
+        data[o] = R + v; data[o + 1] = G + v; data[o + 2] = B + v
       } else {
-        data[o] = R + n[0] * k; data[o + 1] = G + n[1] * k; data[o + 2] = B + n[2] * k
+        const i = x * 3
+        data[o] = R + noise[i] * k; data[o + 1] = G + noise[i + 1] * k; data[o + 2] = B + noise[i + 2] * k
       }
     }
+
+    nextRow(ring[head])
+    head = (head + 1) % taps
   }
 }
 
