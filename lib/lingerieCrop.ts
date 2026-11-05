@@ -30,9 +30,9 @@ type Box2D = { ymin: number; xmin: number; ymax: number; xmax: number }   // 0..
  */
 export async function locateLandmarks(buf: Buffer, mime: string, apiKey: string): Promise<BodyLandmarks> {
   const prompt = [
-    'Detect the following items in this fashion photo of one woman (standing, seated or kneeling).',
+    'Detect the following items in this fashion photo of one person (standing, seated or kneeling).',
     'Return a JSON list of objects {"label": string, "box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized to 0-1000.',
-    'Labels (use exactly these): "face" (forehead to chin), "lips", "navel", "briefs" (the underwear bottom / pants bottom garment), "person" (the whole woman including hair, arms and legs).',
+    'Labels (use exactly these): "face" (forehead to chin), "lips", "navel", "briefs" (the underwear bottom, boxers or pants bottom garment), "person" (the whole person including hair, arms and legs).',
     'Omit an item only if it is not visible.',
   ].join('\n')
   const payload = JSON.stringify({

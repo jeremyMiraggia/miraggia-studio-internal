@@ -17,6 +17,9 @@ type Skeleton = {
 }
 
 const SKELETONS: Record<string, Skeleton> = {
+  // Poses homme propres (les autres poses homme réutilisent les croquis de même id)
+  'h-appui':       { head: [52, 10], neck: [51, 18], sL: [38, 24], sR: [65, 22], eL: [31, 42], wL: [42, 56], eR: [71, 42], wR: [68, 60], hL: [43, 56], hR: [58, 58], kL: [42, 85], aL: [40, 113], kR: [62, 84], aR: [68, 110] },
+  'h-nuque':       { head: [53, 11], neck: [51, 19], sL: [38, 25], sR: [64, 21], eL: [24, 9],  wL: [46, 17], eR: [70, 42], wR: [66, 60], hL: [43, 57], hR: [57, 58], kL: [41, 85], aL: [38, 113], kR: [60, 84], aR: [60, 112] },
   // Poses debout volontairement exagérées (colonne inclinée, bassin décalé, genou croisé) : un croquis droit donne une pose droite.
   'hanche':        { head: [58, 10], neck: [55, 19], sL: [45, 26], sR: [65, 20], eL: [24, 40], wL: [36, 54], eR: [74, 40], wR: [61, 62], hL: [35, 56], hR: [50, 63], kL: [40, 85], aL: [47, 113], kR: [45, 88], aR: [57, 108] },
   'trois-quarts':  { head: [60, 11], neck: [56, 19], sL: [46, 25], sR: [63, 20], eL: [34, 40], wL: [44, 52], eR: [70, 40], wR: [48, 66], hL: [42, 58], hR: [54, 60], kL: [51, 86], aL: [45, 113], kR: [42, 84], aR: [55, 111] },

@@ -10,7 +10,7 @@ import JSZip from 'jszip'
 import { upload } from '@vercel/blob/client'
 import {
   LINGERIE_TYPES, DEFAULT_LINGERIE_MODELS, DEFAULT_LINGERIE_BACKGROUND,
-  MORPHOS, buildLingeriePrompt, ratioFor, posesFor, pickPose, isWideFraming, generationRatio,
+  MORPHOS, buildLingeriePrompt, ratioFor, posesFor, pickPose, isWideFraming, generationRatio, isMan,
   type LingerieModel, type LingerieType, type Morpho, type PoseMode,
 } from '@/lib/lingerie'
 import { hasPoseSketch, poseSketchSvg } from '@/lib/poseSketch'
@@ -26,19 +26,38 @@ type Look = {
   status: Status; imageUrl?: string; versions: string[]; error?: string; showPrompt?: boolean
 }
 
-const MODELS_KEY = 'lingerie-models-v2'   // v2 : identité + cheveux + 3 morphologies
+const MODELS_KEY = 'lingerie-models-v3'   // v3 : ajout des hommes
+const MODELS_KEY_V2 = 'lingerie-models-v2' // v2 : identité + cheveux + 3 morphologies (femmes seulement)
 const RATIOS = ['auto', '3:4', '2:3', '4:5', '1:1', '9:16']
 
 const baseName = (name: string) => name.replace(/\.[a-z0-9]+$/i, '').replace(/[\/\\:*?"<>|]/g, '_') || 'look'
 const uid = () => Math.random().toString(36).slice(2, 10)
 
+function readModels(key: string): LingerieModel[] | null {
+  const raw = localStorage.getItem(key)
+  const arr = raw ? JSON.parse(raw) : null
+  return Array.isArray(arr) && arr.length && arr.every(m => m?.id && typeof m.identity === 'string' && typeof m.hair === 'string' && MORPHOS.every(x => typeof m.bodies?.[x.id] === 'string')) ? arr : null
+}
+
 function loadModels(): LingerieModel[] {
   try {
-    const raw = localStorage.getItem(MODELS_KEY)
-    const arr = raw ? JSON.parse(raw) : null
-    if (Array.isArray(arr) && arr.length && arr.every(m => m?.id && typeof m.identity === 'string' && typeof m.hair === 'string' && MORPHOS.every(x => typeof m.bodies?.[x.id] === 'string'))) return arr
+    const saved = readModels(MODELS_KEY)
+    if (saved) return saved
+    // Mannequins modifiés avant l'ajout des hommes : conservés, et les hommes s'y ajoutent
+    const old = readModels(MODELS_KEY_V2)
+    if (old) return [...old, ...DEFAULT_LINGERIE_MODELS.filter(isMan)]
   } catch { /* stockage indisponible */ }
   return DEFAULT_LINGERIE_MODELS
+}
+
+/** Options Femmes / Hommes d'une liste de mannequins. */
+function ModelOptions({ models }: { models: LingerieModel[] }) {
+  return (
+    <>
+      <optgroup label="Femmes">{models.filter(m => !isMan(m)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</optgroup>
+      <optgroup label="Hommes">{models.filter(isMan).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</optgroup>
+    </>
+  )
 }
 
 export default function LingerieTab() {
@@ -86,12 +105,20 @@ export default function LingerieTab() {
   const patchLook = (id: string, patch: Partial<Look>) =>
     commit(looksRef.current.map(l => (l.id === id ? { ...l, ...patch } : l)))
 
-  const pickModel = (exclude?: string) => {
-    if (defaultModel !== 'random' && models.some(m => m.id === defaultModel)) return defaultModel
-    const pool = models.length > 1 ? models.filter(m => m.id !== exclude) : models
+  /** Le tirage aléatoire reste dans un seul genre : un produit femme ne part jamais sur un homme, et inversement. */
+  const pickModel = () => {
+    if (models.some(m => m.id === defaultModel)) return defaultModel
+    const pool = models.filter(m => isMan(m) === (defaultModel === 'random-h'))
     return pool[Math.floor(Math.random() * pool.length)]?.id ?? models[0]?.id
   }
   const modelOf = (l: Look) => models.find(m => m.id === l.modelId) ?? models[0]
+  const menOf = (l: Pick<Look, 'modelId'>) => isMan(models.find(m => m.id === l.modelId) ?? models[0])
+  /** Changer de mannequin : si le genre change, la pose doit exister dans la bibliothèque de ce genre. */
+  const changeModel = (l: Look, modelId: string) => {
+    const men = menOf({ modelId })
+    const poseId = posesFor(l.type, men).some(p => p.id === l.poseId) ? l.poseId : pickPose(l.type, undefined, men)
+    patchLook(l.id, { modelId, poseId, status: 'pending' })
+  }
   const ratioOf = (l: Look) => (ratioMode === 'auto' ? ratioFor(l.type) : ratioMode)
   const promptOf = (l: Look) => buildLingeriePrompt({
     type: l.type, model: modelOf(l), morpho: l.morpho, imageCount: l.refs.length, background, direction, ratio: ratioOf(l),
@@ -105,12 +132,15 @@ export default function LingerieTab() {
     if (!dropType) { setError('Choisis d\'abord le type de produit (ensemble, pyjama, haut ou bas).'); return }
     const refs = toRefs(files)
     if (!refs.length) return
-    const make = (r: Ref[]): Look => ({
-      id: uid(), name: baseName(r[0].file.name), refs: r,
-      type: dropType, modelId: pickModel(), morpho: defaultMorpho,
-      poseMode: defaultPoseMode, poseId: pickPose(dropType),
-      status: 'pending', versions: [],
-    })
+    const make = (r: Ref[]): Look => {
+      const modelId = pickModel()
+      return {
+        id: uid(), name: baseName(r[0].file.name), refs: r,
+        type: dropType, modelId, morpho: defaultMorpho,
+        poseMode: defaultPoseMode, poseId: pickPose(dropType, undefined, menOf({ modelId })),
+        status: 'pending', versions: [],
+      }
+    }
     const fresh = grouping === 'single' ? [make(refs)] : refs.map(r => make([r]))
     commit([...looksRef.current, ...fresh]); setError(null)
   }
@@ -299,6 +329,16 @@ export default function LingerieTab() {
 
   /* ----------- Mannequins ----------- */
   const updateModel = (id: string, patch: Partial<LingerieModel>) => saveModels(models.map(m => (m.id === id ? { ...m, ...patch } : m)))
+  const addMan = () => saveModels([...models, {
+    id: uid(), name: `Mannequin ${models.length + 1}`, gender: 'h',
+    identity: 'Adult man, … years old, … (origin), height … m. Skin: … Jaw / chin …, beard …, lips …, closed mouth, neutral expression. Body hair … Short clean nails. No tattoos, no piercings, no jewelry.',
+    hair: 'Short … hair, tapered at the nape of the neck. It never touches the shoulders or the product.',
+    bodies: {
+      mince:  'SLIM body (French men\'s size 44-46 / S): lean shoulders, flat chest, flat stomach, narrow waist and hips, slim legs.',
+      middle: 'MEDIUM body (French men\'s size 48-50 / M-L): solid shoulders, natural chest and arms, flat stomach, straight waist, strong natural thighs.',
+      ronde:  'PLUS-SIZE body (French men\'s size 56-58 / XXL): wide rounded shoulders, full arms, full soft chest, rounded stomach, wide waist, full thighs. Confident healthy plus-size catalogue model.',
+    },
+  }])
   const addModel = () => saveModels([...models, {
     id: uid(), name: `Mannequin ${models.length + 1}`,
     identity: 'Adult woman, … years old, … (origin), height … m. Skin: … Jaw / chin …, lips …, closed mouth, neutral expression. Nails … No tattoos, no piercings, no jewelry.',
@@ -319,7 +359,7 @@ export default function LingerieTab() {
     if (defaultModel === id) setDefaultModel('random')
   }
   const resetModels = () => {
-    if (!confirm('Revenir aux 5 mannequins par défaut ? Tes modifications et ajouts seront perdus.')) return
+    if (!confirm('Revenir aux mannequins par défaut (5 femmes, 4 hommes) ? Tes modifications et ajouts seront perdus.')) return
     saveModels(DEFAULT_LINGERIE_MODELS); setDefaultModel('random')
   }
 
@@ -392,14 +432,15 @@ export default function LingerieTab() {
           <div>
             <div style={sub}>Mannequin par défaut</div>
             <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)} style={inp}>
-              <option value="random">🎲 Aléatoire</option>
-              {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              <option value="random">🎲 Aléatoire femmes</option>
+              <option value="random-h">🎲 Aléatoire hommes</option>
+              <ModelOptions models={models} />
             </select>
           </div>
           <div>
             <div style={sub}>Morphologie par défaut</div>
             <select value={defaultMorpho} onChange={e => setDefaultMorpho(e.target.value as Morpho)} style={inp}>
-              {MORPHOS.map(x => <option key={x.id} value={x.id}>{x.label} ({x.size})</option>)}
+              {MORPHOS.map(x => <option key={x.id} value={x.id}>{x.label === x.labelMen ? x.label : `${x.label} / ${x.labelMen}`} (F {x.size} · H {x.sizeMen})</option>)}
             </select>
           </div>
           <div>
@@ -481,17 +522,17 @@ export default function LingerieTab() {
               <div key={m.id} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                   <input value={m.name} onChange={e => updateModel(m.id, { name: e.target.value })} style={{ ...inp, width: 200, fontWeight: 600 }} />
-                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>mince · middle · ronde</span>
+                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>{isMan(m) ? 'Homme · mince · middle · fort' : 'Femme · mince · middle · ronde'}</span>
                   <button onClick={() => deleteModel(m.id)} disabled={models.length <= 1} style={{ ...small(), marginLeft: 'auto' }}>🗑 Supprimer</button>
                 </div>
                 <div style={sub}>Identité (âge, origine, peau, bouche, ongles)</div>
                 <textarea value={m.identity} onChange={e => updateModel(m.id, { identity: e.target.value })} style={{ ...area, minHeight: 60, fontSize: 12 }} />
-                <div style={{ ...sub, marginTop: 6 }}>Cheveux (visibles, passés derrière dans le dos)</div>
+                <div style={{ ...sub, marginTop: 6 }}>{isMan(m) ? 'Cheveux' : 'Cheveux (visibles, passés derrière dans le dos)'}</div>
                 <textarea value={m.hair} onChange={e => updateModel(m.id, { hair: e.target.value })} style={{ ...area, minHeight: 50, fontSize: 12 }} />
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 6 }}>
                   {MORPHOS.map(x => (
                     <div key={x.id}>
-                      <div style={sub}>Morphologie {x.label} ({x.size})</div>
+                      <div style={sub}>Morphologie {isMan(m) ? `${x.labelMen} (${x.sizeMen})` : `${x.label} (${x.size})`}</div>
                       <textarea value={m.bodies[x.id]} onChange={e => updateBody(m.id, x.id, e.target.value)} style={{ ...area, minHeight: 90, fontSize: 12 }} />
                     </div>
                   ))}
@@ -499,8 +540,9 @@ export default function LingerieTab() {
               </div>
             ))}
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={addModel} style={small()}>＋ Ajouter un mannequin</button>
-              <button onClick={resetModels} style={small()}>↺ Revenir aux 5 par défaut</button>
+              <button onClick={addModel} style={small()}>＋ Ajouter une femme</button>
+              <button onClick={addMan} style={small()}>＋ Ajouter un homme</button>
+              <button onClick={resetModels} style={small()}>↺ Revenir aux mannequins par défaut</button>
             </div>
           </div>
         )}
@@ -551,7 +593,7 @@ export default function LingerieTab() {
                             onChange={e => {
                               const type = e.target.value as LingerieType
                               // pose incompatible avec le nouveau type → nouvelle pose tirée
-                              const poseId = posesFor(type).some(p => p.id === l.poseId) ? l.poseId : pickPose(type)
+                              const poseId = posesFor(type, menOf(l)).some(p => p.id === l.poseId) ? l.poseId : pickPose(type, undefined, menOf(l))
                               patchLook(l.id, { type, poseId, status: 'pending' })
                             }}>
                       {LINGERIE_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
@@ -559,21 +601,21 @@ export default function LingerieTab() {
                     <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>✂ {typeInfo.hint} · {ratioOf(l)}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
-                    <select value={l.modelId} disabled={busy} onChange={e => patchLook(l.id, { modelId: e.target.value, status: 'pending' })} style={{ ...inp, minHeight: 28, fontSize: 12 }}>
-                      {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    <select value={l.modelId} disabled={busy} onChange={e => changeModel(l, e.target.value)} style={{ ...inp, minHeight: 28, fontSize: 12 }}>
+                      <ModelOptions models={models} />
                     </select>
                     <button onClick={() => {
-                              const pool = models.filter(m => m.id !== l.modelId)
+                              const pool = models.filter(m => m.id !== l.modelId && isMan(m) === menOf(l))
                               if (pool.length) patchLook(l.id, { modelId: pool[Math.floor(Math.random() * pool.length)].id, status: 'pending' })
                             }}
-                            disabled={busy} title="Tirer un autre mannequin" style={{ ...small(), padding: '2px 8px' }}>🎲</button>
+                            disabled={busy} title="Tirer un autre mannequin du même genre" style={{ ...small(), padding: '2px 8px' }}>🎲</button>
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
                   {MORPHOS.map(x => (
-                    <button key={x.id} disabled={busy} title={x.size}
+                    <button key={x.id} disabled={busy} title={menOf(l) ? x.sizeMen : x.size}
                             onClick={() => { if (l.morpho !== x.id) patchLook(l.id, { morpho: x.id, status: 'pending' }) }}
-                            style={{ ...small(l.morpho === x.id), padding: '3px 6px' }}>{x.label}</button>
+                            style={{ ...small(l.morpho === x.id), padding: '3px 6px' }}>{menOf(l) ? x.labelMen : x.label}</button>
                   ))}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
@@ -587,9 +629,9 @@ export default function LingerieTab() {
                   <div style={{ display: 'flex', gap: 4 }}>
                     <select value={l.poseId} disabled={busy} onChange={e => patchLook(l.id, { poseId: e.target.value, status: 'pending' })}
                             style={{ ...inp, minHeight: 28, fontSize: 12 }} title={direction.trim() ? 'Le champ « Pose & attitude » est rempli : il remplace cette pose' : undefined}>
-                      {posesFor(l.type).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                      {posesFor(l.type, menOf(l)).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                     </select>
-                    <button onClick={() => patchLook(l.id, { poseId: pickPose(l.type, l.poseId), status: 'pending' })}
+                    <button onClick={() => patchLook(l.id, { poseId: pickPose(l.type, l.poseId, menOf(l)), status: 'pending' })}
                             disabled={busy} title="Tirer une autre pose" style={{ ...small(), padding: '2px 8px' }}>🎲</button>
                   </div>
                 )}

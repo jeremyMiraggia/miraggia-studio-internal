@@ -13,6 +13,8 @@ export type Morpho = 'mince' | 'middle' | 'ronde'
 export type LingerieModel = {
   id: string
   name: string
+  /** 'h' = homme ; absent = femme (mannequins enregistrés avant l'ajout des hommes) */
+  gender?: 'f' | 'h'
   /** Âge, origine, peau, bouche, menton, ongles — commun aux 3 morphologies */
   identity: string
   /** Cheveux : visibles, passés derrière les épaules, dans le dos */
@@ -27,13 +29,15 @@ export const LINGERIE_TYPES: { id: LingerieType; label: string; hint: string; ra
   { id: 'bas',      label: 'Lingerie bas',      hint: 'ventre → haut des cuisses', ratio: '4:5' },
 ]
 
-export const MORPHOS: { id: Morpho; label: string; size: string }[] = [
-  { id: 'mince',  label: 'Mince',  size: '34-36 / XS-S' },
-  { id: 'middle', label: 'Middle', size: '38-40 / M' },
-  { id: 'ronde',  label: 'Ronde',  size: '44-46 / XL' },
+export const MORPHOS: { id: Morpho; label: string; size: string; labelMen: string; sizeMen: string }[] = [
+  { id: 'mince',  label: 'Mince',  size: '34-36 / XS-S', labelMen: 'Mince',  sizeMen: '44-46 / S' },
+  { id: 'middle', label: 'Middle', size: '38-40 / M',    labelMen: 'Middle', sizeMen: '48-50 / M-L' },
+  { id: 'ronde',  label: 'Ronde',  size: '44-46 / XL',   labelMen: 'Fort',   sizeMen: '56-58 / XXL' },
 ]
 
-/** 5 mannequins par défaut — adultes, décrits pour un cadrage sans les yeux. */
+export const isMan = (m?: Pick<LingerieModel, 'gender'>) => m?.gender === 'h'
+
+/** Mannequins par défaut (5 femmes, 4 hommes) — adultes, décrits pour un cadrage sans les yeux. */
 export const DEFAULT_LINGERIE_MODELS: LingerieModel[] = [
   {
     id: 'clara', name: 'Clara',
@@ -85,6 +89,46 @@ export const DEFAULT_LINGERIE_MODELS: LingerieModel[] = [
       ronde:  'PLUS-SIZE CURVY body (French size 44-46 / XL): full shoulders and arms, full bust, softly rounded stomach, marked waist, wide rounded hips, full strong thighs. Natural realistic skin with soft curves, confident healthy plus-size catalogue model.',
     },
   },
+  {
+    id: 'hugo', name: 'Hugo', gender: 'h',
+    identity: 'Adult man, 29 years old, Northern European, height 1.86 m. Fair skin with a neutral undertone and a few light freckles on the shoulders. Defined square jaw, light stubble, natural pink lips, closed mouth, neutral expression. Light natural body hair on the chest and forearms. Short clean nails. No tattoos, no piercings, no jewelry.',
+    hair: 'Short light-brown hair, neatly tapered at the nape of the neck. It never touches the shoulders or the product.',
+    bodies: {
+      mince:  'SLIM body (French men\'s size 44-46 / S): long neck, lean straight shoulders, flat chest with visible collarbones, flat stomach, narrow waist and hips, long slim legs.',
+      middle: 'MEDIUM FIT body (French men\'s size 48-50 / M-L): broad shoulders, naturally defined chest and arms, flat stomach with subtle definition, straight waist, strong natural thighs. Healthy everyday athletic silhouette, not bodybuilder.',
+      ronde:  'PLUS-SIZE body (French men\'s size 56-58 / XXL): wide rounded shoulders, full arms, full soft chest, rounded stomach, wide waist, full strong thighs. Natural realistic skin, confident healthy plus-size catalogue model.',
+    },
+  },
+  {
+    id: 'malik', name: 'Malik', gender: 'h',
+    identity: 'Adult man, 31 years old, West African descent, height 1.88 m. Deep brown skin with a rich warm undertone and an even natural satin finish. Strong elegant jawline, closely trimmed beard, full lips in a natural brown tone, relaxed closed mouth. Short clean nails. No tattoos, no piercings, no jewelry.',
+    hair: 'Very short black natural hair with a clean fade at the nape of the neck. It never touches the shoulders or the product.',
+    bodies: {
+      mince:  'SLIM body (French men\'s size 44-46 / S): graceful long neck, lean shoulders, flat toned chest, flat stomach, narrow waist and hips, very long slim legs.',
+      middle: 'MEDIUM ATHLETIC body (French men\'s size 48-50 / M-L): broad shoulders, defined chest and arms, toned stomach, straight waist, long toned legs with strong thighs. Natural athletic silhouette, not bodybuilder.',
+      ronde:  'PLUS-SIZE body (French men\'s size 56-58 / XXL): wide full shoulders and arms, full soft chest, rounded stomach, wide waist, full strong thighs. Natural realistic skin, confident healthy plus-size catalogue model.',
+    },
+  },
+  {
+    id: 'mateo', name: 'Mateo', gender: 'h',
+    identity: 'Adult man, 34 years old, Mediterranean / Latin, height 1.80 m. Olive skin with a golden undertone. Softly square jaw, short dark groomed beard, medium-full lips in a warm rosy-beige tone, calm closed mouth. Natural dark body hair on the chest and forearms. Short clean nails. No tattoos, no piercings, no jewelry.',
+    hair: 'Short dark-brown wavy hair, trimmed at the nape of the neck. It never touches the shoulders or the product.',
+    bodies: {
+      mince:  'SLIM body (French men\'s size 44-46 / S): lean shoulders, flat chest, flat stomach, narrow waist and hips, slim legs.',
+      middle: 'MEDIUM body (French men\'s size 48-50 / M-L): solid shoulders, natural chest and arms, soft flat stomach, straight waist, natural strong thighs. Balanced, healthy everyday silhouette.',
+      ronde:  'PLUS-SIZE body (French men\'s size 56-58 / XXL): wide rounded shoulders, full arms, full soft chest, rounded stomach, wide waist, full thighs. Natural realistic skin, confident healthy plus-size catalogue model.',
+    },
+  },
+  {
+    id: 'kenji', name: 'Kenji', gender: 'h',
+    identity: 'Adult man, 28 years old, East Asian, height 1.78 m. Light skin with a warm undertone, smooth even complexion. Clean-shaven, fine defined jaw, well-defined lips in a natural soft rose tone, serene closed mouth. Very little body hair. Short clean nails. No tattoos, no piercings, no jewelry.',
+    hair: 'Short straight black hair, tapered at the nape of the neck. It never touches the shoulders or the product.',
+    bodies: {
+      mince:  'SLIM body (French men\'s size 44-46 / S): narrow shoulders, delicate collarbones, flat chest, flat stomach, slim waist and hips, slender legs.',
+      middle: 'MEDIUM FIT body (French men\'s size 48-50 / M-L): defined shoulders, toned chest and arms, flat toned stomach, straight waist, lean strong thighs. Natural fit silhouette, not bodybuilder.',
+      ronde:  'PLUS-SIZE body (French men\'s size 56-58 / XXL): rounded shoulders, full arms, full soft chest, rounded stomach, wide waist, full thighs. Natural realistic skin, confident healthy plus-size catalogue model.',
+    },
+  },
 ]
 
 export const DEFAULT_LINGERIE_BACKGROUND =
@@ -130,6 +174,41 @@ const WIDE_FRAMING: Record<LingerieType, string> = {
 const COVER: Partial<Record<LingerieType, string>> = {
   haut: 'Below the bra she also wears plain, seamless, skin-tone briefs. They are NOT part of the product and will be cropped out of the final visual.',
   bas:  'Above the briefs she also wears a plain, seamless, skin-tone bralette. It is NOT part of the product and will be cropped out of the final visual.',
+}
+
+/* ---- Variantes HOMME : même découpe, mais produit, cheveux et accords au masculin ---- */
+const PRODUCT_LABEL_MEN: Record<LingerieType, string> = {
+  ensemble: 'a men\'s underwear set (undershirt / top AND matching briefs or boxers)',
+  pyjama:   'a men\'s pyjama / sleepwear set',
+  haut:     'a men\'s undershirt / top (top only)',
+  bas:      'men\'s underwear, briefs or boxers (bottom only)',
+}
+
+const MOUTH_TOP_MEN =
+  'TOP EDGE of the frame cuts horizontally across the model\'s MOUTH: the lips and chin are visible at the very top of the image; the nose, eyes, forehead and top of the head are OUTSIDE the frame. Never show the eyes.'
+
+const FRAMING_MEN: Record<LingerieType, string> = {
+  ensemble: `${MOUTH_TOP_MEN} BOTTOM EDGE of the frame at the UPPER THIGHS, a few centimetres below the bottom of the underwear. Knees and lower legs are OUTSIDE the frame. The complete set — top AND underwear — is entirely visible. Shoulders, arms and hands are in frame.`,
+  pyjama:   `${MOUTH_TOP_MEN} BOTTOM EDGE of the frame just below the FEET: the model is shown from the mouth down to the feet, both feet entirely visible (standing on, or resting on, the floor) with a small margin around them. The complete pyjama — top AND bottom — is entirely visible. Barefoot.`,
+  haut:     `${MOUTH_TOP_MEN} BOTTOM EDGE of the frame at the BELLY, around navel level. Hips and legs are OUTSIDE the frame. The neckline, shoulders and body of the top are clearly visible. Shoulders and upper arms are in frame.`,
+  bas:      'TOP EDGE of the frame at the BELLY, just above the navel. The chest and everything above the stomach are OUTSIDE the frame. BOTTOM EDGE of the frame at the UPPER THIGHS, a few centimetres below the bottom of the underwear. Knees and lower legs are OUTSIDE the frame. The underwear is entirely visible, including waistband and leg openings; hands never cover it.',
+}
+
+const WIDE_HEAD_MEN =
+  'His whole head and face are INSIDE the frame, with a little space above the head: the image will be cropped afterwards, so do not crop it yourself. Natural relaxed face, mouth closed.'
+
+const WIDE_BODY_MEN = 'from slightly above the top of his head down to just below the knees (if he is seated or kneeling: down to the floor)'
+
+const WIDE_FRAMING_MEN: Record<LingerieType, string> = {
+  ensemble: `Show the model ${WIDE_BODY_MEN}. ${WIDE_HEAD_MEN} The complete set — top AND underwear — is entirely visible. The body fills the frame, with only a small margin on the sides.`,
+  pyjama:   `Full figure, from slightly above the top of his head down to below the feet, both feet entirely visible with a small margin. ${WIDE_HEAD_MEN} The complete pyjama — top AND bottom — is entirely visible. Barefoot. The body fills the frame, with only a small margin on the sides.`,
+  haut:     `Show the model ${WIDE_BODY_MEN}. ${WIDE_HEAD_MEN} The top is entirely visible, including neckline and hem. The body fills the frame, with only a small margin on the sides.`,
+  bas:      `Show the model ${WIDE_BODY_MEN}. ${WIDE_HEAD_MEN} The underwear is entirely visible, including waistband and leg openings. The body fills the frame, with only a small margin on the sides.`,
+}
+
+const COVER_MEN: Partial<Record<LingerieType, string>> = {
+  haut: 'Below the top he also wears plain, seamless, dark grey boxer briefs. They are NOT part of the product and will be cropped out of the final visual.',
+  bas:  'He wears nothing else: his chest is bare, and it will be cropped out of the final visual.',
 }
 
 const GEMINI_RATIOS = ['9:16', '2:3', '3:4', '4:5', '1:1', '5:4', '4:3', '3:2', '16:9', '21:9']
@@ -189,11 +268,39 @@ const DYNAMIC_RULES =
   'BODY LANGUAGE RULES (mandatory): asymmetry everywhere — the shoulders are NOT level, the hips are NOT level, the weight is clearly on one side; at least one knee and one elbow are bent; the torso is angled, leaning or twisted relative to the camera, never square to the lens. Natural, relaxed and confident, as if the photographer caught her between two movements. ' +
   'AVOID: standing straight and stiff, a symmetrical stance, arms hanging straight along the body, feet side by side, torso facing the camera squarely, mannequin-like rigidity.'
 
-export function posesFor(type: LingerieType) { return DYNAMIC_POSES.filter(p => p.types.includes(type)) }
+/**
+ * Poses HOMME : appui solide et attitude posée, sans courbe en S ni geste « bretelle / cheveux ».
+ * Les id partagés avec les poses femme réutilisent le même croquis (lib/poseSketch.ts).
+ */
+export const DYNAMIC_POSES_MEN: typeof DYNAMIC_POSES = [
+  { id: 'h-appui', label: 'Appui sur une jambe, pouce à la ceinture', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Relaxed standing pose with all his weight on one leg, the other leg bent and slightly forward, foot turned out. Shoulders broad and slightly tilted, torso turned a little to the side. One thumb hooked at the hip beside the waistband with the elbow out, the other arm bent and loose, hand resting against the outer thigh. Laid-back and self-assured.' },
+  { id: 'h-nuque', label: 'Main derrière la nuque', types: ['ensemble', 'pyjama', 'haut'],
+    text: 'One arm raised, the hand behind the back of his neck with the elbow high and pointing out to the side; the other arm loose, hand resting on the outer thigh. Torso slightly twisted, weight on one leg, opposite knee bent. Relaxed and candid, as if caught between two movements.' },
+  { id: 'trois-quarts', label: 'Trois-quarts, épaules vers l\'objectif', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Body rotated about 45° away from the camera, then the shoulders twisted back toward the lens; the near knee bent and crossing slightly in front of the other leg, chin turned toward the camera over the near shoulder. Arms bent: one hand resting on the opposite thigh, the other hand at the waist. The twist between hips and shoulders must be clearly visible.' },
+  { id: 'marche', label: 'En marche, pas en avant', types: ['ensemble', 'pyjama', 'bas'],
+    text: 'Mid-stride, walking toward the camera with a long relaxed step: the front knee bent, the back heel lifted off the floor; arms in natural opposite motion (one forward, one back, elbows soft), shoulders counter-rotating against the hips. A visible sense of movement, the product still sharp.' },
+  { id: 'assise-sol', label: 'Assis au sol, en appui sur un bras', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Sitting on the floor, the camera at his chest height: he props himself on one straight arm placed on the floor beside and slightly behind his hip, the other forearm resting on his raised knee, hand loose. One knee up, the other leg folded to the side on the floor. Torso on a slight diagonal, shoulders at an angle, turned toward the camera. Relaxed, casual sitting pose.' },
+  { id: 'genou', label: 'Un genou au sol, main sur le genou levé', types: ['ensemble', 'haut', 'bas'],
+    text: 'Kneeling on one knee with the other leg bent forward, foot flat on the floor; sitting back slightly. One forearm resting on the raised knee, the other hand on the hip. Torso leaning forward a little, shoulders angled, a strong diagonal line from the shoulder to the knee.' },
+  { id: 'mur', label: 'Appuyé contre le mur', types: ['ensemble', 'pyjama', 'haut', 'bas'],
+    text: 'Leaning one shoulder and the upper back against the wall behind him, body on a clear diagonal; one leg crossed in front of the other with the knee bent. One hand resting flat on the wall at hip height, the other hand raised to the opposite shoulder. Head tilted slightly, attitude calm and unhurried.' },
+]
 
-/** Tire une pose dynamique compatible avec le type (différente de `exclude` si possible). */
-export function pickPose(type: LingerieType, exclude?: string): string {
-  const pool = posesFor(type)
+const DYNAMIC_MOOD_MEN =
+  'MOOD — natural, masculine and quietly confident, in the style of premium men\'s underwear campaigns: relaxed body, loose hands, lips relaxed, a calm and self-assured attitude. Never explicit, never vulgar; the product stays fully visible and unobstructed.'
+
+const DYNAMIC_RULES_MEN =
+  'BODY LANGUAGE RULES (mandatory): asymmetry everywhere — the shoulders are NOT level, the weight is clearly on one side; at least one knee and one elbow are bent; the torso is angled, leaning or twisted relative to the camera, never square to the lens. Natural, relaxed and confident, as if the photographer caught him between two movements. ' +
+  'AVOID: standing straight and stiff, a symmetrical stance, arms hanging straight along the body, feet side by side, torso facing the camera squarely, mannequin-like rigidity, flexing muscles.'
+
+export function posesFor(type: LingerieType, men = false) { return (men ? DYNAMIC_POSES_MEN : DYNAMIC_POSES).filter(p => p.types.includes(type)) }
+
+/** Tire une pose dynamique compatible avec le type et le genre (différente de `exclude` si possible). */
+export function pickPose(type: LingerieType, exclude?: string, men = false): string {
+  const pool = posesFor(type, men)
   const choices = pool.length > 1 ? pool.filter(p => p.id !== exclude) : pool
   return choices[Math.floor(Math.random() * choices.length)].id
 }
@@ -218,7 +325,9 @@ export function buildLingeriePrompt(o: {
   hasPoseSketch?: boolean
 }): string {
   const imgs = o.imageCount > 1 ? `IMAGES 1 to ${o.imageCount}` : 'IMAGE 1'
-  const dyn = o.poseMode === 'dynamique' ? (DYNAMIC_POSES.find(p => p.id === o.poseId && p.types.includes(o.type)) ?? posesFor(o.type)[0]) : null
+  const men = isMan(o.model)
+  const poses = posesFor(o.type, men)
+  const dyn = o.poseMode === 'dynamique' ? (poses.find(p => p.id === o.poseId) ?? poses[0]) : null
   const custom = o.direction?.trim()
   const wide = isWideFraming(o.type, o.poseMode, o.direction)
   const sketchIdx = o.imageCount + (o.hasBackgroundImage ? 1 : 0) + 1
@@ -231,28 +340,39 @@ export function buildLingeriePrompt(o: {
   const poseBlock = custom
     ? `POSE, ATTITUDE & MOOD — follow this art direction closely, it takes priority over any default catalogue pose. Only the framing and the product fidelity stay mandatory; ${wide ? 'the image will be cropped just below the nose afterwards, so the eyes and gaze will not appear in the final visual' : 'anything described for parts outside the frame (eyes, gaze, top of the head) is simply not shown'}. Hands never hide the product.\n${custom}`
     : dyn
-      ? `POSE (essential to this image) — a DYNAMIC lingerie-campaign pose like contemporary lingerie e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}${sketchLine}\n${DYNAMIC_RULES}\n${DYNAMIC_MOOD}`
+      ? men
+        ? `POSE (essential to this image) — a DYNAMIC men's underwear campaign pose like contemporary e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}${sketchLine}\n${DYNAMIC_RULES_MEN}\n${DYNAMIC_MOOD_MEN}`
+        : `POSE (essential to this image) — a DYNAMIC lingerie-campaign pose like contemporary lingerie e-commerce shoots, NOT a static catalogue stance:\n${dyn.text}${sketchLine}\n${DYNAMIC_RULES}\n${DYNAMIC_MOOD}`
       : null
+  const productLabel = (men ? PRODUCT_LABEL_MEN : PRODUCT_LABEL)[o.type]
+  const productDetails = men
+    ? 'exact color, fabric, knit, cut, coverage, neckline, seams, trims, waistband, elastic bands, prints and logos'
+    : 'exact color, fabric, lace pattern, transparency level, cut, coverage, straps, hooks, underwire, seams, trims, elastic bands, prints and logos'
+  const cover = (men ? COVER_MEN : COVER)[o.type]
 
   return [
-    custom || dyn
-      ? 'Professional lingerie campaign photograph for a premium brand\'s online catalogue, editorial e-commerce style with a natural, dynamic pose. Tasteful and elegant, softly sensual, never explicit: the product stays clearly visible on the body.'
-      : 'Professional e-commerce product photograph for a lingerie brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.',
+    men
+      ? custom || dyn
+        ? 'Professional men\'s underwear campaign photograph for a premium brand\'s online catalogue, editorial e-commerce style with a natural, dynamic pose. Tasteful and elegant, never explicit: the product stays clearly visible on the body.'
+        : 'Professional e-commerce product photograph for a men\'s underwear brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.'
+      : custom || dyn
+        ? 'Professional lingerie campaign photograph for a premium brand\'s online catalogue, editorial e-commerce style with a natural, dynamic pose. Tasteful and elegant, softly sensual, never explicit: the product stays clearly visible on the body.'
+        : 'Professional e-commerce product photograph for a lingerie brand\'s online catalogue. Tasteful, elegant and commercial — the style of a department-store product page. Neutral and non-suggestive: the purpose is to show the product clearly on the body.',
     '',
-    `PRODUCT — ${imgs}: product packshot${o.imageCount > 1 ? 's' : ''} of ${PRODUCT_LABEL[o.type]}. ${o.imageCount > 1 ? 'These images show' : 'This image shows'} the product only, with no model. Reproduce the product with absolute fidelity: exact color, fabric, lace pattern, transparency level, cut, coverage, straps, hooks, underwire, seams, trims, elastic bands, prints and logos. Same coverage as the product — do not make it smaller or more revealing, do not add or remove any part. The product is fitted to the model's body size. ${wide && COVER[o.type] ? COVER[o.type] : `The model wears ONLY this product${o.type === 'haut' || o.type === 'bas' ? ' (anything else stays outside the frame)' : ''}.`}`,
+    `PRODUCT — ${imgs}: product packshot${o.imageCount > 1 ? 's' : ''} of ${productLabel}. ${o.imageCount > 1 ? 'These images show' : 'This image shows'} the product only, with no model. Reproduce the product with absolute fidelity: ${productDetails}. Same coverage as the product — do not make it smaller or more revealing, do not add or remove any part. The product is fitted to the model's body size. ${wide && cover ? cover : `The model wears ONLY this product${o.type === 'haut' || o.type === 'bas' ? ' (anything else stays outside the frame)' : ''}.`}`,
     '',
     ...(poseBlock ? [poseBlock, ''] : []),
-    `MODEL — described in text only, there is no reference photo of her. ${o.model.identity}`,
+    `MODEL — described in text only, there is no reference photo of ${men ? 'him' : 'her'}. ${o.model.identity}`,
     `BODY — ${o.model.bodies[o.morpho]} Respect this body type exactly, do not slim it down or enlarge it.`,
     `HAIR — ${o.model.hair}`,
     'SKIN — realistic natural texture with subtle pores, even skin tone over the whole body, no plastic retouching look.',
     '',
     wide
-      ? `FRAMING — ${WIDE_FRAMING[o.type]} The framing follows the pose (standing, twisted, seated or kneeling): it never forces a frontal, upright stance.`
-      : `FRAMING (STRICT, non-negotiable) — ${FRAMING[o.type]}` +
-        (poseBlock ? ' The crop is defined on her body and follows the pose (standing, twisted, seated or kneeling): it does not force a frontal, upright stance. A slight head tilt is fine; the eyes are never visible.' : ''),
+      ? `FRAMING — ${(men ? WIDE_FRAMING_MEN : WIDE_FRAMING)[o.type]} The framing follows the pose (standing, twisted, seated or kneeling): it never forces a frontal, upright stance.`
+      : `FRAMING (STRICT, non-negotiable) — ${(men ? FRAMING_MEN : FRAMING)[o.type]}` +
+        (poseBlock ? ` The crop is defined on ${men ? 'his' : 'her'} body and follows the pose (standing, twisted, seated or kneeling): it does not force a frontal, upright stance. A slight head tilt is fine; the eyes are never visible.` : ''),
     '',
-    ...(poseBlock ? [] : ['POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. Arms relaxed along the body or one hand lightly on the hip; hands never cover the product. Calm, neutral attitude.', '']),
+    ...(poseBlock ? [] : [`POSE — standing, facing the camera, relaxed and natural catalogue pose, weight slightly on one leg. ${men ? 'Arms relaxed along the body' : 'Arms relaxed along the body or one hand lightly on the hip'}; hands never cover the product. Calm, neutral attitude.`, '']),
     o.hasBackgroundImage
       ? [
           `BACKGROUND — IMAGE ${o.imageCount + 1} is the BACKGROUND / LOCATION reference (it contains no model and no product). Reproduce this exact place behind the model: same walls, floor, materials, textures, colors, furniture and objects, same light direction, color temperature and ambience. Keep its look exactly — do not redesign, recolor, add or remove elements. Only the viewpoint adapts to the framing above (seen closer, cropped like the shot), with natural perspective and the model placed naturally in the space, lit by the same light, with a soft natural contact shadow where relevant.`,
