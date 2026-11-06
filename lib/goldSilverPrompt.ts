@@ -90,13 +90,64 @@ export function buildGoldSilverBackPrompt(opts: {
   return lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n')
 }
 
+/** Découpe un décor Notion en sections « LIBELLÉ : texte » (le texte avant le 1er libellé a un libellé vide). */
+function decorSections(decor: string): { label: string; text: string }[] {
+  const re = /(?:^|(?<=[\s.]))([A-ZÉÈÊÀ][A-ZÉÈÊÀ&' -]{2,}|Éviter)(?: ?\([^)]*\))?(?: — [^:\n]{0,40})? ?:/g
+  const hits = [...decor.matchAll(re)]
+  const out: { label: string; text: string }[] = []
+  const head = decor.slice(0, hits[0]?.index ?? decor.length).trim()
+  if (head) out.push({ label: '', text: head })
+  hits.forEach((h, i) => {
+    const end = i + 1 < hits.length ? hits[i + 1].index : decor.length
+    out.push({ label: h[1].trim().toUpperCase(), text: decor.slice(h.index, end).trim() })
+  })
+  return out
+}
+
+// Sections retirées à l'envoi : le prompt impose lui-même le cadrage et une pose unique.
+const DROPPED_SECTIONS = new Set(['ATTITUDE', 'INSTANT ENTRE DEUX POSES', 'POSE', 'ÉVITER'])
+
+/**
+ * Version courte du décor envoyée à Gemini (les textes Notion ne changent pas).
+ * Gardés : décor, lumière, grain, ambiance et tout libellé inconnu. Retirés : liste des poses, attitude,
+ * « à éviter », cadrage (hors focale) et les renvois « voir image 1 / 2 », faux par rapport à l'ordre réel.
+ * Un décor sans ces libellés reste tel quel.
+ */
+export function condenseDecor(decor: string): string {
+  const kept: string[] = []
+  for (const { label, text } of decorSections(decor)) {
+    if (DROPPED_SECTIONS.has(label)) continue
+    if ((label === 'MANNEQUIN' || label === 'TENUE') && /voir image/i.test(text)) continue
+    if (label === 'CADRAGE') {
+      const focal = text.match(/Focale[\s\S]*?(?:\.(?=\s|$)|$)/i)?.[0]
+      if (focal) kept.push(focal.trim())
+      continue
+    }
+    kept.push(text)
+  }
+  return kept.join('\n')
+}
+
+// Poses écartées : de dos ou de profil (la sortie est de face) et postures à fort risque de déformation.
+const RISKY_POSE = /trois-quarts dos|complètement de dos|par-dessus l['’]épaule|se retourn|de profil|contre-jour|traits non visibles|renvers|bassin de l['’]autre|accroupie|en suspension|assise|yeux fermés|corps en rotation|buste en rotation|buste tourné/i
+const DEFAULT_POSE = 'Debout de face, poids sur une hanche, bras détendus, épaules relâchées, regard caméra.'
+
+/** Poses utilisables d'un décor (liste numérotée de sa section POSE), jamais vide. */
+export function decorPoses(decor: string): string[] {
+  const section = decorSections(decor).find(x => x.label === 'POSE')?.text ?? ''
+  const items = section.split(/\s+(?=\d\.\s)/).filter(x => /^\d\.\s/.test(x)).map(x => x.replace(/^\d\.\s+/, '').trim())
+  const safe = items.filter(x => !RISKY_POSE.test(x))
+  return safe.length ? safe : [DEFAULT_POSE]
+}
+
 /**
  * Prompt Golden Silver — bloc REFERENCES fixe + description du décor (Notion) + bloc TECHNICAL.
  *
- * Ordre des images envoyées :
- *   IMAGES 1…n      = photos de la tenue portée (Files (Front)) — n ≥ 1
- *   IMAGE n+1       = visage du mannequin (FACE PHOTO)
- *   IMAGE n+2       = corps du mannequin (FRONT-model) — optionnel
+ * Ordre des images envoyées (le mannequin toujours en premier) :
+ *   IMAGE 1          = visage du mannequin (FACE PHOTO)
+ *   IMAGE 2          = corps du mannequin (FRONT-model) — optionnel, décale la suite s'il manque
+ *   IMAGES suivantes = photos de la tenue (Files (Front)) — n ≥ 1
+ *   IMAGES suivantes = chaussures à porter (photo de Files (Front) classée « chaussures seules ») — optionnel
  *   IMAGES suivantes = gros plans du vêtement (Details) — optionnels, guide de fidélité
  *
  * Sortie : UN visuel de FACE.
@@ -108,6 +159,8 @@ export function buildGoldSilverPrompt(opts: {
   sku?: string
   detailText?: string
   outfitCount?: number
+  shoesCount?: number   // photos de chaussures seules, séparées de la tenue
+  pose?: string         // pose unique tirée parmi decorPoses()
   hasBody?: boolean
   detailCount?: number
   modelDescription?: string   // description courte du mannequin (générée une fois, réutilisée)
@@ -116,10 +169,13 @@ export function buildGoldSilverPrompt(opts: {
   const closeup = opts.framing === 'closeup'
   const nOut = Math.max(1, opts.outfitCount ?? 1)
   const nDet = opts.detailCount ?? 0
-  const modelIdx = nOut + 1
-  const bodyIdx = opts.hasBody ? modelIdx + 1 : null
-  const firstDetail = (bodyIdx ?? modelIdx) + 1
-  const outfitLabel = nOut === 1 ? 'IMAGE 1' : `IMAGES 1 to ${nOut}`
+  const bodyIdx = opts.hasBody ? 2 : null
+  const firstOutfit = (bodyIdx ?? 1) + 1
+  const nShoes = closeup ? 0 : (opts.shoesCount ?? 0)
+  const firstShoes = firstOutfit + nOut
+  const shoesLabel = nShoes === 1 ? `IMAGE ${firstShoes}` : `IMAGES ${firstShoes} to ${firstShoes + nShoes - 1}`
+  const firstDetail = firstShoes + nShoes
+  const outfitLabel = nOut === 1 ? `IMAGE ${firstOutfit}` : `IMAGES ${firstOutfit} to ${firstOutfit + nOut - 1}`
   const detailLabel = nDet === 1 ? `IMAGE ${firstDetail}` : `IMAGES ${firstDetail} to ${firstDetail + nDet - 1}`
   const title = opts.decorName.trim().toUpperCase()
 
@@ -127,23 +183,14 @@ export function buildGoldSilverPrompt(opts: {
     `EDITORIAL FASHION PHOTOGRAPH — ${title} SERIES`,
     '',
     'REFERENCES (strict):',
-    nOut === 1
-      ? '- IMAGE 1 = OUTFIT, front view. Reproduce the garment exactly: same cut,'
-      : `- ${outfitLabel} = THE SAME OUTFIT, several photos of it worn. Combine them into ONE faithful garment: same cut,`,
-    '  silhouette, fabric texture, drape, color, print, seams, buttons, sleeve and',
-    '  hem length. No reinterpretation, no added accessories, no altered color.',
-    ...(closeup
-      ? ['  SHOES: not part of this shot — the framing stops well above the feet.']
-      : [`  SHOES: the model wears EXACTLY the same shoes as in ${outfitLabel} — same model,`,
-         '  same color, same material. Never replace, hide or crop them.']),
-    `- IMAGE ${modelIdx} = MODEL FACE. Preserve identity exactly: same face, facial structure,`,
+    '- IMAGE 1 = MODEL FACE. Preserve identity exactly: same face, facial structure,',
     '  eyes, eyebrows, lips, skin tone and undertone, freckles/marks, hair color,',
     '  texture and length. She must be unmistakably the same person. Keep her',
     '  natural skin — visible pores and texture, no retouching.',
   ]
   if (opts.modelDescription?.trim()) {
     lines.push(
-      `  MODEL DESCRIPTION (must match IMAGE ${modelIdx} — if the generated face deviates from this, it is wrong):`,
+      '  MODEL DESCRIPTION (must match IMAGE 1 — if the generated face deviates from this, it is wrong):',
       ...opts.modelDescription.trim().split('\n').map(l => `  ${l.trim()}`).filter(l => l.trim()),
     )
   }
@@ -154,9 +201,20 @@ export function buildGoldSilverPrompt(opts: {
     )
   }
   lines.push(
-    '- STATURE: she is a TALL fashion model — long legs, long neck, elongated',
-    '  silhouette, head small relative to the body (about 9 heads tall). Never',
-    '  short or stocky.',
+    `- STATURE: she is a tall fashion model with natural, realistic human proportions${bodyIdx ? `, as in IMAGE ${bodyIdx}` : ''}.`,
+    nOut === 1
+      ? `- ${outfitLabel} = OUTFIT, front view. Reproduce the garment exactly: same cut,`
+      : `- ${outfitLabel} = THE SAME OUTFIT, several photos of it. Combine them into ONE faithful garment: same cut,`,
+    '  silhouette, fabric texture, drape, color, print, seams, buttons, sleeve and',
+    '  hem length. No reinterpretation, no added accessories, no altered color.',
+    ...(closeup
+      ? ['  SHOES: not part of this shot — the framing stops well above the feet.']
+      : nShoes > 0
+        ? [`- ${shoesLabel} = SHOES. The model wears EXACTLY these shoes — same model, color and`,
+           '  material — whatever shoes or bare feet appear in the outfit photos. Never replace,',
+           '  hide or crop them.']
+        : [`  SHOES: the model wears EXACTLY the same shoes as in ${outfitLabel} — same model,`,
+           '  same color, same material. Never replace, hide or crop them.']),
   )
   if (nDet > 0) {
     lines.push(
@@ -182,9 +240,12 @@ export function buildGoldSilverPrompt(opts: {
       'OUTPUT: ONE photograph of the model wearing the outfit, seen from the FRONT,',
       'garment fully readable. FEET (non-negotiable): the model\'s feet and shoes are',
       'ALWAYS fully visible in the frame, never cut by the bottom edge, never hidden',
-      'behind an object or the foreground. Small margin below the shoes.',
+      'behind an object or the foreground. Tight full-length framing: the model fills almost',
+      'the whole height of the frame, with a small margin above the head and below the shoes.',
     )
   }
+  const pose = opts.pose?.trim() || decorPoses(opts.decorDescription)[0]
+  lines.push('', `POSE (this exact one, natural human anatomy): ${pose}`)
   if (opts.detailText?.trim()) {
     lines.push('', 'ADDITIONAL DIRECTION (from the brief):', opts.detailText.trim())
   }
@@ -193,7 +254,7 @@ export function buildGoldSilverPrompt(opts: {
     closeup
       ? 'SCENE (the framing instructions above take precedence over any framing mentioned below):'
       : '',
-    opts.decorDescription.trim(),
+    condenseDecor(opts.decorDescription),
     '---------------',
     'TECHNICAL:',
     `Aspect ratio ${opts.ratio}. High resolution. Photorealistic.`,

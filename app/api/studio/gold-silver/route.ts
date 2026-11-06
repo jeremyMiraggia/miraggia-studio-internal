@@ -1,11 +1,13 @@
 /**
- * Gold&Silver — génération lifestyle : IMAGE 1 = outfit porté, IMAGE 2 = visage mannequin,
- * prompt = REFERENCES + décor (Notion) + TECHNICAL. Entrée JSON avec URLs Blob.
+ * Gold&Silver — génération lifestyle : IMAGE 1 = visage mannequin, IMAGE 2 = corps, puis tenue et détails,
+ * prompt = REFERENCES + pose + décor condensé (Notion) + TECHNICAL. Entrée JSON avec URLs Blob.
+ * En mode face, le prompt est construit ici : le nombre d'images de tenue et de chaussures dépend du classement des photos.
  */
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
-import { detectHead, maskHead } from '@/lib/faceMask'
+import { detectHead, maskHead, type PhotoKind } from '@/lib/faceMask'
+import { buildGoldSilverPrompt } from '@/lib/goldSilverPrompt'
 import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
@@ -22,7 +24,8 @@ async function handlePOST(request: Request) {
     const faceUrl: string   = body.faceUrl ?? ''
     const bodyUrl: string   = isUrl(body.bodyUrl) ? body.bodyUrl : ''
     const detailUrls: string[] = (Array.isArray(body.detailUrls) ? body.detailUrls : (body.detailUrl ? [body.detailUrl] : [])).filter(isUrl)
-    const prompt: string    = body.prompt ?? ''
+    const backPrompt: string = body.prompt ?? ''
+    const promptOpts: any   = body.promptOpts ?? {}
     const ratio: string     = body.ratio ?? '2:3'
     const quality: string   = body.quality ?? '2K'
     const sku: string       = body.sku ?? ''
@@ -35,21 +38,26 @@ async function handlePOST(request: Request) {
     if (outfitUrls.length === 0) return NextResponse.json({ error: 'Au moins une outfitUrl requise.' }, { status: 400 })
     if (mode === 'front' && !isUrl(faceUrl)) return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
     if (mode === 'back' && !frontVisualUrl)  return NextResponse.json({ error: 'frontVisualUrl requise en mode back.' }, { status: 400 })
-    if (!prompt.trim())                  return NextResponse.json({ error: 'prompt requis.' }, { status: 400 })
+    if (mode === 'back' && !backPrompt.trim()) return NextResponse.json({ error: 'prompt requis.' }, { status: 400 })
+    if (mode === 'front' && !String(promptOpts.decorDescription ?? '').trim()) return NextResponse.json({ error: 'décor requis.' }, { status: 400 })
 
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY manquante.' }, { status: 500 })
 
     // ===== Masquage tête (visage + cheveux) sur les photos de tenue PORTÉE =====
     // Vêtement à plat / packshot → aucune personne détectée → image inchangée.
-    type OutfitPart = { part: any; masked: boolean; maskedUrl?: string; note?: string }
+    // En mode face, la même détection classe aussi chaque photo (portée, cintre, à plat, chaussures seules).
+    type OutfitPart = { part: any; masked: boolean; maskedUrl?: string; note?: string; kind?: PhotoKind }
     const outfits: OutfitPart[] = []
     for (const u of outfitUrls) {
       const { buf, mime } = await fetchImage(u)
-      if (!maskFaces) { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
+      if (!maskFaces && mode === 'back') { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
       const det = await detectHead(buf, mime, apiKey)
-      if (!det.hasPerson) { outfits.push({ part: toPart(buf, mime), masked: false, note: det.error ? `détection échouée : ${det.error.slice(0, 80)}` : 'pas de personne (vêtement non porté)' }); continue }
-      if (!det.box) { outfits.push({ part: toPart(buf, mime), masked: false, note: `⚠ non masqué : ${det.error ?? 'tête non localisée'}` }); continue }
+      const kind = det.kind
+      if (kind === 'shoes') { outfits.push({ part: toPart(buf, mime), masked: false, kind, note: 'chaussures à porter' }); continue }
+      if (!maskFaces) { outfits.push({ part: toPart(buf, mime), masked: false, kind }); continue }
+      if (!det.hasPerson) { outfits.push({ part: toPart(buf, mime), masked: false, kind, note: det.error ? `détection échouée : ${det.error.slice(0, 80)}` : 'pas de personne (vêtement non porté)' }); continue }
+      if (!det.box) { outfits.push({ part: toPart(buf, mime), masked: false, kind, note: `⚠ non masqué : ${det.error ?? 'tête non localisée'}` }); continue }
       try {
         const m = await maskHead(buf, det.box)
         let maskedUrl: string | undefined
@@ -59,16 +67,28 @@ async function handlePOST(request: Request) {
           })
           maskedUrl = b.url
         } catch { /* vignette non disponible, on continue */ }
-        outfits.push({ part: toPart(m.buf, m.mime), masked: true, maskedUrl })
+        outfits.push({ part: toPart(m.buf, m.mime), masked: true, maskedUrl, kind })
       } catch (e: any) {
-        outfits.push({ part: toPart(buf, mime), masked: false, note: `masquage échoué : ${e?.message ?? e}` })
+        outfits.push({ part: toPart(buf, mime), masked: false, kind, note: `masquage échoué : ${e?.message ?? e}` })
       }
     }
     const anyMasked = outfits.some(o => o.masked)
 
+    // Mode face : les chaussures seules sont séparées de la tenue (jamais envoyées en close-up, hors cadre).
+    // Si tout est classé « chaussures », on ne sépare rien : il faut au moins une image de tenue.
+    const hasGarment = outfits.some(o => o.kind !== 'shoes')
+    const garments = mode === 'front' && hasGarment ? outfits.filter(o => o.kind !== 'shoes') : outfits
+    const shoes = mode === 'front' && hasGarment && !closeup ? outfits.filter(o => o.kind === 'shoes') : []
+    const nOut = garments.length
+
+    const prompt = mode === 'back' ? backPrompt : buildGoldSilverPrompt({
+      decorName: String(promptOpts.decorName ?? ''), decorDescription: String(promptOpts.decorDescription),
+      ratio, sku: promptOpts.sku, detailText: promptOpts.detailText, modelDescription: promptOpts.modelDescription,
+      pose: promptOpts.pose, framing: closeup ? 'closeup' : 'full',
+      outfitCount: nOut, shoesCount: shoes.length, hasBody: !!bodyUrl, detailCount: detailUrls.length,
+    })
     const sessionId = Date.now()
     const parts: any[] = [{ text: `[SESSION ${sessionId}]\n${prompt}` }]
-    const nOut = outfits.length
 
     if (mode === 'back') {
       // IMAGE 1 = visuel de face final ; IMAGES 2..n+1 = tenue de dos
@@ -85,31 +105,43 @@ async function handlePOST(request: Request) {
       const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : 'standing still, relaxed and composed (no walking)'
       parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model and same scene as IMAGE 1 · back of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · ${framingCheck} · ${poseCheck} · same light, film look and mood as IMAGE 1 · no text, no collage.` })
     } else {
-    if (anyMasked) {
-      parts.push({ text: `NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The ONLY identity reference is the MODEL FACE image (IMAGE ${nOut + 1}). Do not reproduce any pixelation in the output.` })
+    // Le mannequin toujours en premier : IMAGE 1 = visage, IMAGE 2 = corps (si présent), puis tenue, puis détails
+    parts.push({ text: '=== IMAGE 1 — MODEL FACE (preserve this exact identity) ===' })
+    parts.push(await toInlinePart(faceUrl))
+    let next = 2
+    if (bodyUrl) {
+      parts.push({ text: '=== IMAGE 2 — MODEL BODY, same person (skin tone, build, silhouette — not the pose, not the background) ===' })
+      parts.push(await toInlinePart(bodyUrl))
+      next = 3
     }
+    const firstOutfit = next
+    const outfitLabel = nOut === 1 ? `IMAGE ${firstOutfit}` : `IMAGES ${firstOutfit}-${firstOutfit + nOut - 1}`
+    if (anyMasked) {
+      parts.push({ text: 'NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The ONLY identity reference is the MODEL FACE image (IMAGE 1). Do not reproduce any pixelation in the output.' })
+    }
+    const kindNote = (k?: PhotoKind) => k === 'hanger' ? ', on a hanger (ignore the hanger, rack, labels and background)'
+      : k === 'flat' ? ', laid flat (ignore the surface and background)' : ''
     for (let i = 0; i < nOut; i++) {
       parts.push({ text: nOut === 1
-        ? '=== IMAGE 1 — OUTFIT, front view (reproduce this garment exactly) ==='
-        : `=== IMAGE ${i + 1} — OUTFIT, photo ${i + 1}/${nOut} of the SAME garment worn ===` })
-      parts.push(outfits[i].part)
+        ? `=== IMAGE ${firstOutfit} — OUTFIT, front view${kindNote(garments[i].kind)} (reproduce this garment exactly) ===`
+        : `=== IMAGE ${firstOutfit + i} — OUTFIT, photo ${i + 1}/${nOut} of the SAME garment${kindNote(garments[i].kind)} ===` })
+      parts.push(garments[i].part)
     }
-    const modelIdx = nOut + 1
-    parts.push({ text: `=== IMAGE ${modelIdx} — MODEL FACE (preserve this exact identity) ===` })
-    parts.push(await toInlinePart(faceUrl))
-    let next = modelIdx + 1
-    if (bodyUrl) {
-      parts.push({ text: `=== IMAGE ${next} — MODEL BODY, same person (skin tone, build, silhouette — not the pose, not the background) ===` })
-      parts.push(await toInlinePart(bodyUrl))
-      next++
+    next = firstOutfit + nOut
+    const firstShoes = next
+    for (let i = 0; i < shoes.length; i++) {
+      parts.push({ text: `=== IMAGE ${next + i} — SHOES the model must wear (not part of the garment) ===` })
+      parts.push(shoes[i].part)
     }
+    next += shoes.length
+    const shoesCheck = shoes.length === 1 ? `shoes identical to IMAGE ${firstShoes}` : shoes.length > 1 ? `shoes identical to IMAGES ${firstShoes}-${next - 1}` : 'same shoes'
     for (let i = 0; i < detailUrls.length; i++) {
       parts.push({ text: `=== IMAGE ${next + i} — CLOSE-UP DETAIL of the same garment (fidelity guide only — do NOT copy its framing) ===` })
       parts.push(await toInlinePart(detailUrls[i]))
     }
     parts.push({ text: closeup
-      ? `⚠ FINAL CHECK : ONE front-view CLOSE-UP / upper mid-body photograph (head to hips at most, no legs, no feet, no shoes) · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · face identical to IMAGE ${modelIdx}, sharp · scene, light, film look and mood exactly as described · no text, no collage.`
-      : `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${nOut === 1 ? 'IMAGE 1' : `IMAGES 1-${nOut}`} (cut, color, print, details) · same shoes, feet fully visible · face identical to IMAGE ${modelIdx} · TALL elongated model · scene, light, film look and mood exactly as described · no text, no collage.` })
+      ? `⚠ FINAL CHECK : ONE front-view CLOSE-UP / upper mid-body photograph (head to hips at most, no legs, no feet, no shoes) · garment identical to ${outfitLabel} (cut, color, print, details) · face identical to IMAGE 1, sharp · pose as described · scene, light, film look and mood exactly as described · no text, no collage.`
+      : `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${outfitLabel} (cut, color, print, details) · ${shoesCheck}, feet fully visible · face identical to IMAGE 1 · natural human proportions and anatomy · pose as described · scene, light, film look and mood exactly as described · no text, no collage.` })
     }
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'

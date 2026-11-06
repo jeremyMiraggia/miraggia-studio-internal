@@ -19,8 +19,12 @@ const DETECT_MODELS = ['gemini-3.1-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']
 
 type Box = { ymin: number; xmin: number; ymax: number; xmax: number }   // 0..1
 
+/** Nature de la photo : portée, sur cintre, à plat, chaussures seules, ou autre. */
+export type PhotoKind = 'worn' | 'hanger' | 'flat' | 'shoes' | 'other'
+
 export type HeadDetection = {
   hasPerson: boolean
+  kind?: PhotoKind
   box?: Box
   model?: string
   error?: string
@@ -38,13 +42,14 @@ function parseBox(b: any): Box | null {
 export async function detectHead(buf: Buffer, mime: string, apiKey: string): Promise<HeadDetection> {
   const prompt = [
     'You are a precise vision detector. Look at this fashion photo.',
+    'Q0: what kind of photo is it? "kind" is one of: "worn" (a garment worn by a person), "hanger" (a garment on a hanger or rack), "flat" (a garment laid flat), "shoes" (a product photo showing ONLY footwear, no garment), "other".',
     'Q1: is there a real human person WEARING the garment (not a flat-lay, not a mannequin dummy, not a hanger)?',
     'Q2: if yes, locate the head. Give:',
     '  - "face": a TIGHT box around the face only — from the hairline/forehead to the chin, temple to temple. No neck, no shoulders.',
     '  - "hair": a box around the visible hair of the head (may extend above and to the sides of the face). Do NOT include the neck, shoulders or clothing.',
     '  - "chinY": the vertical position of the bottom of the chin.',
     'Answer with strict JSON only, no prose:',
-    '{"hasPerson": boolean, "face": {"ymin":int,"xmin":int,"ymax":int,"xmax":int} | null, "hair": {"ymin":int,"xmin":int,"ymax":int,"xmax":int} | null, "chinY": int | null}',
+    '{"kind": string, "hasPerson": boolean, "face": {"ymin":int,"xmin":int,"ymax":int,"xmax":int} | null, "hair": {"ymin":int,"xmin":int,"ymax":int,"xmax":int} | null, "chinY": int | null}',
     'All numbers are integers on a 0-1000 scale relative to the full image: y is vertical (0 = top), x is horizontal (0 = left).',
     'If the head is partly out of frame, clamp to the frame. If no person, face/hair/chinY are null.',
   ].join('\n')
@@ -67,17 +72,18 @@ export async function detectHead(buf: Buffer, mime: string, apiKey: string): Pro
       }
       const text = (json?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => typeof p?.text === 'string').map((p: any) => p.text).join('').trim()
       const parsed = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''))
+      const kind: PhotoKind | undefined = ['worn', 'hanger', 'flat', 'shoes', 'other'].includes(parsed?.kind) ? parsed.kind : undefined
       const hasPerson = !!parsed?.hasPerson
-      if (!hasPerson) return { hasPerson: false, model }
+      if (!hasPerson) return { hasPerson: false, kind, model }
 
       const face = parseBox(parsed.face)
       const hair = parseBox(parsed.hair)
       const chinY = Number.isFinite(Number(parsed.chinY)) ? Math.max(0, Math.min(1000, Number(parsed.chinY))) / 1000 : null
-      if (!face) return { hasPerson, model, error: 'visage non localisé' }
+      if (!face) return { hasPerson, kind, model, error: 'visage non localisé' }
 
       // --- Garde-fous : un visage fait rarement plus de 30 % de la hauteur d'une photo de tenue
       const faceH = face.ymax - face.ymin, faceW = face.xmax - face.xmin
-      if (faceH > 0.35 || faceW > 0.5) return { hasPerson, model, error: `boîte visage aberrante (${Math.round(faceW * 100)}×${Math.round(faceH * 100)} %)` }
+      if (faceH > 0.35 || faceW > 0.5) return { hasPerson, kind, model, error: `boîte visage aberrante (${Math.round(faceW * 100)}×${Math.round(faceH * 100)} %)` }
 
       // --- Union visage + cheveux, bornée au menton
       let box: Box = { ...face }
@@ -96,7 +102,7 @@ export async function detectHead(buf: Buffer, mime: string, apiKey: string): Pro
       box.xmax = Math.min(box.xmax, cx + maxHalfW)
       if (box.ymax <= box.ymin || box.xmax <= box.xmin) box = { ...face, ymax: Math.min(face.ymax, bottomLimit) }
 
-      return { hasPerson, box, model }
+      return { hasPerson, kind, box, model }
     } catch (e: any) {
       lastErr = `${model}: ${e?.message ?? e}`
     }

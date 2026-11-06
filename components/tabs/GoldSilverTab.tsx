@@ -3,8 +3,8 @@
  * Onglet 🥇 Golden Silver — batch lifestyle depuis un ZIP Notion.
  *
  * UN visuel de FACE par look :
- *   IMAGE 1 = Files (Front), IMAGE 2 = FACE PHOTO du mannequin,
- *   IMAGE 3 = Details (optionnel, guide de fidélité du vêtement, pas une sortie).
+ *   IMAGE 1 = FACE PHOTO du mannequin, IMAGE 2 = FRONT-model (corps), puis Files (Front),
+ *   puis Details (optionnel, guide de fidélité du vêtement, pas une sortie).
  *   prompt = REFERENCES fixe (pieds + chaussures identiques) + description du
  *   décor (Notion) + "Detail texte" optionnel + TECHNICAL (ratio).
  * Mannequin et décor : colonnes Model / Décor du LOOK, sinon tirage aléatoire
@@ -16,7 +16,7 @@ import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
 import { compressImage } from '@/lib/compressImage'
 import { parseGoldSilverExport, normName, type GSExport, type GSTask, type GSModel } from '@/lib/notion/parseGoldSilverExport'
-import { buildGoldSilverPrompt, buildGoldSilverBackPrompt } from '@/lib/goldSilverPrompt'
+import { buildGoldSilverPrompt, buildGoldSilverBackPrompt, decorPoses } from '@/lib/goldSilverPrompt'
 
 type SubMode = 'front' | 'back'
 
@@ -157,11 +157,15 @@ export default function GoldSilverTab() {
       decor: decorOk ? undefined : pickRandom(res.decors)?.name,
     }
   }
+  // Pose d'un look : un numéro tiré au sort, ramené à la liste des poses de son décor (change avec le décor, re-tirable)
+  const [poseSeed, setPoseSeed] = useState<Record<string, number>>({})
+  const newPoseSeed = () => Math.floor(Math.random() * 1000)
   const rerollLook = (lookId: string) => {
     if (!parsed) return
     const t = parsed.tasks.find(x => x.lookId === lookId)
     if (t) {
       setRandomPick(prev => ({ ...prev, [lookId]: rollLook(t, parsed) }))
+      setPoseSeed(prev => ({ ...prev, [lookId]: newPoseSeed() }))
       setOverrides(prev => { const n = { ...prev }; delete n[lookId]; return n })
       invalidateLook(lookId)
     }
@@ -205,6 +209,7 @@ export default function GoldSilverTab() {
       const picks: Record<string, { model?: string; decor?: string }> = {}
       for (const t of res.tasks) picks[t.lookId] = rollLook(t, res)
       setRandomPick(picks)
+      setPoseSeed(Object.fromEntries(res.tasks.map(t => [t.lookId, newPoseSeed()])))
       setOverrides({})
     } catch (e: any) {
       setError(e?.message ?? String(e))
@@ -240,6 +245,9 @@ export default function GoldSilverTab() {
     const n = effectiveDecorName(t)
     return n ? parsed?.decors.find(d => normName(d.name) === normName(n)) : undefined
   }
+
+  const posesOf = (t: GSTask) => { const d = resolveDecor(t); return d ? decorPoses(d.description) : [] }
+  const poseIndex = (t: GSTask) => { const n = posesOf(t).length; return n ? (poseSeed[t.lookId] ?? 0) % n : 0 }
 
   /* ----------- Dossier sortie ----------- */
   const pickOutputDir = async () => {
@@ -368,13 +376,13 @@ export default function GoldSilverTab() {
         await new Promise(r => setTimeout(r, 500))
       }
       const modelDescription = modelDescsRef.current[model.name]?.status === 'done' ? modelDescsRef.current[model.name].text : undefined
-      const prompt = buildGoldSilverPrompt({
-        decorName: decor.name, decorDescription: decor.description, ratio, sku: t.sku, detailText: t.detailText,
-        outfitCount: outfitUrls.length, hasBody: !!bodyUrl, detailCount: detailUrls.length, modelDescription, framing,
-      })
+      // Le prompt est construit côté serveur : il dépend du classement des photos (tenue, chaussures)
       const resp = await fetch('/api/studio/gold-silver', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outfitUrls, faceUrl, bodyUrl: bodyUrl || undefined, detailUrls, prompt, ratio, quality, sku: framing === 'closeup' ? `${t.sku}-closeup` : t.sku, maskFaces, framing }),
+        body: JSON.stringify({
+          outfitUrls, faceUrl, bodyUrl: bodyUrl || undefined, detailUrls, ratio, quality, sku: framing === 'closeup' ? `${t.sku}-closeup` : t.sku, maskFaces, framing,
+          promptOpts: { decorName: decor.name, decorDescription: decor.description, sku: t.sku, detailText: t.detailText, modelDescription, pose: posesOf(t)[poseIndex(t)] },
+        }),
       })
       const text = await resp.text()
       let json: any
@@ -473,7 +481,7 @@ export default function GoldSilverTab() {
     }
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
-    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1, modelDescription: '(description du mannequin choisi, générée ci-dessus)', framing })
+    return buildGoldSilverPrompt({ decorName: decor.name, decorDescription: decor.description, ratio, sku: 'SKU', outfitCount: 2, hasBody: true, detailCount: 1, modelDescription: '(description du mannequin choisi, générée ci-dessus)', framing, pose: decorPoses(decor.description)[0] })
   }, [parsed, previewDecor, ratio, subMode, framing, backPose])
 
   const estCost = (stats.toRun * (quality === '4K' ? 0.24 : quality === '1K' ? 0.13 : 0.13)).toFixed(2)
@@ -502,8 +510,8 @@ export default function GoldSilverTab() {
         </div>
         {subMode === 'front' ? (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-            Un visuel <strong>de face</strong> par ligne. Entrées : toutes les photos <code>Files (Front)</code> (la tenue portée), puis <code>FACE PHOTO</code> + <code>FRONT-model</code> du mannequin, puis <code>Details</code> si présents — uniquement pour guider la fidélité du vêtement.
-            Prompt = REFERENCES (pieds et chaussures identiques toujours visibles, mannequin grande et élancée) + description du décor + ratio. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
+            Un visuel <strong>de face</strong> par ligne. Entrées : <code>FACE PHOTO</code> (image 1) + <code>FRONT-model</code> (image 2) du mannequin, puis toutes les photos <code>Files (Front)</code> (la tenue portée), puis <code>Details</code> si présents — uniquement pour guider la fidélité du vêtement.
+            Prompt = REFERENCES (pieds et chaussures toujours visibles, proportions naturelles) + une pose tirée au sort + décor condensé (sans la liste des poses, l'attitude, le cadrage et « à éviter ») + ratio. Une photo de chaussures seules dans <code>Files (Front)</code> est reconnue : le mannequin les porte. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
           </p>
         ) : (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
@@ -733,6 +741,15 @@ export default function GoldSilverTab() {
                     )}
                     {(!modelOk || !decorOk) && <span style={pill('#FEE2E2', '#991B1B')}>{!modelOk ? 'mannequin invalide' : 'décor invalide'}</span>}
                     {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 détail texte</span>}
+                    {posesOf(t0).length > 0 && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#F3F4F6', borderRadius: 999, padding: '2px 6px 2px 8px', maxWidth: '100%' }} title={`Pose : ${posesOf(t0)[poseIndex(t0)]}`}>
+                        <span style={{ fontSize: 11 }}>🧍</span>
+                        <select value={poseIndex(t0)} disabled={running} style={{ ...selStyle, maxWidth: 240 }}
+                                onChange={e => { setPoseSeed(prev => ({ ...prev, [lookId]: Number(e.target.value) })); invalidateLook(lookId) }}>
+                          {posesOf(t0).map((p, i) => <option key={i} value={i}>{p}</option>)}
+                        </select>
+                      </span>
+                    )}
                     <span style={pill('#E5E7EB', '#374151')}>🧥 {t0.outfitKeys.length} front</span>
                     <span style={pill(t0.detailKeys.length ? '#DCFCE7' : '#F3F4F6', t0.detailKeys.length ? '#166534' : '#6B7280')}>
                       {t0.detailKeys.length ? `🔍 ${t0.detailKeys.length} détail${t0.detailKeys.length > 1 ? 's' : ''} en guide` : 'sans détail'}
@@ -750,9 +767,9 @@ export default function GoldSilverTab() {
                           </>
                         ) : (
                           <>
-                            {t0.outfitKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.outfitKeys.length > 1 ? `Front ${i + 1}` : 'Front'} />)}
                             {resolveModel(t0)?.faceKey && <InputThumb key={resolveModel(t0)!.faceKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.faceKey!} label="Visage" />}
                             {resolveModel(t0)?.bodyKey && <InputThumb key={resolveModel(t0)!.bodyKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.bodyKey!} label="Corps" />}
+                            {t0.outfitKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.outfitKeys.length > 1 ? `Front ${i + 1}` : 'Front'} />)}
                             {t0.detailKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Détail ${i + 1}`} />)}
                           </>
                         )}
