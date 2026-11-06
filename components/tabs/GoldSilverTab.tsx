@@ -196,6 +196,8 @@ export default function GoldSilverTab() {
     setParsing(true); setProgress('Lecture du ZIP…')
     try {
       const res = await parseGoldSilverExport(files[0], msg => setProgress(msg))
+      // Cartes triées par nom de look (A→Z, sans tenir compte de la casse ; « LOOK 2 » avant « LOOK 10 »)
+      res.tasks.sort((a, b) => a.sku.localeCompare(b.sku, 'fr', { numeric: true, sensitivity: 'base' }))
       setParsed(res)
       const ns: State[] = resetStatesForMode(subMode, res.tasks.map(t => ({ task: t, status: 'pending' as TaskStatus, enabled: true, versions: [] })))
       setStates(ns); statesRef.current = ns
