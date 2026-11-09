@@ -100,6 +100,10 @@ export default function GoldSilverTab() {
   const [concurrency, setConcurrency] = useState(2)
   // Masquer visage + cheveux du mannequin d'origine sur les photos de tenue portée
   const [maskFaces, setMaskFaces] = useState(true)
+  // Mode brut : photos d'origine (ni compression ni pixelisation), texte Notion seul, rien d'ajouté par Zulo
+  const [rawMode, setRawModeState] = useState(false)
+  useEffect(() => { try { setRawModeState(localStorage.getItem('gs-raw-mode') === '1') } catch { /* */ } }, [])
+  const setRawMode = (v: boolean) => { setRawModeState(v); try { localStorage.setItem('gs-raw-mode', v ? '1' : '0') } catch { /* */ } }
 
   // Descriptions courtes des mannequins (générées UNE fois, cache localStorage, éditables)
   type ModelDesc = { text: string; status: 'pending' | 'running' | 'done' | 'error'; error?: string; fromCache?: boolean }
@@ -181,21 +185,23 @@ export default function GoldSilverTab() {
   // Cache des uploads Blob (clé ZIP → URL) : un visage sert à toutes les vues
   const urlCacheRef = useRef<Map<string, Promise<string>>>(new Map())
   const uploadKey = (key: string): Promise<string> => {
+    const raw = rawMode
     const cache = urlCacheRef.current
-    let p = cache.get(key)
+    const ck = raw ? `raw:${key}` : key
+    let p = cache.get(ck)
     if (!p) {
       p = (async () => {
-        const f = await parsed!.getFile(key)
+        const f = raw ? await parsed!.getRawFile(key) : await parsed!.getFile(key)
         if (!f) throw new Error(`Fichier ZIP introuvable : ${key}`)
         let file = f
-        try { file = await compressImage(f, { maxSide: 2048, quality: 0.9 }) } catch { /* brut */ }
+        if (!raw) try { file = await compressImage(f, { maxSide: 2048, quality: 0.9 }) } catch { /* brut */ }
         const b = await upload(`gold-silver-inputs/${Date.now()}-${file.name}`, file, {
           access: 'public', handleUploadUrl: '/api/blob-upload', contentType: file.type || 'application/octet-stream',
         })
         return b.url
       })()
-      cache.set(key, p)
-      p.catch(() => cache.delete(key))
+      cache.set(ck, p)
+      p.catch(() => cache.delete(ck))
     }
     return p
   }
@@ -347,7 +353,7 @@ export default function GoldSilverTab() {
         const resp = await fetch('/api/studio/gold-silver', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: subMode, frontVisualUrl, faceUrl, outfitUrls: garmentUrls, prompt, ratio, quality, maskFaces,
+            mode: subMode, frontVisualUrl, faceUrl, outfitUrls: garmentUrls, prompt, ratio, quality, maskFaces, raw: rawMode,
             promptOpts: isProfile ? { sku: t.sku, detailText: t.detailText, modelDescription, poseDirection: refPose } : undefined,
             sku: `${t.sku}${modeSuffix(subMode)}${framing === 'closeup' ? '-closeup' : ''}`, framing, customPose: !!refPose.trim(),
           }),
@@ -387,7 +393,7 @@ export default function GoldSilverTab() {
         Promise.all(t.outfitKeys.map(uploadKey)),
         uploadKey(model.faceKey),
         model.bodyKey ? uploadKey(model.bodyKey) : Promise.resolve(''),
-        Promise.all(t.detailKeys.map(uploadKey)),
+        rawMode ? Promise.resolve([] as string[]) : Promise.all(t.detailKeys.map(uploadKey)),
       ])
       // Description du mannequin : on attend si elle est encore en cours (max ~20 s)
       for (let i = 0; i < 40 && modelDescsRef.current[model.name]?.status === 'running'; i++) {
@@ -398,7 +404,7 @@ export default function GoldSilverTab() {
       const resp = await fetch('/api/studio/gold-silver', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          outfitUrls, faceUrl, bodyUrl: bodyUrl || undefined, detailUrls, ratio, quality, sku: framing === 'closeup' ? `${t.sku}-closeup` : t.sku, maskFaces, framing,
+          outfitUrls, faceUrl, bodyUrl: bodyUrl || undefined, detailUrls, ratio, quality, sku: framing === 'closeup' ? `${t.sku}-closeup` : t.sku, maskFaces, framing, raw: rawMode,
           promptOpts: { decorName: decor.name, decorDescription: decor.description, sku: t.sku, detailText: t.detailText, modelDescription },
         }),
       })
@@ -649,6 +655,15 @@ export default function GoldSilverTab() {
           </div>
         </div>
         <label style={{ marginTop: 12, fontSize: 12, color: '#0D4A5C', display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={rawMode} onChange={e => setRawMode(e.target.checked)} style={{ marginTop: 2 }} />
+          <span>
+            <strong>Mode brut</strong> — photos d'origine du ZIP (pas de compression, pas de pixelisation){subMode === 'front' ? ', texte du décor Notion seul (numéros d’image adaptés + colonne Description), une ligne de légende par image, sans photo de chaussures seules ni photos Details' : ', une ligne de légende par image'}, aucune note ni vérification finale ajoutée par Zulo.
+            <span style={{ display: 'block', fontSize: 11, color: '#6B7A8A' }}>
+              Plus de garde-fou peau : si la tenue est portée par une personne à la peau très différente, la couleur peut déteindre sur la mannequin.{subMode !== 'front' ? ' En Profil → Face / Face → Dos, le texte reste celui de Zulo (pas de décor Notion pour ces modes).' : ''}
+            </span>
+          </span>
+        </label>
+        <label style={{ marginTop: 12, fontSize: 12, color: '#0D4A5C', display: rawMode ? 'none' : 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
           <input type="checkbox" checked={maskFaces} onChange={e => setMaskFaces(e.target.checked)} style={{ marginTop: 2 }} />
           <span>
             <strong>Masquer visage + cheveux du mannequin d'origine</strong> sur les photos de tenue portée{subMode === 'back' ? ' (photos de dos — souvent pas de visage détecté, c\'est normal)' : subMode === 'profile' ? ' (packshot porté de face par une autre mannequin)' : ''}

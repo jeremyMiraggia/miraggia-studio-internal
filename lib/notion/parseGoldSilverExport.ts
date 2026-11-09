@@ -46,6 +46,8 @@ export type GSExport = {
   warnings: string[]
   /** Extrait un fichier du ZIP par clé (compressé si image > 1.5 MB). */
   getFile:  (key: string) => Promise<File | undefined>
+  /** Fichier d'origine du ZIP, jamais compressé (mode brut). */
+  getRawFile: (key: string) => Promise<File | undefined>
 }
 
 export async function parseGoldSilverExport(
@@ -97,6 +99,12 @@ export async function parseGoldSilverExport(
       fileCache.set(key, p)
     }
     return p
+  }
+  const getRawFile = async (key: string): Promise<File | undefined> => {
+    const entry = zipIndex.get(key)
+    if (!entry) return undefined
+    const base = baseName(key)
+    return new File([await extractEntry(workingFile, entry)], base, { type: guessMime(base) })
   }
   const readCsvText = async (key: string): Promise<string | undefined> => {
     const entry = zipIndex.get(key)
@@ -169,7 +177,7 @@ export async function parseGoldSilverExport(
   onProgress?.('Parsing des looks…')
   const rows = parseCsv((await readCsvText(lookKey)) ?? '')
   warnings.push(`📊 ${rows.length} ligne(s) LOOK.`)
-  if (rows.length === 0) return { tasks: [], models, decors, warnings, getFile }
+  if (rows.length === 0) return { tasks: [], models, decors, warnings, getFile, getRawFile }
 
   const headers = Object.keys(rows[0])
   const findCol = (candidates: string[], exclude: string[] = []): string => {
@@ -269,7 +277,7 @@ export async function parseGoldSilverExport(
   const withBack    = tasks.filter(t => t.backKeys.length > 0).length
   const withProfile = tasks.filter(t => t.validatedKeys.length > 0).length
   warnings.push(`✅ ${tasks.length} look(s) (${multiFront} avec plusieurs photos Front, ${withDetail} avec détail(s), ${withBack} avec photo(s) Back, ${withProfile} avec visuel OK), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
-  return { tasks, models, decors, warnings, getFile }
+  return { tasks, models, decors, warnings, getFile, getRawFile }
 }
 
 /* ============================== helpers ============================== */

@@ -199,6 +199,22 @@ export function renumberDecor(decor: string, labels: { model: string; outfit: st
 }
 
 /**
+ * MODE BRUT (vue de face) : le texte du décor Notion seul, numéros d'image adaptés,
+ * + la colonne Description. Aucun bloc ajouté par Zulo (les légendes d'image sont ajoutées par la route).
+ */
+export function buildGoldSilverRawPrompt(opts: {
+  decorDescription: string
+  outfitLabel: string   // ex. « IMAGE 3 » ou « IMAGES 3 à 4 »
+  detailText?: string
+  closeup?: boolean
+}): string {
+  const lines = [renumberDecor(opts.decorDescription, { model: 'IMAGE 1', outfit: opts.outfitLabel }).trim()]
+  if (opts.detailText?.trim()) lines.push('', `DESCRIPTION DU VÊTEMENT : ${opts.detailText.trim()}`)
+  if (opts.closeup) lines.push('', 'CADRAGE : gros plan, de la tête à la taille, jambes et chaussures hors cadre.')
+  return lines.join('\n')
+}
+
+/**
  * Prompt Golden Silver — bloc REFERENCES fixe + description du décor (Notion) + bloc TECHNICAL.
  *
  * Ordre des images envoyées (le mannequin toujours en premier) :
