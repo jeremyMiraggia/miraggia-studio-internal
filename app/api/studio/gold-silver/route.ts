@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
 import { compareSkin, detectHead, maskHead, type PhotoKind } from '@/lib/faceMask'
-import { buildGoldSilverPrompt } from '@/lib/goldSilverPrompt'
+import { buildGoldSilverPrompt, buildGoldSilverProfileToFrontPrompt } from '@/lib/goldSilverPrompt'
 import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
@@ -30,14 +30,16 @@ async function handlePOST(request: Request) {
     const quality: string   = body.quality ?? '2K'
     const sku: string       = body.sku ?? ''
     const maskFaces: boolean = body.maskFaces !== false
-    // mode 'back' : IMAGE 1 = visuel de face final (frontVisualUrl), outfitUrls = tenue vue de dos
-    const mode: 'front' | 'back' = body.mode === 'back' ? 'back' : 'front'
+    // mode 'back'    : IMAGE 1 = visuel de face final (frontVisualUrl), outfitUrls = tenue vue de dos
+    // mode 'profile' : IMAGE 1 = visuel de profil validé (frontVisualUrl), outfitUrls = tenue vue de face portée par une autre personne
+    const mode: 'front' | 'back' | 'profile' = body.mode === 'back' ? 'back' : body.mode === 'profile' ? 'profile' : 'front'
+    const refMode = mode !== 'front'   // le prompt vient du navigateur, IMAGE 1 = visuel de référence déjà validé
     const closeup: boolean = body.framing === 'closeup'
     const frontVisualUrl: string = isUrl(body.frontVisualUrl) ? body.frontVisualUrl : ''
 
     if (outfitUrls.length === 0) return NextResponse.json({ error: 'Au moins une outfitUrl requise.' }, { status: 400 })
     if (mode === 'front' && !isUrl(faceUrl)) return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
-    if (mode === 'back' && !frontVisualUrl)  return NextResponse.json({ error: 'frontVisualUrl requise en mode back.' }, { status: 400 })
+    if (refMode && !frontVisualUrl)  return NextResponse.json({ error: `frontVisualUrl requise en mode ${mode}.` }, { status: 400 })
     if (mode === 'back' && !backPrompt.trim()) return NextResponse.json({ error: 'prompt requis.' }, { status: 400 })
     if (mode === 'front' && !String(promptOpts.decorDescription ?? '').trim()) return NextResponse.json({ error: 'décor requis.' }, { status: 400 })
 
@@ -52,7 +54,7 @@ async function handlePOST(request: Request) {
     const faceImg = mode === 'front' ? await fetchImage(faceUrl) : null
     for (const u of outfitUrls) {
       const { buf, mime } = await fetchImage(u)
-      if (!maskFaces && mode === 'back') { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
+      if (!maskFaces && refMode) { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
       const det = await detectHead(buf, mime, apiKey)
       const kind = det.kind, worn = det.hasPerson ? { buf, mime } : undefined
       if (kind === 'shoes') { outfits.push({ part: toPart(buf, mime), masked: false, kind, worn, note: 'chaussures à porter' }); continue }
@@ -78,11 +80,16 @@ async function handlePOST(request: Request) {
     // Mode face : les chaussures seules sont séparées de la tenue (jamais envoyées en close-up, hors cadre).
     // Si tout est classé « chaussures », on ne sépare rien : il faut au moins une image de tenue.
     const hasGarment = outfits.some(o => o.kind !== 'shoes')
-    const garments = mode === 'front' && hasGarment ? outfits.filter(o => o.kind !== 'shoes') : outfits
+    // Profil → Face : les chaussures seules ne sont pas envoyées, le mannequin garde celles du visuel validé (IMAGE 1)
+    const garments = mode !== 'back' && hasGarment ? outfits.filter(o => o.kind !== 'shoes') : outfits
+    if (mode === 'profile' && hasGarment) for (const o of outfits) if (o.kind === 'shoes') o.note = 'chaussures seules : non envoyées (celles du visuel validé sont gardées)'
     const shoes = mode === 'front' && hasGarment && !closeup ? outfits.filter(o => o.kind === 'shoes') : []
     const nOut = garments.length
 
-    const prompt = mode === 'back' ? backPrompt : buildGoldSilverPrompt({
+    const prompt = mode === 'back' ? backPrompt : mode === 'profile' ? buildGoldSilverProfileToFrontPrompt({
+      ratio, sku: promptOpts.sku, outfitCount: nOut, detailText: promptOpts.detailText, modelDescription: promptOpts.modelDescription,
+      framing: closeup ? 'closeup' : 'full', poseDirection: promptOpts.poseDirection,
+    }) : buildGoldSilverPrompt({
       decorName: String(promptOpts.decorName ?? ''), decorDescription: String(promptOpts.decorDescription),
       ratio, sku: promptOpts.sku, detailText: promptOpts.detailText, modelDescription: promptOpts.modelDescription,
       framing: closeup ? 'closeup' : 'full',
@@ -91,7 +98,30 @@ async function handlePOST(request: Request) {
     const sessionId = Date.now()
     const parts: any[] = [{ text: `[SESSION ${sessionId}]\n${prompt}` }]
 
-    if (mode === 'back') {
+    if (mode === 'profile') {
+      // IMAGE 1 = visuel de profil validé ; IMAGES 2..n+1 = tenue de face portée par une autre personne (tête masquée)
+      const refImg = await fetchImage(frontVisualUrl)
+      if (anyMasked) {
+        parts.push({ text: 'NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The model is the one in IMAGE 1. Do not reproduce any pixelation.' })
+      }
+      // Peau : si la personne de la photo de tenue a une peau nettement différente du mannequin, on le dit explicitement
+      const skinChecks = await Promise.all(garments.map(o => o.worn ? compareSkin(refImg, o.worn, apiKey).catch(() => null) : Promise.resolve(null)))
+      const skinClash = skinChecks.map((c, i) => ({ i, c })).filter(x => x.c && x.c.verdict !== 'similar')
+      if (skinClash.length) {
+        const c = skinClash[0].c!
+        parts.push({ text: `⚠ SKIN TONE: the person wearing the garment in ${skinClash.map(x => `IMAGE ${x.i + 2}`).join(', ')} has a clearly ${c.verdict === 'darker' ? 'DARKER' : 'LIGHTER'} skin tone${c.wearer ? ` (${c.wearer})` : ''} than the model. She is NOT the model — take ONLY the garment from that photo. EVERY visible skin area of the final image (face, neck, chest, shoulders, arms, hands, legs, feet) must have the model's own ${c.model ? `${c.model} ` : ''}skin tone and undertone, exactly as in IMAGE 1, uniform from head to toe.` })
+        for (const x of skinClash) garments[x.i].note = [garments[x.i].note, `peau ${x.c!.verdict === 'darker' ? 'plus foncée' : 'plus claire'} que le mannequin : signalée à Gemini`].filter(Boolean).join(' · ')
+      }
+      parts.push({ text: '=== IMAGE 1 — VALIDATED PROFILE PHOTOGRAPH: same model, same place, same light, same style to keep ===' })
+      parts.push(toPart(refImg.buf, refImg.mime))
+      for (let i = 0; i < nOut; i++) {
+        parts.push({ text: `=== IMAGE ${i + 2} — OUTFIT${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''}, worn by another person (reproduce this garment exactly, ignore that person) ===` })
+        parts.push(garments[i].part)
+      }
+      const framingCheck = closeup ? 'CLOSE-UP from above the head to the waist/hips, legs and feet out of frame' : 'same shoes as IMAGE 1, feet fully visible'
+      const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : 'facing the camera, relaxed and composed'
+      parts.push({ text: `⚠ FINAL CHECK : ONE photograph from the FRONT · same model (face identical to IMAGE 1) and same scene as IMAGE 1 · front of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · all visible skin has the model's skin tone from IMAGE 1, never the outfit wearer's · ${framingCheck} · ${poseCheck} · natural human proportions and anatomy · same light, film look and mood as IMAGE 1 · no text, no collage.` })
+    } else if (mode === 'back') {
       // IMAGE 1 = visuel de face final ; IMAGES 2..n+1 = tenue de dos
       if (anyMasked) {
         parts.push({ text: 'NOTE ON THE BACK-VIEW OUTFIT REFERENCES: the head of the person wearing the garment may be INTENTIONALLY pixelated. Ignore that person — the model is the one in IMAGE 1. Do not reproduce any pixelation.' })

@@ -91,6 +91,95 @@ export function buildGoldSilverBackPrompt(opts: {
 }
 
 /**
+ * Prompt Golden Silver — sous-onglet PROFIL → FACE.
+ *
+ *   IMAGE 1        = le visuel de PROFIL validé — colonne VISUELS OK (mannequin + décor + lumière à CONSERVER)
+ *   IMAGES 2…n+1   = la tenue portée par une autre personne — Files (Front) puis PROFIL (chaussures seules retirées :
+ *                    le mannequin garde celles de l'IMAGE 1). Prompt construit côté serveur (n dépend du classement).
+ *
+ * Sortie : le même mannequin, dans le même décor, vu de face.
+ */
+export function buildGoldSilverProfileToFrontPrompt(opts: {
+  ratio: string
+  sku?: string
+  outfitCount?: number
+  detailText?: string
+  modelDescription?: string
+  framing?: 'full' | 'closeup'
+  poseDirection?: string         // texte libre de l'onglet : REMPLACE la pose par défaut
+}): string {
+  const closeup = opts.framing === 'closeup'
+  const pose = opts.poseDirection?.trim()
+  const n = Math.max(1, opts.outfitCount ?? 1)
+  const outfitLabel = n === 1 ? 'IMAGE 2' : `IMAGES 2 to ${n + 1}`
+  const lines = [
+    'EDITORIAL FASHION PHOTOGRAPH — FRONT VIEW OF AN EXISTING SHOT',
+    '',
+    'REFERENCES (strict):',
+    '- IMAGE 1 = the VALIDATED PROFILE photograph of this look. It defines EVERYTHING that',
+    '  must stay identical: the SAME model (face, identity, hair color/texture/length, skin',
+    '  tone, build, height), the SAME location and background, the SAME light direction,',
+    '  time of day, color palette, film look and grain, and the same photographic style and',
+    '  distance to camera. Treat it as the previous frame of the same shoot: she has just',
+    '  turned to face the camera.',
+    `- ${outfitLabel} = the OUTFIT, worn by ANOTHER person (front view${n > 1 ? ', plus other angles of the same pieces' : ''}). Reproduce the`,
+    '  front of the garment exactly: neckline, closure, buttons, pockets, seams, waist,',
+    '  sleeve and hem length, fabric, color, print. No reinterpretation. It is the same',
+    '  garment as the one worn in IMAGE 1. Take ONLY the garment: that person is NOT the',
+    '  model — ignore her face, hair, skin tone, arms, hands, legs and body. All visible',
+    '  skin is the model’s own, as in IMAGE 1.',
+    closeup
+      ? '  SHOES: not part of this shot — the framing stops well above the legs.'
+      : '  SHOES: exactly the same shoes as in IMAGE 1.',
+  ]
+  if (opts.modelDescription?.trim()) {
+    lines.push(
+      '  MODEL DESCRIPTION (must match IMAGE 1):',
+      ...opts.modelDescription.trim().split('\n').map(l => `  ${l.trim()}`).filter(l => l.trim()),
+    )
+  }
+  if (closeup) {
+    lines.push(
+      '',
+      'OUTPUT — CLOSE-UP FRONT: ONE photograph of the same model, in the same place, seen',
+      'from the FRONT, framed as a CLOSE-UP / UPPER MID-BODY shot: from just above the head',
+      'down to the waist/hips at most. Her face is sharp, fully visible and unmistakably the',
+      'model of IMAGE 1. The upper front of the garment (neckline, shoulders, chest, print,',
+      'fabric texture) is sharp and fully readable. Legs, feet and shoes are OUT of frame.',
+      'The background is the SAME location as IMAGE 1 — same walls, materials, light',
+      'direction and color palette. 85-105 mm portrait feel, natural headroom.',
+    )
+  } else {
+    lines.push(
+      '',
+      'OUTPUT: ONE photograph of the same model, in the same place, seen from the FRONT,',
+      'face fully visible and unmistakably the model of IMAGE 1. The front of the garment',
+      'must be fully readable. FEET: feet and shoes fully visible, never cut by the frame.',
+      'Full-length figure, small margin below the shoes. Same aspect ratio and framing',
+      'distance as IMAGE 1.',
+    )
+  }
+  if (pose) {
+    lines.push('', 'POSE & ADJUSTMENTS (art direction — takes priority over any default pose; the framing and garment fidelity above stay mandatory):', pose)
+  } else {
+    lines.push(
+      '',
+      'POSE: facing the camera, relaxed and composed — weight on one leg, shoulders relaxed, arms loose or one hand lightly resting, calm gaze to camera, mouth closed. Natural, never stiff.',
+    )
+  }
+  if (opts.detailText?.trim()) {
+    lines.push('', 'GARMENT DESCRIPTION (from the brief — follow it exactly, especially the lengths; it takes precedence over how the garment falls in the outfit photos):', opts.detailText.trim())
+  }
+  lines.push(
+    '---------------',
+    'TECHNICAL:',
+    `Aspect ratio ${opts.ratio}. High resolution. Photorealistic. Same film stock, grain and color rendering as IMAGE 1.`,
+  )
+  if (opts.sku) lines.push(`Reference: ${opts.sku}.`)
+  return lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n')
+}
+
+/**
  * Texte du décor Notion envoyé TEL QUEL : seuls les numéros d'image sont adaptés.
  * Convention Notion : « image 1 » = la tenue, « image 2 » = le mannequin.
  * Dans Zulo : IMAGE 1 = visage du mannequin, (IMAGE 2 = corps), puis la tenue.

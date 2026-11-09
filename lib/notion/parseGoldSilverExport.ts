@@ -31,6 +31,8 @@ export type GSTask = {
   outfitKeys: string[]
   detailKeys: string[]
   backKeys:   string[]    // Files (Back) — utilisé par le sous-onglet Back (tenue vue de dos)
+  validatedKeys: string[] // VISUELS OK — visuel déjà validé (de profil), IMAGE 1 du sous-onglet Profil → Face
+  profileKeys: string[]   // PROFIL — autres photos de la tenue portée (ex. la jupe de profil), références de tenue en Profil → Face
   modelName?: string      // colonne Model du LOOK (vide → tirage aléatoire côté onglet)
   decorName?: string      // colonne Décor du LOOK (vide → tirage aléatoire côté onglet)
   detailText?: string     // colonne "Detail texte" (optionnelle) — ajoutée au prompt
@@ -186,14 +188,15 @@ export async function parseGoldSilverExport(
   const skuCol     = findCol(['SKU', 'Nom', 'Name'])
   const frontCol   = findCol(['FILES (FRONT)', 'FRONT'], ['model'])
   const backCol    = findCol(['FILES (BACK)', 'BACK'])
-  // PROFIL : volontairement ignoré pour le moment
+  const profileCol = findCol(['PROFIL', 'PROFILE'])
+  const validatedCol = findCol(['VISUELS OK', 'VISUEL OK', 'VISUELS VALIDÉS', 'VISUEL VALIDÉ', 'VISUELS VALIDES', 'VISUEL VALIDE'])
   const detailsCol = findCol(['DETAILS', 'DETAIL'], ['texte', 'text'])
   // Texte libre ajouté tel quel au prompt : colonne « Description » et/ou « Detail texte » (les deux sont cumulées)
   const descCol    = headers.find(h => h.trim().toLowerCase() === 'description') ?? ''
   const detailTextCol = findCol(['Detail texte', 'Détail texte', 'Details texte', 'Detail text', 'Commentaire'])
   const modelCol   = findCol(['Model', 'Mannequin'], ['front-model'])
   const decorCol   = findCol(['Décor', 'Decor', 'Decors definition', 'Decors Definition', 'Fond'])
-  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" back="${backCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}" description="${descCol || '—'}" detail-texte="${detailTextCol || '—'}"`)
+  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" back="${backCol || '—'}" profil="${profileCol || '—'}" visuels-ok="${validatedCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}" description="${descCol || '—'}" detail-texte="${detailTextCol || '—'}"`)
 
   const tasks: GSTask[] = []
   let idx = 0
@@ -215,6 +218,8 @@ export async function parseGoldSilverExport(
     const frontRefs  = allRefs(frontCol)
     const detailRefs = allRefs(detailsCol)
     const backRefs   = allRefs(backCol)
+    const profileRefs = allRefs(profileCol)
+    const validatedRefs = allRefs(validatedCol)
     if (frontRefs.length === 0) { warnings.push(`⚠ Look ${lookId} (${sku}) : Files (Front) vide — ignoré.`); continue }
 
     const frontKeys = frontRefs.map(r => ({ ref: r, key: baseToKey.get(r) }))
@@ -235,6 +240,18 @@ export async function parseGoldSilverExport(
       if (k) backKeys.push(k)
       else w.push(`Back "${r}" introuvable dans le ZIP — ignoré.`)
     }
+    const profileKeys: string[] = []
+    for (const r of profileRefs) {
+      const k = baseToKey.get(r)
+      if (k) profileKeys.push(k)
+      else w.push(`Profil "${r}" introuvable dans le ZIP — ignoré.`)
+    }
+    const validatedKeys: string[] = []
+    for (const r of validatedRefs) {
+      const k = baseToKey.get(r)
+      if (k) validatedKeys.push(k)
+      else w.push(`Visuel OK "${r}" introuvable dans le ZIP — ignoré.`)
+    }
     // Mannequin / décor renseignés mais introuvables → signalé (l'onglet tirera au sort)
     if (modelName && !models.some(m => normName(m.name) === normName(modelName))) w.push(`Mannequin "${modelName}" absent de Models Definition → aléatoire.`)
     if (decorName && !decors.some(d => normName(d.name) === normName(decorName))) w.push(`Décor "${decorName}" absent de Decors Definition → aléatoire.`)
@@ -242,7 +259,7 @@ export async function parseGoldSilverExport(
     tasks.push({
       id: lookId, lookId, sku,
       outfitKeys: validFronts.map(f => f.key),
-      detailKeys, backKeys, modelName, decorName, detailText, warnings: w,
+      detailKeys, backKeys, profileKeys, validatedKeys, modelName, decorName, detailText, warnings: w,
     })
   }
 
@@ -250,7 +267,8 @@ export async function parseGoldSilverExport(
   const withDetail  = tasks.filter(t => t.detailKeys.length > 0).length
   const multiFront  = tasks.filter(t => t.outfitKeys.length > 1).length
   const withBack    = tasks.filter(t => t.backKeys.length > 0).length
-  warnings.push(`✅ ${tasks.length} look(s) (${multiFront} avec plusieurs photos Front, ${withDetail} avec détail(s), ${withBack} avec photo(s) Back), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
+  const withProfile = tasks.filter(t => t.validatedKeys.length > 0).length
+  warnings.push(`✅ ${tasks.length} look(s) (${multiFront} avec plusieurs photos Front, ${withDetail} avec détail(s), ${withBack} avec photo(s) Back, ${withProfile} avec visuel OK), ${models.length} mannequin(s), ${decors.length} décor(s).${randomLooks ? ` 🎲 ${randomLooks} look(s) avec mannequin et/ou décor tiré(s) au sort.` : ''}`)
   return { tasks, models, decors, warnings, getFile }
 }
 
