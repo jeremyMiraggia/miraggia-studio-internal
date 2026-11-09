@@ -188,10 +188,12 @@ export async function parseGoldSilverExport(
   const backCol    = findCol(['FILES (BACK)', 'BACK'])
   // PROFIL : volontairement ignoré pour le moment
   const detailsCol = findCol(['DETAILS', 'DETAIL'], ['texte', 'text'])
-  const detailTextCol = findCol(['Detail texte', 'Détail texte', 'Details texte', 'Detail text', 'Commentaire', 'Description'])
+  // Texte libre ajouté tel quel au prompt : colonne « Description » et/ou « Detail texte » (les deux sont cumulées)
+  const descCol    = headers.find(h => h.trim().toLowerCase() === 'description') ?? ''
+  const detailTextCol = findCol(['Detail texte', 'Détail texte', 'Details texte', 'Detail text', 'Commentaire'])
   const modelCol   = findCol(['Model', 'Mannequin'], ['front-model'])
   const decorCol   = findCol(['Décor', 'Decor', 'Decors definition', 'Decors Definition', 'Fond'])
-  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" back="${backCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}" detail-texte="${detailTextCol || '—'}"`)
+  warnings.push(`🧭 Colonnes : front="${frontCol || '—'}" back="${backCol || '—'}" details="${detailsCol || '—'}" model="${modelCol || '—'}" décor="${decorCol || '—'}" description="${descCol || '—'}" detail-texte="${detailTextCol || '—'}"`)
 
   const tasks: GSTask[] = []
   let idx = 0
@@ -202,7 +204,8 @@ export async function parseGoldSilverExport(
     if (!lookId && !sku) continue
     const modelName = modelCol ? stripRef(String(row[modelCol] ?? '').trim()) || undefined : undefined
     const decorName = decorCol ? stripRef(String(row[decorCol] ?? '').trim()) || undefined : undefined
-    const detailText = detailTextCol ? String(row[detailTextCol] ?? '').trim() || undefined : undefined
+    const detailText = [descCol, detailTextCol].filter(Boolean)
+      .map(c => String(row[c] ?? '').trim()).filter(Boolean).join('\n') || undefined
 
     // Une cellule Notion peut contenir plusieurs fichiers séparés par des virgules → TOUS
     const allRefs = (col: string): string[] => {

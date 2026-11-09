@@ -78,7 +78,7 @@ export function buildGoldSilverBackPrompt(opts: {
     )
   }
   if (opts.detailText?.trim()) {
-    lines.push('', 'ADDITIONAL DIRECTION (from the brief):', opts.detailText.trim())
+    lines.push('', 'GARMENT DESCRIPTION (from the brief — follow it exactly, especially the lengths; it takes precedence over how the garment falls in the outfit photos):', opts.detailText.trim())
   }
   lines.push(
     '---------------',
@@ -202,7 +202,7 @@ export function buildGoldSilverPrompt(opts: {
     )
   }
   if (opts.detailText?.trim()) {
-    lines.push('', 'ADDITIONAL DIRECTION (from the brief):', opts.detailText.trim())
+    lines.push('', 'GARMENT DESCRIPTION (from the brief — follow it exactly, especially the lengths; it takes precedence over how the garment falls in the outfit photos):', opts.detailText.trim())
   }
   lines.push(
     '-----------------',

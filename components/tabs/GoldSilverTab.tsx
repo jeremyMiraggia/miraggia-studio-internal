@@ -6,7 +6,7 @@
  *   IMAGE 1 = FACE PHOTO du mannequin, IMAGE 2 = FRONT-model (corps), puis Files (Front),
  *   puis Details (optionnel, guide de fidélité du vêtement, pas une sortie).
  *   prompt = REFERENCES fixe (pieds + chaussures identiques) + description du
- *   décor (Notion) + "Detail texte" optionnel + TECHNICAL (ratio).
+ *   décor (Notion) + "Description" / "Detail texte" optionnels + TECHNICAL (ratio).
  * Mannequin et décor : colonnes Model / Décor du LOOK, sinon tirage aléatoire
  * (re-tirable).
  */
@@ -503,7 +503,7 @@ export default function GoldSilverTab() {
         {subMode === 'front' ? (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
             Un visuel <strong>de face</strong> par ligne. Entrées : <code>FACE PHOTO</code> (image 1) + <code>FRONT-model</code> (image 2) du mannequin, puis toutes les photos <code>Files (Front)</code> (la tenue portée), puis <code>Details</code> si présents — uniquement pour guider la fidélité du vêtement.
-            Prompt = REFERENCES (rôle de chaque image, proportions naturelles, peau du mannequin) + texte du décor Notion <strong>tel quel</strong> (cadrage, attitude, poses, « à éviter » compris), seuls les numéros d'image sont adaptés : « image 1 » → la tenue, « image 2 » → le mannequin + ratio. Une photo de chaussures seules dans <code>Files (Front)</code> est reconnue : le mannequin les porte. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonne <code>Detail texte</code> ajoutée au prompt si présente.
+            Prompt = REFERENCES (rôle de chaque image, proportions naturelles, peau du mannequin) + texte du décor Notion <strong>tel quel</strong> (cadrage, attitude, poses, « à éviter » compris), seuls les numéros d'image sont adaptés : « image 1 » → la tenue, « image 2 » → le mannequin + ratio. Une photo de chaussures seules dans <code>Files (Front)</code> est reconnue : le mannequin les porte. Mannequin et décor : colonnes <code>Model</code> / <code>Décor</code> du look, sinon <strong>tirage aléatoire 🎲</strong>. Colonnes <code>Description</code> et <code>Detail texte</code> du look ajoutées telles quelles au prompt (description du vêtement, longueurs), en Face comme en Back.
           </p>
         ) : (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
@@ -705,7 +705,7 @@ export default function GoldSilverTab() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
                     <span style={pill(t0.outfitKeys.length ? '#E8F2F5' : '#FEE2E2', t0.outfitKeys.length ? '#0D4A5C' : '#991B1B')}>🧍 {t0.outfitKeys.length ? 'visuel face final' : 'pas de visuel face'}</span>
                     <span style={pill(t0.backKeys.length ? '#DCFCE7' : '#FEE2E2', t0.backKeys.length ? '#166534' : '#991B1B')}>🔄 {t0.backKeys.length ? `${t0.backKeys.length} photo${t0.backKeys.length > 1 ? 's' : ''} de dos` : 'pas de photo de dos'}</span>
-                    {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 détail texte</span>}
+                    {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 description</span>}
                   </div>
                   ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -732,7 +732,7 @@ export default function GoldSilverTab() {
                       </button>
                     )}
                     {(!modelOk || !decorOk) && <span style={pill('#FEE2E2', '#991B1B')}>{!modelOk ? 'mannequin invalide' : 'décor invalide'}</span>}
-                    {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 détail texte</span>}
+                    {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 description</span>}
                     <span style={pill('#E5E7EB', '#374151')}>🧥 {t0.outfitKeys.length} front</span>
                     <span style={pill(t0.detailKeys.length ? '#DCFCE7' : '#F3F4F6', t0.detailKeys.length ? '#166534' : '#6B7280')}>
                       {t0.detailKeys.length ? `🔍 ${t0.detailKeys.length} détail${t0.detailKeys.length > 1 ? 's' : ''} en guide` : 'sans détail'}
