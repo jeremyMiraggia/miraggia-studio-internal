@@ -85,7 +85,7 @@ async function handlePOST(request: Request) {
     const prompt = mode === 'back' ? backPrompt : buildGoldSilverPrompt({
       decorName: String(promptOpts.decorName ?? ''), decorDescription: String(promptOpts.decorDescription),
       ratio, sku: promptOpts.sku, detailText: promptOpts.detailText, modelDescription: promptOpts.modelDescription,
-      pose: promptOpts.pose, framing: closeup ? 'closeup' : 'full',
+      framing: closeup ? 'closeup' : 'full',
       outfitCount: nOut, shoesCount: shoes.length, hasBody: !!bodyUrl, detailCount: detailUrls.length,
     })
     const sessionId = Date.now()
@@ -154,7 +154,7 @@ async function handlePOST(request: Request) {
     }
     parts.push({ text: closeup
       ? `⚠ FINAL CHECK : ONE front-view CLOSE-UP / upper mid-body photograph (head to hips at most, no legs, no feet, no shoes) · garment identical to ${outfitLabel} (cut, color, print, details) · face identical to IMAGE 1, sharp · neck, arms and hands with the model's skin tone from ${modelSkinRef} · pose as described · scene, light, film look and mood exactly as described · no text, no collage.`
-      : `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${outfitLabel} (cut, color, print, details) · ${shoesCheck}, feet fully visible · face identical to IMAGE 1 · all visible skin (neck, arms, hands, legs) has the model's skin tone from ${modelSkinRef}, never the outfit wearer's · natural human proportions and anatomy · pose as described · scene, light, film look and mood exactly as described · no text, no collage.` })
+      : `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${outfitLabel} (cut, color, print, details) · ${shoesCheck} · framing as described in the scene · face identical to IMAGE 1 · all visible skin (neck, arms, hands, legs) has the model's skin tone from ${modelSkinRef}, never the outfit wearer's · natural human proportions and anatomy · ONE pose, as described in the scene · scene, light, film look and mood exactly as described · no text, no collage.` })
     }
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
