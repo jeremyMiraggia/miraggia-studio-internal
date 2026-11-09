@@ -86,7 +86,7 @@ async function handlePOST(request: Request) {
     const hasGarment = outfits.some(o => o.kind !== 'shoes')
     // Profil → Face : les chaussures seules ne sont pas envoyées, le mannequin garde celles du visuel validé (IMAGE 1)
     const garments = mode !== 'back' && hasGarment ? outfits.filter(o => o.kind !== 'shoes') : outfits
-    if ((mode === 'profile' || (mode === 'front' && rawMode)) && hasGarment) for (const o of outfits) if (o.kind === 'shoes') o.note = rawMode && mode === 'front' ? 'chaussures seules : non envoyées (mode brut)' : 'chaussures seules : non envoyées (celles du visuel validé sont gardées)'
+    if (mode === 'profile' && hasGarment) for (const o of outfits) if (o.kind === 'shoes') o.note = 'chaussures seules : non envoyées (celles du visuel validé sont gardées)'
     const shoes = mode === 'front' && hasGarment && !closeup ? outfits.filter(o => o.kind === 'shoes') : []
     const nOut = garments.length
 
@@ -148,10 +148,11 @@ async function handlePOST(request: Request) {
       const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : 'standing still, relaxed and composed (no walking)'
       if (!rawMode) parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model and same scene as IMAGE 1 · back of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · ${framingCheck} · ${poseCheck} · same light, film look and mood as IMAGE 1 · no text, no collage.` })
     } else if (rawMode) {
-      // MODE BRUT vue de face : visage, corps, tenue — une ligne par image (ni chaussures seules, ni détails)
+      // MODE BRUT vue de face : visage, corps, tenue, chaussures — une ligne par image (pas de détails)
       const L: [string, any][] = [['visage du mannequin', toPart(faceImg!.buf, faceImg!.mime)]]
       if (bodyUrl) L.push(['corps du mannequin (même personne)', await toInlinePart(bodyUrl)])
       for (let i = 0; i < nOut; i++) L.push([nOut === 1 ? 'tenue' : `tenue (photo ${i + 1}/${nOut})`, garments[i].part])
+      for (const sh of shoes) L.push(['chaussures à porter (si les pieds sont dans le cadre)', sh.part])
       L.forEach(([label, part], i) => { parts.push({ text: `IMAGE ${i + 1} — ${label}` }); parts.push(part) })
     } else {
     // Le mannequin toujours en premier : IMAGE 1 = visage, IMAGE 2 = corps (si présent), puis tenue, puis détails

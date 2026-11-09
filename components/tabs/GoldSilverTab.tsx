@@ -657,7 +657,7 @@ export default function GoldSilverTab() {
         <label style={{ marginTop: 12, fontSize: 12, color: '#0D4A5C', display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
           <input type="checkbox" checked={rawMode} onChange={e => setRawMode(e.target.checked)} style={{ marginTop: 2 }} />
           <span>
-            <strong>Mode brut</strong> — photos d'origine du ZIP (pas de compression, pas de pixelisation){subMode === 'front' ? ', texte du décor Notion seul (numéros d’image adaptés + colonne Description), une ligne de légende par image, sans photo de chaussures seules ni photos Details' : ', une ligne de légende par image'}, aucune note ni vérification finale ajoutée par Zulo.
+            <strong>Mode brut</strong> — photos d'origine du ZIP (pas de compression, pas de pixelisation){subMode === 'front' ? ', texte du décor Notion seul (numéros d’image adaptés + colonne Description), une ligne de légende par image, chaussures envoyées, sans les photos Details' : ', une ligne de légende par image'}, aucune note ni vérification finale ajoutée par Zulo.
             <span style={{ display: 'block', fontSize: 11, color: '#6B7A8A' }}>
               Plus de garde-fou peau : si la tenue est portée par une personne à la peau très différente, la couleur peut déteindre sur la mannequin.{subMode !== 'front' ? ' En Profil → Face / Face → Dos, le texte reste celui de Zulo (pas de décor Notion pour ces modes).' : ''}
             </span>
