@@ -331,9 +331,12 @@ export default function GoldSilverTab() {
       const isProfile = subMode === 'profile'
       setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
       try {
-        const [frontVisualUrl, garmentUrls] = await Promise.all([
+        // Profil → Face : la photo visage n'est envoyée que si le mannequin est sûr (colonne Model ou choix manuel, jamais un tirage au sort)
+        const faceKey = isProfile && modelSource(t) !== 'aléatoire' ? model?.faceKey : undefined
+        const [frontVisualUrl, garmentUrls, faceUrl] = await Promise.all([
           uploadKey(isProfile ? t.validatedKeys[0] : t.outfitKeys[0]),
           Promise.all((isProfile ? [...t.outfitKeys, ...t.profileKeys] : t.backKeys).map(uploadKey)),
+          faceKey ? uploadKey(faceKey) : Promise.resolve(undefined),
         ])
         const mName = model?.name
         if (mName) for (let i = 0; i < 40 && modelDescsRef.current[mName]?.status === 'running'; i++) await new Promise(r => setTimeout(r, 500))
@@ -344,7 +347,7 @@ export default function GoldSilverTab() {
         const resp = await fetch('/api/studio/gold-silver', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: subMode, frontVisualUrl, outfitUrls: garmentUrls, prompt, ratio, quality, maskFaces,
+            mode: subMode, frontVisualUrl, faceUrl, outfitUrls: garmentUrls, prompt, ratio, quality, maskFaces,
             promptOpts: isProfile ? { sku: t.sku, detailText: t.detailText, modelDescription, poseDirection: refPose } : undefined,
             sku: `${t.sku}${modeSuffix(subMode)}${framing === 'closeup' ? '-closeup' : ''}`, framing, customPose: !!refPose.trim(),
           }),
@@ -495,7 +498,7 @@ export default function GoldSilverTab() {
       return buildGoldSilverBackPrompt({ ratio, sku: 'SKU', backCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)', framing, poseDirection: backPose })
     }
     if (subMode === 'profile') {
-      return buildGoldSilverProfileToFrontPrompt({ ratio, sku: 'SKU', outfitCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)', framing, poseDirection: profilePose })
+      return buildGoldSilverProfileToFrontPrompt({ ratio, sku: 'SKU', outfitCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)', framing, poseDirection: profilePose, hasFace: true })
     }
     const decor = parsed?.decors.find(d => normName(d.name) === normName(previewDecor)) ?? parsed?.decors[0]
     if (!decor) return ''
@@ -533,7 +536,7 @@ export default function GoldSilverTab() {
           </p>
         ) : subMode === 'profile' ? (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-            Un visuel <strong>de face</strong> par ligne, à partir d'un visuel de profil validé. <strong>Image 1</strong> = <code>VISUELS OK</code> = le visuel de profil <strong>validé</strong> (mannequin, décor, lumière et style à conserver). <strong>Images 2…</strong> = <code>Files (Front)</code> puis <code>PROFIL</code> = la tenue portée par une autre mannequin (sa tête est masquée, sa peau ignorée ; une photo de chaussures seules n'est pas envoyée, le mannequin garde celles du visuel validé). <code>Files (Back)</code> n'est pas utilisé.
+            Un visuel <strong>de face</strong> par ligne, à partir d'un visuel de profil validé. <strong>Image 1</strong> = <code>VISUELS OK</code> = le visuel de profil <strong>validé</strong> (mannequin, décor, lumière et style à conserver). <strong>Image 2</strong> = <code>FACE PHOTO</code> du mannequin de la colonne <code>Model</code> (pas envoyée si le mannequin est tiré au sort). <strong>Images suivantes</strong> = <code>Files (Front)</code> puis <code>PROFIL</code> = la tenue portée par une autre mannequin (sa tête est masquée, sa peau ignorée ; une photo de chaussures seules n'est pas envoyée, le mannequin garde celles du visuel validé). <code>Files (Back)</code> n'est pas utilisé.
             Prompt : même mannequin, même lieu, même lumière, vue de face, regard caméra. Cadrage <strong>plein-pied</strong> (<code>NOMDULOOK_Front.jpg</code>) ou <strong>Close-up</strong> (<code>NOMDULOOK_Front-closeup.jpg</code>). Pose modifiable via le champ « Pose & ajustements ». Colonnes <code>Description</code> / <code>Detail texte</code> ajoutées au prompt.
           </p>
         ) : (
@@ -740,6 +743,9 @@ export default function GoldSilverTab() {
                   {subMode === 'profile' ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
                     <span style={pill(t0.validatedKeys.length ? '#E8F2F5' : '#FEE2E2', t0.validatedKeys.length ? '#0D4A5C' : '#991B1B')}>↪ {t0.validatedKeys.length ? 'visuel OK' : 'pas de visuel OK'}</span>
+                    {mSrc !== 'aléatoire' && resolveModel(t0)?.faceKey
+                      ? <span style={pill('#E8F2F5', '#0D4A5C')} title="Photo visage envoyée en image 2">👤 {resolveModel(t0)!.name}</span>
+                      : <span style={pill('#FEF3C7', '#92400E')} title="Colonne Model vide ou mannequin inconnu : seul le visuel validé sert de référence pour le visage">👤 visage non envoyé</span>}
                     <span style={pill(t0.outfitKeys.length ? '#DCFCE7' : '#FEE2E2', t0.outfitKeys.length ? '#166534' : '#991B1B')}>🧥 {t0.outfitKeys.length + t0.profileKeys.length} photo{t0.outfitKeys.length + t0.profileKeys.length > 1 ? 's' : ''} de tenue</span>
                     {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 description</span>}
                   </div>
@@ -788,6 +794,7 @@ export default function GoldSilverTab() {
                         {subMode === 'profile' ? (
                           <>
                             {t0.validatedKeys[0] && <InputThumb key={t0.validatedKeys[0]} getFile={parsed!.getFile} zipKey={t0.validatedKeys[0]} label="Visuel OK" />}
+                            {modelSource(t0) !== 'aléatoire' && resolveModel(t0)?.faceKey && <InputThumb key={resolveModel(t0)!.faceKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.faceKey!} label={`Visage ${resolveModel(t0)!.name}`} />}
                             {t0.outfitKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Front ${i + 1}`} />)}
                             {t0.profileKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Profil ${i + 1}`} />)}
                           </>

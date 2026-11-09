@@ -94,7 +94,8 @@ export function buildGoldSilverBackPrompt(opts: {
  * Prompt Golden Silver — sous-onglet PROFIL → FACE.
  *
  *   IMAGE 1        = le visuel de PROFIL validé — colonne VISUELS OK (mannequin + décor + lumière à CONSERVER)
- *   IMAGES 2…n+1   = la tenue portée par une autre personne — Files (Front) puis PROFIL (chaussures seules retirées :
+ *   IMAGE 2        = visage du mannequin (FACE PHOTO) — si le mannequin est connu (colonne Model ou choix manuel)
+ *   IMAGES suivantes = la tenue portée par une autre personne — Files (Front) puis PROFIL (chaussures seules retirées :
  *                    le mannequin garde celles de l'IMAGE 1). Prompt construit côté serveur (n dépend du classement).
  *
  * Sortie : le même mannequin, dans le même décor, vu de face.
@@ -107,11 +108,13 @@ export function buildGoldSilverProfileToFrontPrompt(opts: {
   modelDescription?: string
   framing?: 'full' | 'closeup'
   poseDirection?: string         // texte libre de l'onglet : REMPLACE la pose par défaut
+  hasFace?: boolean              // IMAGE 2 = photo visage du mannequin (FACE PHOTO)
 }): string {
   const closeup = opts.framing === 'closeup'
   const pose = opts.poseDirection?.trim()
   const n = Math.max(1, opts.outfitCount ?? 1)
-  const outfitLabel = n === 1 ? 'IMAGE 2' : `IMAGES 2 to ${n + 1}`
+  const first = opts.hasFace ? 3 : 2
+  const outfitLabel = n === 1 ? `IMAGE ${first}` : `IMAGES ${first} to ${first + n - 1}`
   const lines = [
     'EDITORIAL FASHION PHOTOGRAPH — FRONT VIEW OF AN EXISTING SHOT',
     '',
@@ -122,6 +125,12 @@ export function buildGoldSilverProfileToFrontPrompt(opts: {
     '  time of day, color palette, film look and grain, and the same photographic style and',
     '  distance to camera. Treat it as the previous frame of the same shoot: she has just',
     '  turned to face the camera.',
+    ...(opts.hasFace ? [
+      '- IMAGE 2 = the MODEL FACE, seen from the front: the SAME person as in IMAGE 1. Use it',
+      '  for her exact facial features now that she faces the camera — face shape, eyes and eye',
+      '  color, eyebrows, nose, lips, freckles/marks, hairline. Do not copy its light, background',
+      '  or framing: light, hair styling and scene come from IMAGE 1.',
+    ] : []),
     `- ${outfitLabel} = the OUTFIT, worn by ANOTHER person (front view${n > 1 ? ', plus other angles of the same pieces' : ''}). Reproduce the`,
     '  front of the garment exactly: neckline, closure, buttons, pockets, seams, waist,',
     '  sleeve and hem length, fabric, color, print. No reinterpretation. It is the same',
@@ -134,7 +143,7 @@ export function buildGoldSilverProfileToFrontPrompt(opts: {
   ]
   if (opts.modelDescription?.trim()) {
     lines.push(
-      '  MODEL DESCRIPTION (must match IMAGE 1):',
+      `  MODEL DESCRIPTION (must match IMAGE 1${opts.hasFace ? ' and IMAGE 2' : ''}):`,
       ...opts.modelDescription.trim().split('\n').map(l => `  ${l.trim()}`).filter(l => l.trim()),
     )
   }
@@ -144,7 +153,7 @@ export function buildGoldSilverProfileToFrontPrompt(opts: {
       'OUTPUT — CLOSE-UP FRONT: ONE photograph of the same model, in the same place, seen',
       'from the FRONT, framed as a CLOSE-UP / UPPER MID-BODY shot: from just above the head',
       'down to the waist/hips at most. Her face is sharp, fully visible and unmistakably the',
-      'model of IMAGE 1. The upper front of the garment (neckline, shoulders, chest, print,',
+      `model of IMAGE 1${opts.hasFace ? ', with the facial features of IMAGE 2' : ''}. The upper front of the garment (neckline, shoulders, chest, print,`,
       'fabric texture) is sharp and fully readable. Legs, feet and shoes are OUT of frame.',
       'The background is the SAME location as IMAGE 1 — same walls, materials, light',
       'direction and color palette. 85-105 mm portrait feel, natural headroom.',
@@ -153,7 +162,7 @@ export function buildGoldSilverProfileToFrontPrompt(opts: {
     lines.push(
       '',
       'OUTPUT: ONE photograph of the same model, in the same place, seen from the FRONT,',
-      'face fully visible and unmistakably the model of IMAGE 1. The front of the garment',
+      `face fully visible and unmistakably the model of IMAGE 1${opts.hasFace ? ' (features of IMAGE 2)' : ''}. The front of the garment`,
       'must be fully readable. FEET: feet and shoes fully visible, never cut by the frame.',
       'Full-length figure, small margin below the shoes. Same aspect ratio and framing',
       'distance as IMAGE 1.',

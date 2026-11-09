@@ -51,7 +51,8 @@ async function handlePOST(request: Request) {
     // En mode face, la même détection classe aussi chaque photo (portée, cintre, à plat, chaussures seules).
     type OutfitPart = { part: any; masked: boolean; maskedUrl?: string; note?: string; kind?: PhotoKind; worn?: { buf: Buffer; mime: string } }
     const outfits: OutfitPart[] = []
-    const faceImg = mode === 'front' ? await fetchImage(faceUrl) : null
+    // Visage du mannequin : obligatoire en mode face, optionnel en Profil → Face (envoyé si le mannequin est connu)
+    const faceImg = mode === 'front' || (mode === 'profile' && isUrl(faceUrl)) ? await fetchImage(faceUrl) : null
     for (const u of outfitUrls) {
       const { buf, mime } = await fetchImage(u)
       if (!maskFaces && refMode) { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
@@ -88,7 +89,7 @@ async function handlePOST(request: Request) {
 
     const prompt = mode === 'back' ? backPrompt : mode === 'profile' ? buildGoldSilverProfileToFrontPrompt({
       ratio, sku: promptOpts.sku, outfitCount: nOut, detailText: promptOpts.detailText, modelDescription: promptOpts.modelDescription,
-      framing: closeup ? 'closeup' : 'full', poseDirection: promptOpts.poseDirection,
+      framing: closeup ? 'closeup' : 'full', poseDirection: promptOpts.poseDirection, hasFace: !!faceImg,
     }) : buildGoldSilverPrompt({
       decorName: String(promptOpts.decorName ?? ''), decorDescription: String(promptOpts.decorDescription),
       ratio, sku: promptOpts.sku, detailText: promptOpts.detailText, modelDescription: promptOpts.modelDescription,
@@ -101,6 +102,7 @@ async function handlePOST(request: Request) {
     if (mode === 'profile') {
       // IMAGE 1 = visuel de profil validé ; IMAGES 2..n+1 = tenue de face portée par une autre personne (tête masquée)
       const refImg = await fetchImage(frontVisualUrl)
+      const first = faceImg ? 3 : 2   // première image de tenue
       if (anyMasked) {
         parts.push({ text: 'NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The model is the one in IMAGE 1. Do not reproduce any pixelation.' })
       }
@@ -109,18 +111,22 @@ async function handlePOST(request: Request) {
       const skinClash = skinChecks.map((c, i) => ({ i, c })).filter(x => x.c && x.c.verdict !== 'similar')
       if (skinClash.length) {
         const c = skinClash[0].c!
-        parts.push({ text: `⚠ SKIN TONE: the person wearing the garment in ${skinClash.map(x => `IMAGE ${x.i + 2}`).join(', ')} has a clearly ${c.verdict === 'darker' ? 'DARKER' : 'LIGHTER'} skin tone${c.wearer ? ` (${c.wearer})` : ''} than the model. She is NOT the model — take ONLY the garment from that photo. EVERY visible skin area of the final image (face, neck, chest, shoulders, arms, hands, legs, feet) must have the model's own ${c.model ? `${c.model} ` : ''}skin tone and undertone, exactly as in IMAGE 1, uniform from head to toe.` })
+        parts.push({ text: `⚠ SKIN TONE: the person wearing the garment in ${skinClash.map(x => `IMAGE ${x.i + first}`).join(', ')} has a clearly ${c.verdict === 'darker' ? 'DARKER' : 'LIGHTER'} skin tone${c.wearer ? ` (${c.wearer})` : ''} than the model. She is NOT the model — take ONLY the garment from that photo. EVERY visible skin area of the final image (face, neck, chest, shoulders, arms, hands, legs, feet) must have the model's own ${c.model ? `${c.model} ` : ''}skin tone and undertone, exactly as in IMAGE 1, uniform from head to toe.` })
         for (const x of skinClash) garments[x.i].note = [garments[x.i].note, `peau ${x.c!.verdict === 'darker' ? 'plus foncée' : 'plus claire'} que le mannequin : signalée à Gemini`].filter(Boolean).join(' · ')
       }
       parts.push({ text: '=== IMAGE 1 — VALIDATED PROFILE PHOTOGRAPH: same model, same place, same light, same style to keep ===' })
       parts.push(toPart(refImg.buf, refImg.mime))
+      if (faceImg) {
+        parts.push({ text: '=== IMAGE 2 — MODEL FACE, front view: same person as IMAGE 1 (exact facial features; not its light or background) ===' })
+        parts.push(toPart(faceImg.buf, faceImg.mime))
+      }
       for (let i = 0; i < nOut; i++) {
-        parts.push({ text: `=== IMAGE ${i + 2} — OUTFIT${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''}, worn by another person (reproduce this garment exactly, ignore that person) ===` })
+        parts.push({ text: `=== IMAGE ${i + first} — OUTFIT${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''}, worn by another person (reproduce this garment exactly, ignore that person) ===` })
         parts.push(garments[i].part)
       }
       const framingCheck = closeup ? 'CLOSE-UP from above the head to the waist/hips, legs and feet out of frame' : 'same shoes as IMAGE 1, feet fully visible'
       const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : 'facing the camera, relaxed and composed'
-      parts.push({ text: `⚠ FINAL CHECK : ONE photograph from the FRONT · same model (face identical to IMAGE 1) and same scene as IMAGE 1 · front of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · all visible skin has the model's skin tone from IMAGE 1, never the outfit wearer's · ${framingCheck} · ${poseCheck} · natural human proportions and anatomy · same light, film look and mood as IMAGE 1 · no text, no collage.` })
+      parts.push({ text: `⚠ FINAL CHECK : ONE photograph from the FRONT · same model (face identical to ${faceImg ? 'IMAGE 2, as the person of IMAGE 1' : 'IMAGE 1'}) and same scene as IMAGE 1 · front of the garment identical to ${nOut === 1 ? `IMAGE ${first}` : `IMAGES ${first}-${first + nOut - 1}`} · all visible skin has the model's skin tone from IMAGE 1, never the outfit wearer's · ${framingCheck} · ${poseCheck} · natural human proportions and anatomy · same light, film look and mood as IMAGE 1 · no text, no collage.` })
     } else if (mode === 'back') {
       // IMAGE 1 = visuel de face final ; IMAGES 2..n+1 = tenue de dos
       if (anyMasked) {
