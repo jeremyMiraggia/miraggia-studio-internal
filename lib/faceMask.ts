@@ -110,6 +110,49 @@ export async function detectHead(buf: Buffer, mime: string, apiKey: string): Pro
   return { hasPerson: false, error: lastErr || 'détection impossible' }
 }
 
+/** Comparaison de peau : la personne de la photo de tenue (B) a-t-elle une peau nettement différente du mannequin (A) ? */
+export type SkinCompare = { verdict: 'similar' | 'darker' | 'lighter'; model?: string; wearer?: string; error?: string }
+
+export async function compareSkin(a: { buf: Buffer; mime: string }, b: { buf: Buffer; mime: string }, apiKey: string): Promise<SkinCompare> {
+  const prompt = [
+    'Image A shows a fashion model. Image B shows a garment worn by a person (possibly another person, head possibly pixelated).',
+    'Compare the SKIN TONE of the visible skin (face, neck, arms, hands, legs) of the person in B with the model in A.',
+    '"verdict": "darker" if the person in B has a clearly darker skin tone than A (a viewer would notice at a glance), "lighter" if clearly lighter, otherwise "similar" (lighting differences and a slight tan do not count).',
+    '"model" and "wearer": each skin tone and undertone in 3 to 6 English words (e.g. "fair, warm golden undertone").',
+    'Answer with strict JSON only: {"verdict": string, "model": string, "wearer": string}',
+  ].join('\n')
+  const payload = JSON.stringify({
+    contents: [{ parts: [
+      { text: prompt },
+      { text: 'IMAGE A:' }, { inlineData: { mimeType: a.mime, data: a.buf.toString('base64') } },
+      { text: 'IMAGE B:' }, { inlineData: { mimeType: b.mime, data: b.buf.toString('base64') } },
+    ] }],
+    generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+  })
+  let lastErr = ''
+  for (const model of DETECT_MODELS) {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload,
+      })
+      const json: any = await res.json().catch(() => null)
+      if (!res.ok) {
+        lastErr = `${model}: ${json?.error?.message ?? `HTTP ${res.status}`}`
+        if (res.status === 404 || /not found|no longer available|not supported/i.test(lastErr)) continue
+        break
+      }
+      const text = (json?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => typeof p?.text === 'string').map((p: any) => p.text).join('').trim()
+      const parsed = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''))
+      const verdict = parsed?.verdict === 'darker' || parsed?.verdict === 'lighter' ? parsed.verdict : 'similar'
+      const clean = (v: any) => typeof v === 'string' ? (v.replace(/[^\w ,/-]/g, '').trim().slice(0, 60) || undefined) : undefined
+      return { verdict, model: clean(parsed?.model), wearer: clean(parsed?.wearer) }
+    } catch (e: any) {
+      lastErr = `${model}: ${e?.message ?? e}`
+    }
+  }
+  return { verdict: 'similar', error: lastErr || 'comparaison impossible' }
+}
+
 /**
  * Pixelise la zone de la tête. Marge 4 % en haut et sur les côtés, AUCUNE marge en bas
  * (la borne menton est déjà appliquée par detectHead).

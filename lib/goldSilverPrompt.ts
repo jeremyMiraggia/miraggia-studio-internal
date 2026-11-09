@@ -207,6 +207,8 @@ export function buildGoldSilverPrompt(opts: {
       : `- ${outfitLabel} = THE SAME OUTFIT, several photos of it. Combine them into ONE faithful garment: same cut,`,
     '  silhouette, fabric texture, drape, color, print, seams, buttons, sleeve and',
     '  hem length. No reinterpretation, no added accessories, no altered color.',
+    '  Take ONLY the garment from it: whoever wears it there is NOT the model — ignore her skin',
+    '  tone, arms, hands, legs and body. All visible skin is the model’s own, as in IMAGE 1.',
     ...(closeup
       ? ['  SHOES: not part of this shot — the framing stops well above the feet.']
       : nShoes > 0

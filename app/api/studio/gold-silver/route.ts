@@ -6,7 +6,7 @@
 import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
-import { detectHead, maskHead, type PhotoKind } from '@/lib/faceMask'
+import { compareSkin, detectHead, maskHead, type PhotoKind } from '@/lib/faceMask'
 import { buildGoldSilverPrompt } from '@/lib/goldSilverPrompt'
 import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
@@ -47,17 +47,18 @@ async function handlePOST(request: Request) {
     // ===== Masquage tête (visage + cheveux) sur les photos de tenue PORTÉE =====
     // Vêtement à plat / packshot → aucune personne détectée → image inchangée.
     // En mode face, la même détection classe aussi chaque photo (portée, cintre, à plat, chaussures seules).
-    type OutfitPart = { part: any; masked: boolean; maskedUrl?: string; note?: string; kind?: PhotoKind }
+    type OutfitPart = { part: any; masked: boolean; maskedUrl?: string; note?: string; kind?: PhotoKind; worn?: { buf: Buffer; mime: string } }
     const outfits: OutfitPart[] = []
+    const faceImg = mode === 'front' ? await fetchImage(faceUrl) : null
     for (const u of outfitUrls) {
       const { buf, mime } = await fetchImage(u)
       if (!maskFaces && mode === 'back') { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
       const det = await detectHead(buf, mime, apiKey)
-      const kind = det.kind
-      if (kind === 'shoes') { outfits.push({ part: toPart(buf, mime), masked: false, kind, note: 'chaussures à porter' }); continue }
-      if (!maskFaces) { outfits.push({ part: toPart(buf, mime), masked: false, kind }); continue }
-      if (!det.hasPerson) { outfits.push({ part: toPart(buf, mime), masked: false, kind, note: det.error ? `détection échouée : ${det.error.slice(0, 80)}` : 'pas de personne (vêtement non porté)' }); continue }
-      if (!det.box) { outfits.push({ part: toPart(buf, mime), masked: false, kind, note: `⚠ non masqué : ${det.error ?? 'tête non localisée'}` }); continue }
+      const kind = det.kind, worn = det.hasPerson ? { buf, mime } : undefined
+      if (kind === 'shoes') { outfits.push({ part: toPart(buf, mime), masked: false, kind, worn, note: 'chaussures à porter' }); continue }
+      if (!maskFaces) { outfits.push({ part: toPart(buf, mime), masked: false, kind, worn }); continue }
+      if (!det.hasPerson) { outfits.push({ part: toPart(buf, mime), masked: false, kind, worn, note: det.error ? `détection échouée : ${det.error.slice(0, 80)}` : 'pas de personne (vêtement non porté)' }); continue }
+      if (!det.box) { outfits.push({ part: toPart(buf, mime), masked: false, kind, worn, note: `⚠ non masqué : ${det.error ?? 'tête non localisée'}` }); continue }
       try {
         const m = await maskHead(buf, det.box)
         let maskedUrl: string | undefined
@@ -67,9 +68,9 @@ async function handlePOST(request: Request) {
           })
           maskedUrl = b.url
         } catch { /* vignette non disponible, on continue */ }
-        outfits.push({ part: toPart(m.buf, m.mime), masked: true, maskedUrl, kind })
+        outfits.push({ part: toPart(m.buf, m.mime), masked: true, maskedUrl, kind, worn })
       } catch (e: any) {
-        outfits.push({ part: toPart(buf, mime), masked: false, kind, note: `masquage échoué : ${e?.message ?? e}` })
+        outfits.push({ part: toPart(buf, mime), masked: false, kind, worn, note: `masquage échoué : ${e?.message ?? e}` })
       }
     }
     const anyMasked = outfits.some(o => o.masked)
@@ -107,7 +108,7 @@ async function handlePOST(request: Request) {
     } else {
     // Le mannequin toujours en premier : IMAGE 1 = visage, IMAGE 2 = corps (si présent), puis tenue, puis détails
     parts.push({ text: '=== IMAGE 1 — MODEL FACE (preserve this exact identity) ===' })
-    parts.push(await toInlinePart(faceUrl))
+    parts.push(toPart(faceImg!.buf, faceImg!.mime))
     let next = 2
     if (bodyUrl) {
       parts.push({ text: '=== IMAGE 2 — MODEL BODY, same person (skin tone, build, silhouette — not the pose, not the background) ===' })
@@ -118,6 +119,18 @@ async function handlePOST(request: Request) {
     const outfitLabel = nOut === 1 ? `IMAGE ${firstOutfit}` : `IMAGES ${firstOutfit}-${firstOutfit + nOut - 1}`
     if (anyMasked) {
       parts.push({ text: 'NOTE ON THE OUTFIT REFERENCES: the head (face and hair) of the person wearing the garment has been INTENTIONALLY pixelated. Ignore that person entirely — she is NOT the model. The ONLY identity reference is the MODEL FACE image (IMAGE 1). Do not reproduce any pixelation in the output.' })
+    }
+    // Peau : la personne qui porte la tenue n'est pas le mannequin. Flash compare sa peau à celle du mannequin (photo visage) ;
+    // si elle est nettement différente, on le dit explicitement à Gemini (sinon il reprend la couleur des bras / jambes de la photo).
+    const modelSkinRef = bodyUrl ? 'IMAGES 1-2' : 'IMAGE 1'
+    const skinChecks = await Promise.all(garments.map(g => g.worn ? compareSkin(faceImg!, g.worn, apiKey).catch(() => null) : Promise.resolve(null)))
+    const skinClash = skinChecks.map((c, i) => ({ i, c })).filter(x => x.c && x.c.verdict !== 'similar')
+    if (skinClash.length) {
+      const imgs = skinClash.map(x => `IMAGE ${firstOutfit + x.i}`).join(', ')
+      const c = skinClash[0].c!
+      const tone = c.model ? `${c.model} ` : ''
+      parts.push({ text: `⚠ SKIN TONE: the person wearing the garment in ${imgs} has a clearly ${c.verdict === 'darker' ? 'DARKER' : 'LIGHTER'} skin tone${c.wearer ? ` (${c.wearer})` : ''} than the model. She is NOT the model — take ONLY the garment from that photo. EVERY visible skin area of the final image (face, neck, chest, shoulders, arms, hands, legs, feet) must have the model's own ${tone}skin tone and undertone, exactly as in ${modelSkinRef}, uniform from head to toe.` })
+      for (const x of skinClash) garments[x.i].note = [garments[x.i].note, `peau ${x.c!.verdict === 'darker' ? 'plus foncée' : 'plus claire'} que le mannequin : signalée à Gemini`].filter(Boolean).join(' · ')
     }
     const kindNote = (k?: PhotoKind) => k === 'hanger' ? ', on a hanger (ignore the hanger, rack, labels and background)'
       : k === 'flat' ? ', laid flat (ignore the surface and background)' : ''
@@ -140,8 +153,8 @@ async function handlePOST(request: Request) {
       parts.push(await toInlinePart(detailUrls[i]))
     }
     parts.push({ text: closeup
-      ? `⚠ FINAL CHECK : ONE front-view CLOSE-UP / upper mid-body photograph (head to hips at most, no legs, no feet, no shoes) · garment identical to ${outfitLabel} (cut, color, print, details) · face identical to IMAGE 1, sharp · pose as described · scene, light, film look and mood exactly as described · no text, no collage.`
-      : `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${outfitLabel} (cut, color, print, details) · ${shoesCheck}, feet fully visible · face identical to IMAGE 1 · natural human proportions and anatomy · pose as described · scene, light, film look and mood exactly as described · no text, no collage.` })
+      ? `⚠ FINAL CHECK : ONE front-view CLOSE-UP / upper mid-body photograph (head to hips at most, no legs, no feet, no shoes) · garment identical to ${outfitLabel} (cut, color, print, details) · face identical to IMAGE 1, sharp · neck, arms and hands with the model's skin tone from ${modelSkinRef} · pose as described · scene, light, film look and mood exactly as described · no text, no collage.`
+      : `⚠ FINAL CHECK : ONE front-view photograph · garment identical to ${outfitLabel} (cut, color, print, details) · ${shoesCheck}, feet fully visible · face identical to IMAGE 1 · all visible skin (neck, arms, hands, legs) has the model's skin tone from ${modelSkinRef}, never the outfit wearer's · natural human proportions and anatomy · pose as described · scene, light, film look and mood exactly as described · no text, no collage.` })
     }
 
     const imageSize = quality === '4K' ? '4K' : quality === '1K' ? '1K' : '2K'
