@@ -696,12 +696,13 @@ async function buildLooksFromRows(rows: any[], index: Map<string, File>): Promis
   const out: LookRow[] = []
   for (const r of rows) {
     const id          = String(r['ID'] ?? '').trim()
-    const numeroLook  = String(r['Numero Look'] ?? r['NumLook'] ?? r['SKU'] ?? r['Propriété'] ?? r['Propriete'] ?? '').trim() || id
+    const numeroLook  = String(r['Numero Look'] ?? r['NumLook'] ?? r['SKU'] ?? r['Référence produit'] ?? r['Reference produit'] ?? r['Référence'] ?? r['Reference'] ?? r['Propriété'] ?? r['Propriete'] ?? '').trim() || id
     if (!id) continue
 
     const mannequinName = stripRef(String(r['Mannequin'] ?? r['Model'] ?? r['Modèle'] ?? r['Modele'] ?? '').trim()) || undefined
     const fondName      = stripRef(String(r['⬜ Fonds'] ?? r['Fonds'] ?? r['Fond'] ?? r['Décor'] ?? r['Decor'] ?? '').trim()) || undefined
-    const filesFrontRaw = String(r['FILES (FRONT)'] ?? '').trim()
+    // « Produits » (onglet Lingerie Visage) : une seule colonne produits, utilisée comme FILES (FRONT)
+    const filesFrontRaw = String(r['FILES (FRONT)'] ?? r['Produits'] ?? r['PRODUITS'] ?? r['Produit'] ?? r['Products'] ?? '').trim()
     const filesBackRaw  = String(r['FILES (BACK)']  ?? r['FILES (BACK) (1)'] ?? '').trim()
     const detailsRaw    = String(r['DETAILS']       ?? '').trim()
     const description   = String(r['DESCRIPTION']   ?? '').trim() || undefined
