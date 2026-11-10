@@ -271,13 +271,13 @@ export default function GoldSilverTab() {
     }
   }
   const fileNameFor = (s: State, version: number) =>
-    `${sanitizeFilename(s.task.sku)}${modeSuffix(subMode)}${framing === 'closeup' ? '-closeup' : ''}${version > 1 ? `_${version}` : ''}.jpg`
+    `${sanitizeFilename(s.task.sku)}${subMode === 'back' && s.task.backKeys.length === 0 ? '-closeup' : `${modeSuffix(subMode)}${framing === 'closeup' ? '-closeup' : ''}`}${version > 1 ? `_${version}` : ''}.jpg`
 
   /** En mode Back / Profil → Face, une ligne sans ses deux entrées est écartée d'office (décochée, jamais tentée). */
   const ineligibleReason = (t: GSTask, mode: SubMode = subMode): string | null => {
     if (mode === 'back') {
-      if (t.outfitKeys.length === 0) return 'pas de visuel de face (Files (Front) vide)'
-      if (t.backKeys.length === 0)   return 'pas de photo de dos (Files (Back) vide)'
+      if (t.validatedKeys.length === 0) return 'pas de visuel de face validé (VISUEL OK FRONT vide)'
+      if (t.backKeys.length === 0 && t.detailKeys.length === 0) return 'ni photo de dos (Files (Back)) ni gros plan (DETAILS)'
     }
     if (mode === 'profile') {
       if (t.validatedKeys.length === 0) return 'pas de visuel validé (VISUELS OK vide)'
@@ -329,7 +329,8 @@ export default function GoldSilverTab() {
     })
 
     // ===== Sous-onglets BACK et PROFIL → FACE : image 1 = visuel déjà validé, images 2.. = tenue à reproduire =====
-    //   Back           : image 1 = Files (Front)[0] (visuel de face final), images 2.. = Files (Back)
+    //   Back           : image 1 = VISUEL OK FRONT[0] (visuel de face validé), image 2 = visage, puis Files (Back)
+    //                    — sans Files (Back) : gros plan DETAILS → close-up de dos
     //   Profil → Face  : image 1 = VISUELS OK[0] (visuel de profil validé), images 2.. = Files (Front) + PROFIL (tenue portée par une autre mannequin)
     if (subMode === 'back' || subMode === 'profile') {
       const reason = ineligibleReason(t)
@@ -338,24 +339,24 @@ export default function GoldSilverTab() {
       setStates(prev => { const next = [...prev]; next[idx] = { ...next[idx], status: 'running', error: undefined }; statesRef.current = next; return next })
       try {
         // Profil → Face : la photo visage n'est envoyée que si le mannequin est sûr (colonne Model ou choix manuel, jamais un tirage au sort)
-        const faceKey = isProfile && modelSource(t) !== 'aléatoire' ? model?.faceKey : undefined
+        const faceKey = modelSource(t) !== 'aléatoire' ? model?.faceKey : undefined
+        const fromDetail = !isProfile && t.backKeys.length === 0
+        const cardFraming: 'full' | 'closeup' = fromDetail ? 'closeup' : framing
         const [frontVisualUrl, garmentUrls, faceUrl] = await Promise.all([
-          uploadKey(isProfile ? t.validatedKeys[0] : t.outfitKeys[0]),
-          Promise.all((isProfile ? [...t.outfitKeys, ...t.profileKeys] : t.backKeys).map(uploadKey)),
+          uploadKey(t.validatedKeys[0]),
+          Promise.all((isProfile ? [...t.outfitKeys, ...t.profileKeys] : fromDetail ? t.detailKeys : t.backKeys).map(uploadKey)),
           faceKey ? uploadKey(faceKey) : Promise.resolve(undefined),
         ])
         const mName = model?.name
         if (mName) for (let i = 0; i < 40 && modelDescsRef.current[mName]?.status === 'running'; i++) await new Promise(r => setTimeout(r, 500))
         const modelDescription = mName && modelDescsRef.current[mName]?.status === 'done' ? modelDescsRef.current[mName].text : undefined
-        // Profil → Face : prompt construit côté serveur (les photos de chaussures seules y sont retirées, la numérotation en dépend)
-        const prompt = isProfile ? undefined
-          : buildGoldSilverBackPrompt({ ratio, sku: t.sku, backCount: garmentUrls.length, detailText: t.detailText, modelDescription, framing, poseDirection: refPose })
+        // Prompt construit côté serveur (chaussures seules séparées, la numérotation en dépend)
         const resp = await fetch('/api/studio/gold-silver', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: subMode, frontVisualUrl, faceUrl, outfitUrls: garmentUrls, prompt, ratio, quality, maskFaces, raw: rawMode,
-            promptOpts: isProfile ? { sku: t.sku, detailText: t.detailText, modelDescription, poseDirection: refPose } : undefined,
-            sku: `${t.sku}${modeSuffix(subMode)}${framing === 'closeup' ? '-closeup' : ''}`, framing, customPose: !!refPose.trim(),
+            mode: subMode, frontVisualUrl, faceUrl, outfitUrls: garmentUrls, ratio, quality, maskFaces, raw: rawMode, fromDetail,
+            promptOpts: { sku: t.sku, detailText: t.detailText, modelDescription, poseDirection: refPose },
+            sku: fromDetail ? `${t.sku}-closeup` : `${t.sku}${modeSuffix(subMode)}${cardFraming === 'closeup' ? '-closeup' : ''}`, framing: cardFraming, customPose: !!refPose.trim(),
           }),
         })
         const text = await resp.text()
@@ -501,7 +502,7 @@ export default function GoldSilverTab() {
   const [previewDecor, setPreviewDecor] = useState('')
   const previewPrompt = useMemo(() => {
     if (subMode === 'back') {
-      return buildGoldSilverBackPrompt({ ratio, sku: 'SKU', backCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)', framing, poseDirection: backPose })
+      return buildGoldSilverBackPrompt({ ratio, sku: 'SKU', backCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)', framing, poseDirection: backPose, hasFace: true })
     }
     if (subMode === 'profile') {
       return buildGoldSilverProfileToFrontPrompt({ ratio, sku: 'SKU', outfitCount: 2, modelDescription: '(description du mannequin, générée ci-dessus)', framing, poseDirection: profilePose, hasFace: true })
@@ -547,7 +548,7 @@ export default function GoldSilverTab() {
           </p>
         ) : (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
-            Un visuel <strong>de dos</strong> par ligne. <strong>Image 1</strong> = <code>Files (Front)</code> = le visuel de face <strong>final</strong> (mannequin, décor, lumière et style à conserver). <strong>Images 2…</strong> = <code>Files (Back)</code> = la tenue vue de dos (une ou plusieurs photos).
+            Un visuel <strong>de dos</strong> par ligne. <strong>Image 1</strong> = <code>VISUEL OK FRONT</code> = le visuel de face <strong>validé</strong> (mannequin, décor, lumière et style à conserver). <strong>Image 2</strong> = <code>FACE PHOTO</code> du mannequin de la colonne <code>Model</code> (pas envoyée si tiré au sort). <strong>Images suivantes</strong> = <code>Files (Back)</code> = la tenue vue de dos ; une photo de chaussures seules est envoyée à part (plein-pied seulement). <strong>Sans Files (Back)</strong> : pas de dos possible → la ligne sort en <strong>close-up de face</strong> du visuel validé (<code>NOMDULOOK-closeup.jpg</code>), le gros plan <code>DETAILS</code> servant de guide pour la matière et les finitions. <code>Files (Front)</code> n'est pas utilisé.
             Prompt : même mannequin, même lieu, même lumière, vue de dos, pose posée et décontractée (debout, immobile, pas de marche). Cadrage <strong>plein-pied</strong> (pieds et chaussures visibles, <code>NOMDULOOK_Back.jpg</code>) ou <strong>Close-up Back</strong> (de la tête à la taille, <code>NOMDULOOK_Back-closeup.jpg</code>). Pose modifiable via le champ « Pose & ajustements ». Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
           </p>
         )}
@@ -766,8 +767,15 @@ export default function GoldSilverTab() {
                   </div>
                   ) : subMode === 'back' ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-                    <span style={pill(t0.outfitKeys.length ? '#E8F2F5' : '#FEE2E2', t0.outfitKeys.length ? '#0D4A5C' : '#991B1B')}>🧍 {t0.outfitKeys.length ? 'visuel face final' : 'pas de visuel face'}</span>
-                    <span style={pill(t0.backKeys.length ? '#DCFCE7' : '#FEE2E2', t0.backKeys.length ? '#166534' : '#991B1B')}>🔄 {t0.backKeys.length ? `${t0.backKeys.length} photo${t0.backKeys.length > 1 ? 's' : ''} de dos` : 'pas de photo de dos'}</span>
+                    <span style={pill(t0.validatedKeys.length ? '#E8F2F5' : '#FEE2E2', t0.validatedKeys.length ? '#0D4A5C' : '#991B1B')}>🧍 {t0.validatedKeys.length ? 'visuel OK front' : 'pas de visuel OK front'}</span>
+                    {mSrc !== 'aléatoire' && resolveModel(t0)?.faceKey
+                      ? <span style={pill('#E8F2F5', '#0D4A5C')} title="Photo visage envoyée en image 2">👤 {resolveModel(t0)!.name}</span>
+                      : <span style={pill('#FEF3C7', '#92400E')} title="Colonne Model vide ou mannequin inconnu : seul le visuel validé sert de référence pour le visage">👤 visage non envoyé</span>}
+                    {t0.backKeys.length
+                      ? <span style={pill('#DCFCE7', '#166534')}>🔄 {t0.backKeys.length} photo{t0.backKeys.length > 1 ? 's' : ''} de dos</span>
+                      : t0.detailKeys.length
+                        ? <span style={pill('#FEF3C7', '#92400E')} title="Pas de Files (Back) : close-up de face du visuel validé, avec le gros plan DETAILS en guide">🔍 close-up de face (DETAILS)</span>
+                        : <span style={pill('#FEE2E2', '#991B1B')}>ni dos ni détail</span>}
                     {t0.detailText && <span style={pill('#EDE9FE', '#5B21B6')} title={t0.detailText}>📝 description</span>}
                   </div>
                   ) : (
@@ -815,7 +823,9 @@ export default function GoldSilverTab() {
                           </>
                         ) : subMode === 'back' ? (
                           <>
-                            {t0.outfitKeys[0] && <InputThumb key={t0.outfitKeys[0]} getFile={parsed!.getFile} zipKey={t0.outfitKeys[0]} label="Face final" />}
+                            {t0.validatedKeys[0] && <InputThumb key={t0.validatedKeys[0]} getFile={parsed!.getFile} zipKey={t0.validatedKeys[0]} label="Visuel OK" />}
+                            {modelSource(t0) !== 'aléatoire' && resolveModel(t0)?.faceKey && <InputThumb key={resolveModel(t0)!.faceKey} getFile={parsed!.getFile} zipKey={resolveModel(t0)!.faceKey!} label={`Visage ${resolveModel(t0)!.name}`} />}
+                            {t0.backKeys.length === 0 && t0.detailKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={`Détail ${i + 1}`} />)}
                             {t0.backKeys.map((k, i) => <InputThumb key={k} getFile={parsed!.getFile} zipKey={k} label={t0.backKeys.length > 1 ? `Dos ${i + 1}` : 'Dos'} />)}
                           </>
                         ) : (

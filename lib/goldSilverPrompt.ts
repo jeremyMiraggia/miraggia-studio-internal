@@ -1,8 +1,11 @@
 /**
  * Prompt Golden Silver — sous-onglet BACK.
  *
- *   IMAGE 1        = le visuel de FACE final (mannequin + décor + lumière à CONSERVER)
- *   IMAGES 2…n+1   = la tenue vue de DOS (photos produit / portées)
+ *   IMAGE 1          = le visuel de FACE validé — colonne VISUEL OK FRONT (mannequin + décor + lumière à CONSERVER)
+ *   IMAGE 2          = visage du mannequin (FACE PHOTO) — si le mannequin est connu
+ *   IMAGES suivantes = la tenue vue de DOS (Files (Back)) — sans Files (Back) : voir buildGoldSilverDetailCloseupPrompt
+ *   IMAGES suivantes = chaussures seules (photos de Files (Back) classées « chaussures ») — plein-pied uniquement
+ * Prompt construit côté serveur (les nombres dépendent du classement des photos).
  *
  * Sortie : le même mannequin, dans le même décor, vu de dos, pose naturelle.
  */
@@ -14,28 +17,40 @@ export function buildGoldSilverBackPrompt(opts: {
   modelDescription?: string
   framing?: 'full' | 'closeup'   // closeup = gros plan de dos / mi-corps haut, jambes et chaussures hors cadre
   poseDirection?: string         // texte libre de l'onglet : REMPLACE la pose par défaut
+  hasFace?: boolean              // IMAGE 2 = photo visage du mannequin
+  shoesCount?: number            // photos de chaussures seules (après la tenue)
 }): string {
   const closeup = opts.framing === 'closeup'
   const pose = opts.poseDirection?.trim()
   const n = Math.max(1, opts.backCount ?? 1)
-  const backLabel = n === 1 ? 'IMAGE 2' : `IMAGES 2 to ${n + 1}`
+  const first = opts.hasFace ? 3 : 2
+  const backLabel = n === 1 ? `IMAGE ${first}` : `IMAGES ${first} to ${first + n - 1}`
+  const nShoes = closeup ? 0 : (opts.shoesCount ?? 0)
+  const shoesLabel = nShoes === 1 ? `IMAGE ${first + n}` : `IMAGES ${first + n} to ${first + n + nShoes - 1}`
   const lines = [
     'EDITORIAL FASHION PHOTOGRAPH — BACK VIEW OF AN EXISTING SHOT',
     '',
     'REFERENCES (strict):',
-    '- IMAGE 1 = the FINAL FRONT photograph of this look. It defines EVERYTHING that must',
+    '- IMAGE 1 = the VALIDATED FRONT photograph of this look. It defines EVERYTHING that must',
     '  stay identical: the SAME model (identity, hair color/texture/length, skin tone,',
     '  build, height), the SAME location and background, the SAME light direction, time',
     '  of day, color palette, film look and grain, and the same photographic style and',
     '  distance to camera. Treat it as the previous frame of the same shoot, taken',
     '  seconds later from behind.',
+    ...(opts.hasFace ? [
+      '- IMAGE 2 = the MODEL FACE (front view), the same person as in IMAGE 1. Use it only to',
+      '  keep her identity, hair color, texture and length exact. Not its light or background.',
+    ] : []),
     `- ${backLabel} = the OUTFIT seen from the BACK. Reproduce the back of the garment`,
     '  exactly: back seams, closure (zip, buttons, ties), straps, neckline, waist, hem',
     '  length, fabric, color, print. No reinterpretation. The front of the garment is',
-    '  the one worn in IMAGE 1 — this is the same outfit.',
+    '  the one worn in IMAGE 1 — this is the same outfit. Whoever wears it there is NOT',
+    '  the model — take only the garment.',
     closeup
       ? '  SHOES: not part of this shot — the framing stops well above the legs.'
-      : '  SHOES: exactly the same shoes as in IMAGE 1.',
+      : nShoes > 0
+        ? `- ${shoesLabel} = the SHOES, the same pair as in IMAGE 1, here seen alone — use ${nShoes > 1 ? 'them' : 'it'} for the heel and back of the shoes.`
+        : '  SHOES: exactly the same shoes as in IMAGE 1.',
   ]
   if (opts.modelDescription?.trim()) {
     lines.push(
@@ -87,6 +102,72 @@ export function buildGoldSilverBackPrompt(opts: {
   )
   if (opts.sku) lines.push(`Reference: ${opts.sku}.`)
   // supprime les lignes vides consécutives (les blocs optionnels peuvent en laisser)
+  return lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n')
+}
+
+/**
+ * Prompt Golden Silver — sous-onglet BACK, ligne SANS Files (Back) mais avec DETAILS :
+ * pas de dos possible → CLOSE-UP DE FACE du visuel validé, le gros plan DETAILS (détail de face) en guide de fidélité.
+ *
+ *   IMAGE 1          = le visuel de FACE validé (VISUEL OK FRONT)
+ *   IMAGE 2          = visage du mannequin (si connu)
+ *   IMAGES suivantes = gros plans DETAILS du même vêtement
+ */
+export function buildGoldSilverDetailCloseupPrompt(opts: {
+  ratio: string
+  sku?: string
+  detailCount?: number
+  detailText?: string
+  modelDescription?: string
+  poseDirection?: string
+  hasFace?: boolean
+}): string {
+  const n = Math.max(1, opts.detailCount ?? 1)
+  const first = opts.hasFace ? 3 : 2
+  const detLabel = n === 1 ? `IMAGE ${first}` : `IMAGES ${first} to ${first + n - 1}`
+  const pose = opts.poseDirection?.trim()
+  const lines = [
+    'EDITORIAL FASHION PHOTOGRAPH — FRONT CLOSE-UP OF AN EXISTING SHOT',
+    '',
+    'REFERENCES (strict):',
+    '- IMAGE 1 = the VALIDATED FRONT photograph of this look. It defines EVERYTHING that',
+    '  must stay identical: the SAME model (identity, hair, skin tone, makeup), the SAME',
+    '  outfit, the SAME location and background, the SAME light direction, color palette,',
+    '  film look and grain. Treat it as the same shoot: the photographer has simply',
+    '  stepped closer.',
+    ...(opts.hasFace ? [
+      '- IMAGE 2 = the MODEL FACE (front view), the same person as in IMAGE 1. Use it only to',
+      '  keep her identity exact and sharp at close range. Not its light or background.',
+    ] : []),
+    `- ${detLabel} = CLOSE-UP DETAIL${n > 1 ? 'S' : ''} of the front of the same garment. Use ${n > 1 ? 'them' : 'it'} to`,
+    '  reproduce the fabric texture, color, print, stitching, buttons and finishes',
+    '  faithfully at close range. Do not copy its framing or background.',
+  ]
+  if (opts.modelDescription?.trim()) {
+    lines.push('  MODEL DESCRIPTION (must match IMAGE 1):', ...opts.modelDescription.trim().split('\n').map(l => `  ${l.trim()}`).filter(l => l.trim()))
+  }
+  lines.push(
+    '',
+    'OUTPUT — CLOSE-UP FRONT: ONE photograph of the same model, in the same place, seen',
+    'from the FRONT, framed as a CLOSE-UP / UPPER MID-BODY shot: from just above the head',
+    'down to the waist/hips at most. The face and the upper part of the garment (neckline,',
+    'shoulders, sleeves, chest, print, finishes) are sharp and fully readable. Legs, feet',
+    'and shoes are OUT of frame. Same background as IMAGE 1, seen closer; slight natural',
+    'depth of field allowed. 85-105 mm portrait feel, natural headroom.',
+    '',
+    pose
+      ? `POSE & ADJUSTMENTS (art direction — the framing and garment fidelity above stay mandatory):\n${pose}`
+      : 'POSE: relaxed, shoulders soft, calm gaze to camera, mouth closed — consistent with IMAGE 1.',
+  )
+  if (opts.detailText?.trim()) {
+    lines.push('', 'GARMENT DESCRIPTION (from the brief — follow it exactly):', opts.detailText.trim())
+  }
+  lines.push(
+    '---------------',
+    'TECHNICAL:',
+    `Aspect ratio ${opts.ratio}. High resolution. Photorealistic. Same film stock, grain and color rendering as IMAGE 1.`,
+  )
+  if (opts.sku) lines.push(`Reference: ${opts.sku}.`)
   return lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n')
 }
 

@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
 import { compareSkin, detectHead, maskHead, type PhotoKind } from '@/lib/faceMask'
-import { buildGoldSilverPrompt, buildGoldSilverProfileToFrontPrompt, buildGoldSilverRawPrompt } from '@/lib/goldSilverPrompt'
+import { buildGoldSilverBackPrompt, buildGoldSilverDetailCloseupPrompt, buildGoldSilverPrompt, buildGoldSilverProfileToFrontPrompt, buildGoldSilverRawPrompt } from '@/lib/goldSilverPrompt'
 import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
@@ -24,7 +24,6 @@ async function handlePOST(request: Request) {
     const faceUrl: string   = body.faceUrl ?? ''
     const bodyUrl: string   = isUrl(body.bodyUrl) ? body.bodyUrl : ''
     const detailUrls: string[] = (Array.isArray(body.detailUrls) ? body.detailUrls : (body.detailUrl ? [body.detailUrl] : [])).filter(isUrl)
-    const backPrompt: string = body.prompt ?? ''
     const promptOpts: any   = body.promptOpts ?? {}
     const ratio: string     = body.ratio ?? '2:3'
     const quality: string   = body.quality ?? '2K'
@@ -33,7 +32,7 @@ async function handlePOST(request: Request) {
     // aucune note ni vérification finale ajoutée par Zulo.
     const rawMode: boolean = body.raw === true
     const maskFaces: boolean = !rawMode && body.maskFaces !== false
-    // mode 'back'    : IMAGE 1 = visuel de face final (frontVisualUrl), outfitUrls = tenue vue de dos
+    // mode 'back'    : IMAGE 1 = visuel de face validé (frontVisualUrl = VISUEL OK FRONT), faceUrl optionnel, outfitUrls = tenue vue de dos — ou, si fromDetail, gros plans DETAILS (de face) → close-up DE FACE
     // mode 'profile' : IMAGE 1 = visuel de profil validé (frontVisualUrl), outfitUrls = tenue vue de face portée par une autre personne
     const mode: 'front' | 'back' | 'profile' = body.mode === 'back' ? 'back' : body.mode === 'profile' ? 'profile' : 'front'
     const refMode = mode !== 'front'   // le prompt vient du navigateur, IMAGE 1 = visuel de référence déjà validé
@@ -43,7 +42,6 @@ async function handlePOST(request: Request) {
     if (outfitUrls.length === 0) return NextResponse.json({ error: 'Au moins une outfitUrl requise.' }, { status: 400 })
     if (mode === 'front' && !isUrl(faceUrl)) return NextResponse.json({ error: 'faceUrl requise.' }, { status: 400 })
     if (refMode && !frontVisualUrl)  return NextResponse.json({ error: `frontVisualUrl requise en mode ${mode}.` }, { status: 400 })
-    if (mode === 'back' && !backPrompt.trim()) return NextResponse.json({ error: 'prompt requis.' }, { status: 400 })
     if (mode === 'front' && !String(promptOpts.decorDescription ?? '').trim()) return NextResponse.json({ error: 'décor requis.' }, { status: 400 })
 
     const apiKey = process.env.GEMINI_API_KEY
@@ -55,10 +53,9 @@ async function handlePOST(request: Request) {
     type OutfitPart = { part: any; masked: boolean; maskedUrl?: string; note?: string; kind?: PhotoKind; worn?: { buf: Buffer; mime: string } }
     const outfits: OutfitPart[] = []
     // Visage du mannequin : obligatoire en mode face, optionnel en Profil → Face (envoyé si le mannequin est connu)
-    const faceImg = mode === 'front' || (mode === 'profile' && isUrl(faceUrl)) ? await fetchImage(faceUrl) : null
+    const faceImg = mode === 'front' || (refMode && isUrl(faceUrl)) ? await fetchImage(faceUrl) : null
     for (const u of outfitUrls) {
       const { buf, mime } = await fetchImage(u)
-      if (!maskFaces && mode === 'back') { outfits.push({ part: toPart(buf, mime), masked: false }); continue }
       const det = await detectHead(buf, mime, apiKey)
       const kind = det.kind, worn = det.hasPerson ? { buf, mime } : undefined
       if (kind === 'shoes') { outfits.push({ part: toPart(buf, mime), masked: false, kind, worn, note: 'chaussures à porter' }); continue }
@@ -85,13 +82,22 @@ async function handlePOST(request: Request) {
     // Si tout est classé « chaussures », on ne sépare rien : il faut au moins une image de tenue.
     const hasGarment = outfits.some(o => o.kind !== 'shoes')
     // Profil → Face : les chaussures seules ne sont pas envoyées, le mannequin garde celles du visuel validé (IMAGE 1)
-    const garments = mode !== 'back' && hasGarment ? outfits.filter(o => o.kind !== 'shoes') : outfits
+    const garments = hasGarment ? outfits.filter(o => o.kind !== 'shoes') : outfits
     if (mode === 'profile' && hasGarment) for (const o of outfits) if (o.kind === 'shoes') o.note = 'chaussures seules : non envoyées (celles du visuel validé sont gardées)'
-    const shoes = mode === 'front' && hasGarment && !closeup ? outfits.filter(o => o.kind === 'shoes') : []
+    const shoes = mode !== 'profile' && hasGarment && !closeup ? outfits.filter(o => o.kind === 'shoes') : []
     const nOut = garments.length
 
     const rawOutfitLabel = nOut === 1 ? `IMAGE ${bodyUrl ? 3 : 2}` : `IMAGES ${bodyUrl ? 3 : 2} à ${(bodyUrl ? 3 : 2) + nOut - 1}`
-    const prompt = mode === 'back' ? backPrompt : mode === 'front' && rawMode ? buildGoldSilverRawPrompt({
+    // Face → Dos : sans Files (Back), pas de dos possible → close-up DE FACE du visuel validé, gros plan DETAILS en guide
+    const fromDetail = mode === 'back' && body.fromDetail === true
+    const prompt = fromDetail ? buildGoldSilverDetailCloseupPrompt({
+      ratio, sku: promptOpts.sku, detailCount: nOut, detailText: promptOpts.detailText,
+      modelDescription: promptOpts.modelDescription, poseDirection: promptOpts.poseDirection, hasFace: !!faceImg,
+    }) : mode === 'back' ? buildGoldSilverBackPrompt({
+      ratio, sku: promptOpts.sku, backCount: nOut, shoesCount: shoes.length, detailText: promptOpts.detailText,
+      modelDescription: promptOpts.modelDescription, framing: closeup ? 'closeup' : 'full', poseDirection: promptOpts.poseDirection,
+      hasFace: !!faceImg,
+    }) : mode === 'front' && rawMode ? buildGoldSilverRawPrompt({
       decorDescription: String(promptOpts.decorDescription), outfitLabel: rawOutfitLabel, detailText: promptOpts.detailText, closeup,
     }) : mode === 'profile' ? buildGoldSilverProfileToFrontPrompt({
       ratio, sku: promptOpts.sku, outfitCount: nOut, detailText: promptOpts.detailText, modelDescription: promptOpts.modelDescription,
@@ -134,19 +140,32 @@ async function handlePOST(request: Request) {
       const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : 'facing the camera, relaxed and composed'
       if (!rawMode) parts.push({ text: `⚠ FINAL CHECK : ONE photograph from the FRONT · same model (face identical to ${faceImg ? 'IMAGE 2, as the person of IMAGE 1' : 'IMAGE 1'}) and same scene as IMAGE 1 · front of the garment identical to ${nOut === 1 ? `IMAGE ${first}` : `IMAGES ${first}-${first + nOut - 1}`} · all visible skin has the model's skin tone from IMAGE 1, never the outfit wearer's · ${framingCheck} · ${poseCheck} · natural human proportions and anatomy · same light, film look and mood as IMAGE 1 · no text, no collage.` })
     } else if (mode === 'back') {
-      // IMAGE 1 = visuel de face final ; IMAGES 2..n+1 = tenue de dos
+      // IMAGE 1 = visuel de face validé (VISUEL OK FRONT) ; IMAGE 2 = visage (si connu) ; puis tenue de dos (ou gros plan DETAILS) ; puis chaussures
+      const first = faceImg ? 3 : 2
       if (anyMasked) {
         parts.push({ text: 'NOTE ON THE BACK-VIEW OUTFIT REFERENCES: the head of the person wearing the garment may be INTENTIONALLY pixelated. Ignore that person — the model is the one in IMAGE 1. Do not reproduce any pixelation.' })
       }
-      parts.push({ text: '=== IMAGE 1 — FINAL FRONT PHOTOGRAPH: same model, same place, same light, same style to keep ===' })
+      parts.push({ text: '=== IMAGE 1 — VALIDATED FRONT PHOTOGRAPH: same model, same place, same light, same style to keep ===' })
       parts.push(await toInlinePart(frontVisualUrl))
-      for (let i = 0; i < nOut; i++) {
-        parts.push({ text: `=== IMAGE ${i + 2} — OUTFIT seen from the BACK${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''} (reproduce the back of this garment exactly) ===` })
-        parts.push(outfits[i].part)
+      if (faceImg) {
+        parts.push({ text: '=== IMAGE 2 — MODEL FACE, front view: same person as IMAGE 1 (identity and hair only; not its light or background) ===' })
+        parts.push(toPart(faceImg.buf, faceImg.mime))
       }
-      const framingCheck = closeup ? 'CLOSE-UP from above the head to the waist/hips, legs and feet out of frame' : 'same shoes, feet fully visible'
+      for (let i = 0; i < nOut; i++) {
+        parts.push({ text: fromDetail
+          ? `=== IMAGE ${i + first} — CLOSE-UP DETAIL of the front of the garment${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''} (fabric and finishes — do not copy its framing) ===`
+          : `=== IMAGE ${i + first} — OUTFIT seen from the BACK${nOut > 1 ? ` (photo ${i + 1}/${nOut})` : ''} (reproduce the back of this garment exactly) ===` })
+        parts.push(garments[i].part)
+      }
+      for (let i = 0; i < shoes.length; i++) {
+        parts.push({ text: `=== IMAGE ${first + nOut + i} — SHOES, same pair as in IMAGE 1 (heel and back of the shoes) ===` })
+        parts.push(shoes[i].part)
+      }
+      const refs = nOut === 1 ? `IMAGE ${first}` : `IMAGES ${first}-${first + nOut - 1}`
+      const framingCheck = closeup ? 'CLOSE-UP from above the head to the waist/hips, legs and feet out of frame' : 'same shoes as IMAGE 1, feet fully visible'
       const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : 'standing still, relaxed and composed (no walking)'
-      if (!rawMode) parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model and same scene as IMAGE 1 · back of the garment identical to ${nOut === 1 ? 'IMAGE 2' : `IMAGES 2-${nOut + 1}`} · ${framingCheck} · ${poseCheck} · same light, film look and mood as IMAGE 1 · no text, no collage.` })
+      if (!rawMode && fromDetail) parts.push({ text: `⚠ FINAL CHECK : ONE CLOSE-UP photograph from the FRONT (head to waist/hips, no legs, no feet) · same model${faceImg ? ' (face identical to IMAGE 2, as the person of IMAGE 1)' : ''}, same outfit and same scene as IMAGE 1, seen closer · fabric and finishes faithful to ${refs} · calm gaze to camera · same light, film look and mood as IMAGE 1 · no text, no collage.` })
+      else if (!rawMode) parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model${faceImg ? ' (identity and hair as IMAGES 1-2)' : ''} and same scene as IMAGE 1 · back of the garment identical to ${refs} · ${framingCheck} · ${poseCheck} · same light, film look and mood as IMAGE 1 · no text, no collage.` })
     } else if (rawMode) {
       // MODE BRUT vue de face : visage, corps, tenue, chaussures — une ligne par image (pas de détails)
       const L: [string, any][] = [['visage du mannequin', toPart(faceImg!.buf, faceImg!.mime)]]
