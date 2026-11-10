@@ -11,10 +11,10 @@
  */
 /** Poses de dos (plein-pied) : une seule par visuel, tirée au hasard. */
 export const BACK_POSES = [
-  'Three-quarter back view, body turned about 45° away from the camera, walking away slowly, looking back over her shoulder at the camera, one arm swinging naturally.',
-  'Three-quarter back view, body slightly angled, weight on one hip, one knee relaxed, one hand lightly touching her hair, face turned in soft profile.',
-  'Three-quarter back view, one shoulder leaning on the wall, body angled toward the wall, head turned in profile, arms loose.',
-  'Three-quarter back view mid-step, body angled to one side, one foot slightly behind, arms relaxed, shoulders soft, head tilted slightly down and to the side.',
+  'Back view, standing relaxed, weight on one hip, one hand lightly in her hair, head turned slightly toward the open space, only her cheek and lashes visible.',
+  'Back view, standing still and relaxed, looking far into the courtyard or the view, face turned away.',
+  'Back view, standing in front of an opening onto the sea, one hand in her hair, looking out at the view, face hidden.',
+  'Back view, walking away slowly, looking back over her shoulder at the camera with a soft natural smile, face in three-quarter view.',
 ]
 
 export function buildGoldSilverBackPrompt(opts: {
@@ -98,7 +98,16 @@ export function buildGoldSilverBackPrompt(opts: {
       '',
       closeup
         ? 'POSE: still, relaxed shoulders, head facing away or turned very slightly to the side (a hint of profile at most), arms loose. Calm and natural, never stiff.'
-        : `POSE: ${BACK_POSES[Math.abs(opts.poseIndex ?? 0) % BACK_POSES.length]} Natural and alive, never stiff.`,
+        : `POSE: ${BACK_POSES[Math.abs(opts.poseIndex ?? 0) % BACK_POSES.length]}`,
+    )
+  }
+  if (!closeup) {
+    lines.push(
+      `When her face is visible, it is exactly the face from ${opts.hasFace ? 'IMAGE 2' : 'IMAGE 1'}: same features, lively eyes, natural skin texture.`,
+      '',
+      'Light: warm, soft golden daylight, gentle shadows.',
+      '',
+      'Avoid: full profile of the face, blank stare, distorted features, airbrushed skin, facing a wall, stiff straight pose.',
     )
   }
   if (opts.detailText?.trim()) {
