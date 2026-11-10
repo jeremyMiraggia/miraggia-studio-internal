@@ -343,9 +343,11 @@ export default function GoldSilverTab() {
         const faceKey = modelSource(t) !== 'aléatoire' ? model?.faceKey : undefined
         const fromDetail = !isProfile && t.backKeys.length === 0
         const cardFraming: 'full' | 'closeup' = fromDetail ? 'closeup' : framing
-        // Dos plein-pied : les 4 poses tournent d'une carte à l'autre, et changent à chaque régénération
+        // Dos plein-pied : une des 4 poses tirée au hasard (différente de la précédente si on régénère)
         const usesPose = subMode === 'back' && !fromDetail && cardFraming === 'full' && !refPose.trim()
-        const poseIndex = (idx + (statesRef.current[idx]?.versions.length ?? 0)) % 4
+        const prevPose = statesRef.current[idx]?.pose
+        let poseIndex = Math.floor(Math.random() * 4)
+        if (prevPose && poseIndex === prevPose - 1) poseIndex = (poseIndex + 1 + Math.floor(Math.random() * 3)) % 4
         const [frontVisualUrl, garmentUrls, faceUrl] = await Promise.all([
           uploadKey(t.validatedKeys[0]),
           Promise.all((isProfile ? [...t.outfitKeys, ...t.profileKeys] : fromDetail ? t.detailKeys : t.backKeys).map(uploadKey)),
@@ -553,7 +555,7 @@ export default function GoldSilverTab() {
         ) : (
           <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>
             Un visuel <strong>de dos</strong> par ligne. <strong>Image 1</strong> = <code>VISUEL OK FRONT</code> = le visuel de face <strong>validé</strong> (mannequin, décor, lumière et style à conserver). <strong>Image 2</strong> = <code>FACE PHOTO</code> du mannequin de la colonne <code>Model</code> (pas envoyée si tiré au sort). <strong>Images suivantes</strong> = <code>Files (Back)</code> = la tenue vue de dos ; une photo de chaussures seules est envoyée à part (plein-pied seulement). <strong>Sans Files (Back)</strong> : pas de dos possible → la ligne sort en <strong>close-up de face</strong> du visuel validé (<code>NOMDULOOK-closeup.jpg</code>), le gros plan <code>DETAILS</code> servant de guide pour la matière et les finitions. <code>Files (Front)</code> n'est pas utilisé.
-            Prompt : même mannequin, même lieu, même lumière, vue de dos. En plein-pied, une pose parmi 4 (marche en se retournant, appui sur une hanche main dans les cheveux, épaule contre le mur, mi-pas tête baissée) : elles tournent d'une carte à l'autre et changent à chaque régénération ; le numéro s'affiche au-dessus du visuel. Cadrage <strong>plein-pied</strong> (pieds et chaussures visibles, <code>NOMDULOOK_Back.jpg</code>) ou <strong>Close-up Back</strong> (de la tête à la taille, <code>NOMDULOOK_Back-closeup.jpg</code>). Pose modifiable via le champ « Pose & ajustements ». Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
+            Prompt : même mannequin, même lieu, même lumière, vue de dos. En plein-pied, une pose parmi 4 (marche en se retournant, appui sur une hanche main dans les cheveux, épaule contre le mur, mi-pas tête baissée), tirée au hasard pour chaque visuel (une autre à chaque régénération) ; le numéro s'affiche au-dessus du visuel. Cadrage <strong>plein-pied</strong> (pieds et chaussures visibles, <code>NOMDULOOK_Back.jpg</code>) ou <strong>Close-up Back</strong> (de la tête à la taille, <code>NOMDULOOK_Back-closeup.jpg</code>). Pose modifiable via le champ « Pose & ajustements ». Les tableaux Mannequin / Décor ne servent qu'à la description du mannequin.
           </p>
         )}
       </div>

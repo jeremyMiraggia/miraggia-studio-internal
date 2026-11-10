@@ -9,12 +9,12 @@
  *
  * Sortie : le même mannequin, dans le même décor, vu de dos, pose naturelle.
  */
-/** Poses de dos (plein-pied) : une seule par visuel, tirée par Zulo pour varier la série. */
+/** Poses de dos (plein-pied) : une seule par visuel, tirée au hasard. */
 export const BACK_POSES = [
-  'Three-quarter back view, walking away slowly, looking back over her shoulder at the camera, one arm swinging naturally.',
-  'Back view, weight on one hip, one knee relaxed, one hand lightly touching her hair, head slightly turned to the side.',
-  'Three-quarter back view, one shoulder leaning on the wall, head turned in profile, arms loose.',
-  'Back view mid-step, one foot slightly behind, both arms relaxed, shoulders soft, head tilted slightly down.',
+  'Three-quarter back view, body turned about 45° away from the camera, walking away slowly, looking back over her shoulder at the camera, one arm swinging naturally.',
+  'Three-quarter back view, body slightly angled, weight on one hip, one knee relaxed, one hand lightly touching her hair, face turned in soft profile.',
+  'Three-quarter back view, one shoulder leaning on the wall, body angled toward the wall, head turned in profile, arms loose.',
+  'Three-quarter back view mid-step, body angled to one side, one foot slightly behind, arms relaxed, shoulders soft, head tilted slightly down and to the side.',
 ]
 
 export function buildGoldSilverBackPrompt(opts: {
