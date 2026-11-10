@@ -9,6 +9,14 @@
  *
  * Sortie : le même mannequin, dans le même décor, vu de dos, pose naturelle.
  */
+/** Poses de dos (plein-pied) : une seule par visuel, tirée par Zulo pour varier la série. */
+export const BACK_POSES = [
+  'Three-quarter back view, walking away slowly, looking back over her shoulder at the camera, one arm swinging naturally.',
+  'Back view, weight on one hip, one knee relaxed, one hand lightly touching her hair, head slightly turned to the side.',
+  'Three-quarter back view, one shoulder leaning on the wall, head turned in profile, arms loose.',
+  'Back view mid-step, one foot slightly behind, both arms relaxed, shoulders soft, head tilted slightly down.',
+]
+
 export function buildGoldSilverBackPrompt(opts: {
   ratio: string
   sku?: string
@@ -18,6 +26,7 @@ export function buildGoldSilverBackPrompt(opts: {
   framing?: 'full' | 'closeup'   // closeup = gros plan de dos / mi-corps haut, jambes et chaussures hors cadre
   poseDirection?: string         // texte libre de l'onglet : REMPLACE la pose par défaut
   hasFace?: boolean              // IMAGE 2 = photo visage du mannequin
+  poseIndex?: number             // plein-pied : index dans BACK_POSES (sinon pose 1)
   shoesCount?: number            // photos de chaussures seules (après la tenue)
 }): string {
   const closeup = opts.framing === 'closeup'
@@ -89,7 +98,7 @@ export function buildGoldSilverBackPrompt(opts: {
       '',
       closeup
         ? 'POSE: still, relaxed shoulders, head facing away or turned very slightly to the side (a hint of profile at most), arms loose. Calm and natural, never stiff.'
-        : 'POSE: standing still, relaxed and composed — a calm, settled posture, weight on one leg, arms loose or one hand lightly resting; no walking, no mid-step, no dynamic movement, no twisting. Quiet and natural, never stiff.',
+        : `POSE: ${BACK_POSES[Math.abs(opts.poseIndex ?? 0) % BACK_POSES.length]} Natural and alive, never stiff.`,
     )
   }
   if (opts.detailText?.trim()) {

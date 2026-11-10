@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import sharp from 'sharp'
 import { compareSkin, detectHead, maskHead, type PhotoKind } from '@/lib/faceMask'
-import { buildGoldSilverBackPrompt, buildGoldSilverDetailCloseupPrompt, buildGoldSilverPrompt, buildGoldSilverProfileToFrontPrompt, buildGoldSilverRawPrompt } from '@/lib/goldSilverPrompt'
+import { BACK_POSES, buildGoldSilverBackPrompt, buildGoldSilverDetailCloseupPrompt, buildGoldSilverPrompt, buildGoldSilverProfileToFrontPrompt, buildGoldSilverRawPrompt } from '@/lib/goldSilverPrompt'
 import { imageFetch, imageProviderOf, withImageCost } from '@/lib/imageModel'
 
 export const maxDuration = 300
@@ -90,13 +90,15 @@ async function handlePOST(request: Request) {
     const rawOutfitLabel = nOut === 1 ? `IMAGE ${bodyUrl ? 3 : 2}` : `IMAGES ${bodyUrl ? 3 : 2} à ${(bodyUrl ? 3 : 2) + nOut - 1}`
     // Face → Dos : sans Files (Back), pas de dos possible → close-up DE FACE du visuel validé, gros plan DETAILS en guide
     const fromDetail = mode === 'back' && body.fromDetail === true
+    // Face → Dos plein-pied : une pose parmi BACK_POSES (index envoyé par le navigateur, sinon au hasard)
+    const poseIndex = Number.isInteger(body.poseIndex) ? Math.abs(body.poseIndex) % BACK_POSES.length : Math.floor(Math.random() * BACK_POSES.length)
     const prompt = fromDetail ? buildGoldSilverDetailCloseupPrompt({
       ratio, sku: promptOpts.sku, detailCount: nOut, detailText: promptOpts.detailText,
       modelDescription: promptOpts.modelDescription, poseDirection: promptOpts.poseDirection, hasFace: !!faceImg,
     }) : mode === 'back' ? buildGoldSilverBackPrompt({
       ratio, sku: promptOpts.sku, backCount: nOut, shoesCount: shoes.length, detailText: promptOpts.detailText,
       modelDescription: promptOpts.modelDescription, framing: closeup ? 'closeup' : 'full', poseDirection: promptOpts.poseDirection,
-      hasFace: !!faceImg,
+      hasFace: !!faceImg, poseIndex,
     }) : mode === 'front' && rawMode ? buildGoldSilverRawPrompt({
       decorDescription: String(promptOpts.decorDescription), outfitLabel: rawOutfitLabel, detailText: promptOpts.detailText, closeup,
     }) : mode === 'profile' ? buildGoldSilverProfileToFrontPrompt({
@@ -163,7 +165,7 @@ async function handlePOST(request: Request) {
       }
       const refs = nOut === 1 ? `IMAGE ${first}` : `IMAGES ${first}-${first + nOut - 1}`
       const framingCheck = closeup ? 'CLOSE-UP from above the head to the waist/hips, legs and feet out of frame' : 'same shoes as IMAGE 1, feet fully visible'
-      const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : 'standing still, relaxed and composed (no walking)'
+      const poseCheck = body.customPose ? 'pose as described in POSE & ADJUSTMENTS' : closeup ? 'still, relaxed shoulders' : 'ONE pose, exactly as described in POSE — alive, not stiff'
       if (!rawMode && fromDetail) parts.push({ text: `⚠ FINAL CHECK : ONE CLOSE-UP photograph from the FRONT (head to waist/hips, no legs, no feet) · same model${faceImg ? ' (face identical to IMAGE 2, as the person of IMAGE 1)' : ''}, same outfit and same scene as IMAGE 1, seen closer · fabric and finishes faithful to ${refs} · calm gaze to camera · same light, film look and mood as IMAGE 1 · no text, no collage.` })
       else if (!rawMode) parts.push({ text: `⚠ FINAL CHECK : ONE photograph from BEHIND · same model${faceImg ? ' (identity and hair as IMAGES 1-2)' : ''} and same scene as IMAGE 1 · back of the garment identical to ${refs} · ${framingCheck} · ${poseCheck} · same light, film look and mood as IMAGE 1 · no text, no collage.` })
     } else if (rawMode) {
