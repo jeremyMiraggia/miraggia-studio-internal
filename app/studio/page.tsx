@@ -24,6 +24,7 @@ import GabaritTab from '@/components/tabs/GabaritTab'
 import GrainTab from '@/components/tabs/GrainTab'
 import LingerieTab from '@/components/tabs/LingerieTab'
 import LingerieVisageTab from '@/components/tabs/LingerieVisageTab'
+import LorealTab from '@/components/tabs/LorealTab'
 import PacTab from '@/components/tabs/PacTab'
 import MarketingAssetsTab from '@/components/tabs/MarketingAssetsTab'
 
@@ -33,6 +34,7 @@ const TABS = [
   { id: 'gold-silver',     label: '🥇 Golden Silver' },
   { id: 'lingerie',        label: '🩱 Lingerie' },
   { id: 'lingerie-visage', label: '👙 Lingerie Visage' },
+  { id: 'loreal',          label: "💄 L'ORÉAL" },
   { id: 'pac',             label: '🔧 PAC' },
   { id: 'marketing',       label: '📣 Marketing assets' },
   { id: 'gabarit',         label: '📐 Gabarit' },
@@ -101,6 +103,7 @@ export default function StudioPage() {
         {tab === 'gold-silver'     && <GoldSilverTab />}
         {tab === 'lingerie'        && <LingerieTab />}
         {tab === 'lingerie-visage' && <LingerieVisageTab />}
+        {tab === 'loreal'          && <LorealTab />}
         {tab === 'pac'             && <PacTab />}
         {tab === 'marketing'       && <MarketingAssetsTab />}
         {tab === 'gabarit'         && <GabaritTab />}
