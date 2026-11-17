@@ -17,9 +17,11 @@ type Status = 'pending' | 'running' | 'done' | 'error'
 type Box = { x: number; y: number; w: number; h: number } // zone de la photo dans l'image envoyée (fractions)
 type Item = {
   num: string
+  sheet: string          // onglet Excel (ex. Brisbane) : départage les numéros présents dans plusieurs dossiers
   remark: string
   yellow: boolean
-  fileName?: string
+  excluded?: string      // retiré par une note de l'Excel (« On enlève les 4519 et D6093 »)
+  fileName?: string      // clé « dossier/nom » dans filesRef
   enabled: boolean
   status: Status
   imageUrl?: string      // sortie Gemini affichée
@@ -43,6 +45,8 @@ export function buildLorealPrompt(remark: string, nRefs = 0) {
   if (nRefs > 0) lines.push(`L'image 1 est la photo à retoucher. ${nRefs > 1 ? `Les images 2 à ${nRefs + 1} sont des références` : "L'image 2 est une référence"} pour la retouche demandée (par exemple la personne à ajouter) : n'en reprends que ce qui est demandé, intégré à la lumière et à la colorimétrie de l'image 1.`)
   return lines.join('\n')
 }
+
+const baseName = (k: string) => k.slice(k.lastIndexOf('/') + 1)
 
 const closestRatio = (r: number) => GEMINI_RATIOS.reduce((b, x) => (Math.abs(Math.log(r / x[1])) < Math.abs(Math.log(r / b[1])) ? x : b))
 
@@ -92,7 +96,8 @@ export default function LorealTab() {
   const [rowsInfo, setRowsInfo] = useState('')
   const [items, setItems] = useState<Item[]>([])
   const itemsRef = useRef<Item[]>([])
-  const filesRef = useRef(new Map<string, File>())   // nom de fichier → File
+  const filesRef = useRef(new Map<string, File>())   // « dossier/nom » → File (plusieurs dossiers possibles)
+  const dirsRef = useRef<any[]>([])
   const [dirIn, setDirIn] = useState('')
   const dirInRef = useRef<any>(null)
   const dirOutRef = useRef<any>(null)
@@ -110,12 +115,19 @@ export default function LorealTab() {
   })
   const setList = (list: Item[]) => { itemsRef.current = list; setItems(list) }
 
-  /** Associe chaque ligne à son fichier : nom (sans extension) qui finit par « Num photo ». */
+  /** Associe chaque ligne à son fichier : nom (sans extension) qui finit par « Num photo » (sans chiffre juste avant).
+   *  Si plusieurs dossiers ont le même numéro (ex. D6001), on prend le fichier dont le nom contient l'onglet Excel (Brisbane…). */
   const match = (list: Item[]) => {
-    const names = [...filesRef.current.keys()]
+    const keys = [...filesRef.current.keys()]
     return list.map(it => {
-      const fileName = names.find(n => n.replace(/\.[^.]+$/, '').toLowerCase().endsWith(it.num.toLowerCase()))
-      return { ...it, fileName, enabled: it.enabled && (!names.length || !!fileName) }
+      const num = it.num.trim().toLowerCase()
+      const hits = keys.filter(k => {
+        const stem = baseName(k).replace(/\.[^.]+$/, '').toLowerCase()
+        return stem.endsWith(num) && !(/\d/.test(num[0]) && /\d/.test(stem[stem.length - num.length - 1] ?? ''))
+      })
+      const sheet = it.sheet.toLowerCase()
+      const fileName = hits.length > 1 ? (hits.find(k => baseName(k).toLowerCase().includes(sheet)) ?? hits[0]) : hits[0]
+      return { ...it, fileName, enabled: it.enabled && (!keys.length || !!fileName) }
     })
   }
 
@@ -124,26 +136,38 @@ export default function LorealTab() {
     if (!f) return
     setError(null); setXlsName(f.name); meta.current = new Map()
     try {
-      const sheet = await readXlsx(f)
-      const header = sheet.rows.findIndex(r => r.some(c => /num\s*photo/i.test(c.value)))
-      if (header < 0) throw new Error('Colonne « Num photo » introuvable.')
-      const h = sheet.rows[header]
-      const ci = h.findIndex(c => /num\s*photo/i.test(c.value))
-      const ri = h.findIndex(c => /remarque/i.test(c.value))
-      if (ri < 0) throw new Error('Colonne « Remarques » introuvable.')
+      const sheets = await readXlsx(f)
       let total = 0, noRemark = 0
       const list: Item[] = []
-      for (const r of sheet.rows.slice(header + 1)) {
-        const num = r[ci]?.value ?? ''
-        if (!num) continue
-        total++
-        const remark = r[ri]?.value ?? ''
-        if (!remark) { noRemark++; continue }
-        const yellow = isYellow(r[ci]?.fill) || isYellow(r[ri]?.fill)
-        list.push({ num, remark, yellow, enabled: !yellow, status: 'pending', versions: [], refs: [] })
+      const perSheet: string[] = []
+      for (const sheet of sheets) {
+        const header = sheet.rows.findIndex(r => r.some(c => /num\s*photo/i.test(c.value)))
+        if (header < 0) continue
+        const h = sheet.rows[header]
+        const ci = h.findIndex(c => /num\s*photo/i.test(c.value))
+        const ri = h.findIndex(c => /remarque/i.test(c.value))
+        if (ri < 0) continue
+        // Notes hors tableau du type « On enlève les 4519 et D6093 » → ces numéros sont décochés
+        const notes = sheet.rows.flatMap(r => r.filter((_, j) => j !== ci && j !== ri)).map(c => c.value).filter(v => /enl[eè]v|retir|supprim|pas [àa] faire/i.test(v) && !/remarque/i.test(v))
+        const removed = new Set(notes.flatMap(v => v.match(/\b[A-Z]?\d{3,}\b/gi) ?? []).map(x => x.toLowerCase()))
+        const noteFor = (num: string) => removed.has(num.toLowerCase().replace(/^_/, '')) ? notes.find(v => new RegExp(`\\b${num.replace(/^_/, '')}\\b`, 'i').test(v)) : undefined
+        let n = 0
+        for (const r of sheet.rows.slice(header + 1)) {
+          const num = r[ci]?.value ?? ''
+          if (!num) continue
+          total++
+          const remark = r[ri]?.value ?? ''
+          if (!remark) { noRemark++; continue }
+          const yellow = isYellow(r[ci]?.fill) || isYellow(r[ri]?.fill)
+          const excluded = noteFor(num)
+          list.push({ num, sheet: sheet.name, remark, yellow, excluded, enabled: !yellow && !excluded, status: 'pending', versions: [], refs: [] })
+          n++
+        }
+        perSheet.push(`${sheet.name} : ${n}`)
       }
-      const y = list.filter(i => i.yellow).length
-      setRowsInfo(`${total} lignes · ${noRemark} sans remarque (ignorées) · ${list.length} à retoucher dont ${y} surlignées en jaune (déjà faites, décochées)`)
+      if (!perSheet.length) throw new Error('Aucune feuille avec les colonnes « Num photo » et « Remarques ».')
+      const y = list.filter(i => i.yellow).length, ex = list.filter(i => i.excluded).length
+      setRowsInfo(`${total} lignes · ${noRemark} sans remarque (ignorées) · ${list.length} à retoucher (${perSheet.join(', ')}) dont ${y} surlignées en jaune (déjà faites, décochées)${ex ? ` · ${ex} retirée(s) par une note de l'Excel` : ''}`)
       setList(match(list))
     } catch (e: any) { setError(`Excel : ${e?.message ?? e}`) }
   }
@@ -153,19 +177,27 @@ export default function LorealTab() {
     try {
       // @ts-ignore
       const h = await window.showDirectoryPicker({ mode: 'read' })
-      const m = new Map<string, File>()
+      for (const d of dirsRef.current) if (await d.isSameEntry(h)) return
+      let n = 0
       for await (const [name, entry] of h.entries()) {
-        if (entry.kind === 'file' && /\.(jpe?g|png|webp)$/i.test(name)) m.set(name, await entry.getFile())
+        if (entry.kind === 'file' && /\.(jpe?g|png|webp)$/i.test(name)) { filesRef.current.set(`${h.name}/${name}`, await entry.getFile()); n++ }
       }
-      filesRef.current = m; dirInRef.current = h; setDirIn(`${h.name} (${m.size} photos)`); meta.current = new Map()
-      setList(match(itemsRef.current.map(i => ({ ...i, enabled: !i.yellow }))))
+      dirsRef.current = [...dirsRef.current, h]; dirInRef.current = h
+      setDirIn(prev => `${prev ? prev + ' + ' : ''}${h.name} (${n})`); meta.current = new Map()
+      setList(match(itemsRef.current.map(i => ({ ...i, enabled: !i.yellow && !i.excluded }))))
     } catch (e: any) { if (e?.name !== 'AbortError') setError(`Dossier : ${e?.message ?? e}`) }
+  }
+  const clearIn = () => {
+    filesRef.current = new Map(); dirsRef.current = []; dirInRef.current = null; setDirIn(''); meta.current = new Map()
+    setList(itemsRef.current.map(i => ({ ...i, fileName: undefined, enabled: !i.yellow && !i.excluded })))
   }
   const pickOut = async () => {
     try {
       // @ts-ignore
       const h = await window.showDirectoryPicker({ mode: 'readwrite' })
-      if (dirInRef.current && await h.isSameEntry(dirInRef.current)) { setError('Choisis un dossier de sortie différent du dossier des originaux (les fichiers gardent le même nom).'); return }
+      let same = false
+      for (const d of dirsRef.current) if (await d.isSameEntry(h)) same = true
+      if (same) { setError('Choisis un dossier de sortie différent du dossier des originaux (les fichiers gardent le même nom).'); return }
       dirOutRef.current = h; setDirOut(h.name); setError(null)
     } catch (e: any) { if (e?.name !== 'AbortError') setError(`Dossier : ${e?.message ?? e}`) }
   }
@@ -191,7 +223,7 @@ export default function LorealTab() {
     const it = itemsRef.current[idx]
     const m = await prepared(idx)
     const blob = await finalizeOutput(url, m.box, m.W, m.H)
-    const name = it.fileName!.replace(/\.[^.]+$/, '.jpg')
+    const name = baseName(it.fileName!).replace(/\.[^.]+$/, '.jpg')
     if (dirOutRef.current) {
       const fh = await dirOutRef.current.getFileHandle(name, { create: true })
       const w = await fh.createWritable(); await w.write(blob); await w.close()
@@ -245,10 +277,10 @@ export default function LorealTab() {
   const stats = useMemo(() => {
     const on = items.filter(i => i.enabled && i.fileName)
     const todo = on.filter(i => i.status !== 'done')
-    return { on: on.length, done: items.filter(i => i.status === 'done').length, todo: todo.length, missing: items.filter(i => !i.yellow && !i.fileName).length }
+    return { on: on.length, done: items.filter(i => i.status === 'done').length, todo: todo.length, missing: items.filter(i => !i.yellow && !i.excluded && !i.fileName).length }
   }, [items])
 
-  const setAll = (v: boolean) => setList(itemsRef.current.map(i => ({ ...i, enabled: v && !!i.fileName && !i.yellow })))
+  const setAll = (v: boolean) => setList(itemsRef.current.map(i => ({ ...i, enabled: v && !!i.fileName && !i.yellow && !i.excluded })))
 
   /* ----------- Rendu ----------- */
   const box: React.CSSProperties = { background: '#fff', borderRadius: 12, padding: 16, marginBottom: 16, border: '1px solid rgba(13,74,92,0.1)' }
@@ -260,7 +292,7 @@ export default function LorealTab() {
     <div style={{ maxWidth: 1200 }}>
       <h2 style={{ margin: '0 0 4px', color: '#0D4A5C' }}>💄 L&apos;ORÉAL</h2>
       <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
-        Retouche en série : chaque ligne de l&apos;Excel avec une <strong>Remarque</strong> → la photo dont le nom finit par le <strong>Num photo</strong> (ex. <code>_020</code> → <code>Rambouillet_020.jpg</code>) est retouchée par Gemini selon la remarque.
+        Retouche en série : chaque ligne de l&apos;Excel (toutes les feuilles) avec une <strong>Remarque</strong> → la photo dont le nom finit par le <strong>Num photo</strong> (ex. <code>_020</code> → <code>Rambouillet_020.jpg</code>) est retouchée par Gemini selon la remarque. Plusieurs dossiers possibles ; si un numéro existe dans deux dossiers, Zulo prend le fichier qui contient le nom de la feuille (Brisbane, Melbourne…).
         Les lignes <span style={{ background: '#FEF08A', padding: '0 3px' }}>surlignées en jaune</span> sont déjà faites : décochées.
         Sortie : même nom, <strong>mêmes dimensions au pixel près</strong>, JPEG. ≈ {PRICE['4K']} $ par photo en 4K, {PRICE['2K']} $ en 2K.
       </p>
@@ -270,7 +302,8 @@ export default function LorealTab() {
           📊 {xlsName || "Choisir l'Excel"}
           <input type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => handleXlsx(e.target.files?.[0])} />
         </label>
-        <button onClick={pickIn} style={btn('#0D4A5C')} disabled={running}>🗂 {dirIn || 'Dossier des photos à retoucher'}</button>
+        <button onClick={pickIn} style={btn('#0D4A5C')} disabled={running}>🗂 {dirIn ? '+ Ajouter un dossier' : 'Dossier(s) des photos à retoucher'}</button>
+        {dirIn && <span style={{ fontSize: 12, color: '#374151' }}>{dirIn} <button onClick={clearIn} disabled={running} style={{ ...inp, fontSize: 11, cursor: 'pointer', background: '#fff', padding: '2px 6px' }}>✕</button></span>}
         <button onClick={pickOut} style={btn('#6B7A8A')} disabled={running}>📁 {dirOut || 'Dossier de sortie'}</button>
         {rowsInfo && <div style={{ width: '100%', fontSize: 12, color: '#374151' }}>✓ {rowsInfo}{stats.missing > 0 && dirIn && <span style={{ color: '#92400E' }}> · {stats.missing} photo(s) introuvable(s) dans le dossier</span>}</div>}
         {error && <div style={{ width: '100%', fontSize: 13, color: '#991B1B' }}>⚠ {error}</div>}
@@ -312,8 +345,10 @@ export default function LorealTab() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <input type="checkbox" checked={it.enabled} disabled={running || !it.fileName} onChange={e => update(idx, { enabled: e.target.checked })} />
                 <strong style={{ fontSize: 14, color: '#0D4A5C' }}>{it.num}</strong>
-                <span style={{ fontSize: 11, color: '#6B7280' }}>{it.fileName ?? (dirIn ? '⚠ photo introuvable' : '')}</span>
+                {new Set(items.map(i => i.sheet)).size > 1 && <span style={{ fontSize: 10, background: '#E8F2F5', padding: '1px 5px', borderRadius: 4 }}>{it.sheet}</span>}
+                <span style={{ fontSize: 11, color: '#6B7280' }}>{it.fileName ? baseName(it.fileName) : (dirIn ? '⚠ photo introuvable' : '')}</span>
                 {it.yellow && <span style={{ fontSize: 10, background: '#FEF08A', padding: '1px 5px', borderRadius: 4 }}>déjà fait</span>}
+                {it.excluded && <span title={it.excluded} style={{ fontSize: 10, background: '#FEE2E2', padding: '1px 5px', borderRadius: 4 }}>retiré (note Excel)</span>}
                 <span style={{ marginLeft: 'auto', fontSize: 11, color: it.status === 'error' ? '#991B1B' : it.status === 'done' ? '#166534' : '#6B7280' }}>
                   {it.status === 'running' ? '⏳ en cours' : it.status === 'done' ? (it.saved ? '✓ enregistrée' : '✓') : it.status === 'error' ? '✗ erreur' : ''}
                 </span>

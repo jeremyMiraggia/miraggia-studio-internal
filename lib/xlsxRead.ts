@@ -22,18 +22,15 @@ const colIndex = (ref: string) => {
   return n - 1
 }
 
-export async function readXlsx(file: File | Blob): Promise<XlsxSheet> {
+/** Toutes les feuilles du classeur, dans l'ordre des onglets. */
+export async function readXlsx(file: File | Blob): Promise<XlsxSheet[]> {
   const zip = await JSZip.loadAsync(file)
   const read = async (p: string) => (await zip.file(p)?.async('string')) ?? ''
 
-  // 1re feuille
   const wb = parse(await read('xl/workbook.xml'))
-  const sheetEl = els(wb, 'sheet')[0]
-  if (!sheetEl) throw new Error('Classeur vide.')
-  const rid = sheetEl.getAttributeNS(NS_R, 'id') ?? sheetEl.getAttribute('r:id')
-  const rels = parse(await read('xl/_rels/workbook.xml.rels'))
-  const target = els(rels, 'Relationship').find(r => r.getAttribute('Id') === rid)?.getAttribute('Target') ?? 'worksheets/sheet1.xml'
-  const sheetPath = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`
+  const sheetEls = els(wb, 'sheet')
+  if (!sheetEls.length) throw new Error('Classeur vide.')
+  const rels = els(parse(await read('xl/_rels/workbook.xml.rels')), 'Relationship')
 
   const shared = els(parse(await read('xl/sharedStrings.xml')), 'si').map(textOf)
 
@@ -54,21 +51,28 @@ export async function readXlsx(file: File | Blob): Promise<XlsxSheet> {
   const cellXfs = els(styles, 'cellXfs')[0]
   const xfFill = cellXfs ? els(cellXfs, 'xf').map(x => fills[Number(x.getAttribute('fillId') ?? 0)]) : []
 
-  const sheet = parse(await read(sheetPath))
-  const rows: XlsxCell[][] = []
-  for (const row of els(sheet, 'row')) {
-    const r = Number(row.getAttribute('r') ?? rows.length + 1) - 1
-    const cells: XlsxCell[] = []
-    for (const c of els(row, 'c')) {
-      const ci = colIndex(c.getAttribute('r') ?? 'A1')
-      const t = c.getAttribute('t')
-      const v = els(c, 'v')[0]?.textContent ?? ''
-      const value = t === 's' ? (shared[Number(v)] ?? '') : t === 'inlineStr' ? textOf(c) : v
-      cells[ci] = { value: value.trim(), fill: xfFill[Number(c.getAttribute('s') ?? 0)] }
+  const out: XlsxSheet[] = []
+  for (const [i, sheetEl] of sheetEls.entries()) {
+    const rid = sheetEl.getAttributeNS(NS_R, 'id') ?? sheetEl.getAttribute('r:id')
+    const target = rels.find(r => r.getAttribute('Id') === rid)?.getAttribute('Target') ?? `worksheets/sheet${i + 1}.xml`
+    const sheetPath = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`
+    const sheet = parse(await read(sheetPath))
+    const rows: XlsxCell[][] = []
+    for (const row of els(sheet, 'row')) {
+      const r = Number(row.getAttribute('r') ?? rows.length + 1) - 1
+      const cells: XlsxCell[] = []
+      for (const c of els(row, 'c')) {
+        const ci = colIndex(c.getAttribute('r') ?? 'A1')
+        const t = c.getAttribute('t')
+        const v = els(c, 'v')[0]?.textContent ?? ''
+        const value = t === 's' ? (shared[Number(v)] ?? '') : t === 'inlineStr' ? textOf(c) : v
+        cells[ci] = { value: value.trim(), fill: xfFill[Number(c.getAttribute('s') ?? 0)] }
+      }
+      rows[r] = Array.from(cells, x => x ?? { value: '' })
     }
-    rows[r] = Array.from(cells, x => x ?? { value: '' })
+    out.push({ name: sheetEl.getAttribute('name') ?? `Feuille ${i + 1}`, rows: Array.from(rows, x => x ?? []) })
   }
-  return { name: sheetEl.getAttribute('name') ?? 'Feuille 1', rows: Array.from(rows, x => x ?? []) }
+  return out
 }
 
 /** Jaune (surligneur) : rouge et vert forts, bleu faible. */
