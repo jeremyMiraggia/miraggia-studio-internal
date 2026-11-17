@@ -108,6 +108,7 @@ export default function LorealTab() {
   const stopRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [, force] = useState(0)
+  const [sheetFilter, setSheetFilter] = useState('')
   const meta = useRef(new Map<number, Promise<{ url: string; ratio: string; box: Box; W: number; H: number }>>())
 
   const update = (idx: number, patch: Partial<Item>) => setItems(prev => {
@@ -119,6 +120,7 @@ export default function LorealTab() {
    *  Si plusieurs dossiers ont le même numéro (ex. D6001), on prend le fichier dont le nom contient l'onglet Excel (Brisbane…). */
   const match = (list: Item[]) => {
     const keys = [...filesRef.current.keys()]
+    const sheetNames = [...new Set(list.map(i => i.sheet.toLowerCase()))]
     return list.map(it => {
       const num = it.num.trim().toLowerCase()
       const hits = keys.filter(k => {
@@ -126,7 +128,9 @@ export default function LorealTab() {
         return stem.endsWith(num) && !(/\d/.test(num[0]) && /\d/.test(stem[stem.length - num.length - 1] ?? ''))
       })
       const sheet = it.sheet.toLowerCase()
-      const fileName = hits.length > 1 ? (hits.find(k => baseName(k).toLowerCase().includes(sheet)) ?? hits[0]) : hits[0]
+      const others = sheetNames.filter(n => n !== sheet)
+      const ok = hits.filter(k => { const b = baseName(k).toLowerCase(); return b.includes(sheet) || !others.some(o => b.includes(o)) })
+      const fileName = ok.find(k => baseName(k).toLowerCase().includes(sheet)) ?? ok[0]
       return { ...it, fileName, enabled: it.enabled && (!keys.length || !!fileName) }
     })
   }
@@ -266,7 +270,7 @@ export default function LorealTab() {
   }
 
   const runAll = async () => {
-    const queue = itemsRef.current.map((it, i) => ({ it, i })).filter(x => x.it.enabled && x.it.fileName && x.it.status !== 'done').map(x => x.i)
+    const queue = itemsRef.current.map((it, i) => ({ it, i })).filter(x => x.it.enabled && x.it.fileName && x.it.status !== 'done' && (!sheetFilter || x.it.sheet === sheetFilter)).map(x => x.i)
     if (!queue.length) return
     setRunning(true); stopRef.current = false
     const worker = async () => { while (queue.length && !stopRef.current) await generateOne(queue.shift()!) }
@@ -275,12 +279,19 @@ export default function LorealTab() {
   }
 
   const stats = useMemo(() => {
-    const on = items.filter(i => i.enabled && i.fileName)
+    const shown = items.filter(i => !sheetFilter || i.sheet === sheetFilter)
+    const on = shown.filter(i => i.enabled && i.fileName)
     const todo = on.filter(i => i.status !== 'done')
-    return { on: on.length, done: items.filter(i => i.status === 'done').length, todo: todo.length, missing: items.filter(i => !i.yellow && !i.excluded && !i.fileName).length }
-  }, [items])
+    const miss = new Map<string, number>()
+    for (const i of items) if (!i.yellow && !i.excluded && !i.fileName) miss.set(i.sheet, (miss.get(i.sheet) ?? 0) + 1)
+    const total = new Map<string, number>()
+    for (const i of items) if (!i.yellow && !i.excluded) total.set(i.sheet, (total.get(i.sheet) ?? 0) + 1)
+    const missing = [...miss].map(([sh, n]) => n === total.get(sh) ? `${sh} : aucune photo trouvée (dossier pas encore ajouté ?)` : `${sh} : ${n} photo(s) introuvable(s)`)
+    return { on: on.length, done: shown.filter(i => i.status === 'done').length, todo: todo.length, missing }
+  }, [items, sheetFilter])
+  const sheetList = useMemo(() => [...new Set(items.map(i => i.sheet))], [items])
 
-  const setAll = (v: boolean) => setList(itemsRef.current.map(i => ({ ...i, enabled: v && !!i.fileName && !i.yellow && !i.excluded })))
+  const setAll = (v: boolean) => setList(itemsRef.current.map(i => (sheetFilter && i.sheet !== sheetFilter) ? i : ({ ...i, enabled: v && !!i.fileName && !i.yellow && !i.excluded })))
 
   /* ----------- Rendu ----------- */
   const box: React.CSSProperties = { background: '#fff', borderRadius: 12, padding: 16, marginBottom: 16, border: '1px solid rgba(13,74,92,0.1)' }
@@ -292,7 +303,7 @@ export default function LorealTab() {
     <div style={{ maxWidth: 1200 }}>
       <h2 style={{ margin: '0 0 4px', color: '#0D4A5C' }}>💄 L&apos;ORÉAL</h2>
       <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
-        Retouche en série : chaque ligne de l&apos;Excel (toutes les feuilles) avec une <strong>Remarque</strong> → la photo dont le nom finit par le <strong>Num photo</strong> (ex. <code>_020</code> → <code>Rambouillet_020.jpg</code>) est retouchée par Gemini selon la remarque. Plusieurs dossiers possibles ; si un numéro existe dans deux dossiers, Zulo prend le fichier qui contient le nom de la feuille (Brisbane, Melbourne…).
+        Retouche en série : chaque ligne de l&apos;Excel (toutes les feuilles) avec une <strong>Remarque</strong> → la photo dont le nom finit par le <strong>Num photo</strong> (ex. <code>_020</code> → <code>Rambouillet_020.jpg</code>) est retouchée par Gemini selon la remarque. Plusieurs dossiers possibles ; chaque ligne ne prend que des fichiers de sa feuille (un fichier qui contient « Melbourne » ne sert jamais à une ligne de la feuille Brisbane). Le filtre « Feuille » limite l'affichage et la génération à une ville.
         Les lignes <span style={{ background: '#FEF08A', padding: '0 3px' }}>surlignées en jaune</span> sont déjà faites : décochées.
         Sortie : même nom, <strong>mêmes dimensions au pixel près</strong>, JPEG. ≈ {PRICE['4K']} $ par photo en 4K, {PRICE['2K']} $ en 2K.
       </p>
@@ -305,7 +316,7 @@ export default function LorealTab() {
         <button onClick={pickIn} style={btn('#0D4A5C')} disabled={running}>🗂 {dirIn ? '+ Ajouter un dossier' : 'Dossier(s) des photos à retoucher'}</button>
         {dirIn && <span style={{ fontSize: 12, color: '#374151' }}>{dirIn} <button onClick={clearIn} disabled={running} style={{ ...inp, fontSize: 11, cursor: 'pointer', background: '#fff', padding: '2px 6px' }}>✕</button></span>}
         <button onClick={pickOut} style={btn('#6B7A8A')} disabled={running}>📁 {dirOut || 'Dossier de sortie'}</button>
-        {rowsInfo && <div style={{ width: '100%', fontSize: 12, color: '#374151' }}>✓ {rowsInfo}{stats.missing > 0 && dirIn && <span style={{ color: '#92400E' }}> · {stats.missing} photo(s) introuvable(s) dans le dossier</span>}</div>}
+        {rowsInfo && <div style={{ width: '100%', fontSize: 12, color: '#374151' }}>✓ {rowsInfo}{stats.missing.length > 0 && dirIn && <span style={{ color: '#92400E' }}> · {stats.missing.join(' · ')}</span>}</div>}
         {error && <div style={{ width: '100%', fontSize: 13, color: '#991B1B' }}>⚠ {error}</div>}
       </div>
 
@@ -324,6 +335,15 @@ export default function LorealTab() {
               {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </div>
+          {sheetList.length > 1 && (
+            <div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Feuille</div>
+              <select value={sheetFilter} onChange={e => setSheetFilter(e.target.value)} style={inp} disabled={running}>
+                <option value="">Toutes</option>
+                {sheetList.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          )}
           <button onClick={() => setAll(true)} style={{ ...inp, cursor: 'pointer', background: '#fff' }} disabled={running}>Tout cocher (hors jaune)</button>
           <button onClick={() => setAll(false)} style={{ ...inp, cursor: 'pointer', background: '#fff' }} disabled={running}>Tout décocher</button>
           <div style={{ flex: 1 }} />
@@ -339,6 +359,7 @@ export default function LorealTab() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 12 }}>
         {items.map((it, idx) => {
+          if (sheetFilter && it.sheet !== sheetFilter) return null
           const file = it.fileName ? filesRef.current.get(it.fileName) : undefined
           return (
             <div key={`${it.num}-${idx}`} style={{ ...box, marginBottom: 0, opacity: it.enabled ? 1 : 0.55, background: it.yellow ? '#FEFCE8' : '#fff' }}>
