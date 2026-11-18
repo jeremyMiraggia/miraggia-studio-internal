@@ -464,21 +464,110 @@ export function masqueIA(bbox: Box, crop: Box): Img {
 export function buildLogoPrompt(o: { rendu: keyof typeof RENDUS; vetement?: string; texte?: string }) {
   const r = RENDUS[o.rendu]
   const texte = o.texte?.trim() ? o.texte.trim() : 'and graphic elements'
-  return `Image 1 is an upscaled close-up of a ${o.vetement?.trim() || 'garment'} with a logo that has been digitally placed and already has the correct shape. Image 2 is the reference logo. Refine image 1 only so the logo looks like a real ${r.en} on this fabric: ${r.details}, subtle relief and shading matching the scene lighting, crisp edges. Do NOT change the logo's shape, letters (${texte}), proportions, position or size — keep them exactly as in image 1. Keep the fabric, seams, framing and colors identical.`
+  return `Image 1 is an upscaled close-up of a ${o.vetement?.trim() || 'garment'} with a logo that has been digitally placed and already has the correct shape. Image 2 is the reference logo, used ONLY for colors and material — never copy its size or position. Refine image 1 only so the logo looks like a real ${r.en} on this fabric: ${r.details}, subtle relief and shading matching the scene lighting, crisp edges. Do NOT change the logo's shape, letters (${texte}), proportions, position or size — keep them exactly as in image 1: same size, same place, one single logo, no second copy. Keep the fabric, seams, framing and colors identical.`
 }
 
 /* ============================== 7. harmoniser et recoller ============================== */
 
+/** Appartenance douce de chaque pixel à chaque couleur du logo (vs le tissu). */
+function membership(R: Float32Array, G: Float32Array, B: Float32Array, colors: RGB[], fabric: RGB): Float32Array[] {
+  const fl = rgbToLab(...fabric), labs = colors.map(c => rgbToLab(...c))
+  const out = colors.map(() => new Float32Array(R.length))
+  for (let j = 0; j < R.length; j++) {
+    const l = rgbToLab(R[j], G[j], B[j]), df = dE(l, fl)
+    let bi = -1, bd = Infinity
+    labs.forEach((c, ci) => { const d = dE(l, c); if (d < bd) { bd = d; bi = ci } })
+    if (bi >= 0) out[bi][j] = clamp((df - bd) / 15, 0, 1) * clamp((45 - bd) / 15, 0, 1)
+  }
+  return out
+}
+
+export type Recalage = { s: number; dx: number; dy: number; score: number }
+
+/**
+ * Recalage de la sortie IA sur le logo collé : l'IA a tendance à redessiner le logo plus grand / décalé
+ * (elle s'inspire du logo de référence). On cherche l'échelle s et le décalage (dx, dy) qui superposent
+ * le logo de l'IA sur le logo collé, puis on ré-échantillonne la sortie IA en conséquence.
+ */
+function recaler(ia: Img, placed: Placed, crop: Box, fabric: RGB): { img: Img; t: Recalage } {
+  const { w, h } = crop
+  const bx = placed.box.x - crop.x, by = placed.box.y - crop.y, bw = placed.box.w, bh = placed.box.h
+  const cx = bx + bw / 2, cy = by + bh / 2
+  const [R, G, B] = planes(ia)
+  const S = new Float32Array(w * h)
+  membership(R, G, B, placed.colors, fabric).forEach(m => { for (let j = 0; j < S.length; j++) S[j] = Math.max(S[j], m[j]) })
+  // cible : logo collé (somme des masques), sur une zone élargie pour pénaliser le débordement
+  const pts: { x: number; y: number; t: number }[] = []
+  const ex = bw * 0.4, ey = bh * 0.4
+  const step = Math.max(1, Math.round(Math.sqrt(((bw + 2 * ex) * (bh + 2 * ey)) / 5000)))
+  for (let y = Math.floor(by - ey); y < by + bh + ey; y += step) for (let x = Math.floor(bx - ex); x < bx + bw + ex; x += step) {
+    let t = 0
+    const lx = x - bx, ly = y - by
+    if (lx >= 0 && ly >= 0 && lx < bw && ly < bh) for (const m of placed.masks) t += m[ly * bw + lx]
+    pts.push({ x, y, t: Math.min(1, t) })
+  }
+  const sample = (x: number, y: number) => {
+    const X = Math.round(x), Y = Math.round(y)
+    return X < 0 || Y < 0 || X >= w || Y >= h ? 0 : S[Y * w + X]
+  }
+  const tm = pts.reduce((a, p) => a + p.t, 0) / pts.length
+  const tv = Math.sqrt(pts.reduce((a, p) => a + (p.t - tm) ** 2, 0)) || 1
+  const corr = (s: number, dx: number, dy: number) => {
+    let sm = 0, sq = 0, cr = 0
+    for (const p of pts) { const v = sample(cx + dx + (p.x - cx) * s, cy + dy + (p.y - cy) * s); sm += v; sq += v * v; cr += v * (p.t - tm) }
+    const n = pts.length, sd = Math.sqrt(Math.max(1e-9, sq - (sm * sm) / n))
+    return cr / (sd * tv)
+  }
+  let best: Recalage = { s: 1, dx: 0, dy: 0, score: corr(1, 0, 0) }
+  const ident = best.score
+  const sh = Math.max(1, Math.round(bw / 25))
+  for (let s = 0.6; s <= 1.81; s += 0.05) {
+    for (let dy = -Math.round(bh * 0.8); dy <= bh * 0.8; dy += sh) for (let dx = -Math.round(bw * 0.5); dx <= bw * 0.5; dx += sh) {
+      const sc = corr(s, dx, dy)
+      if (sc > best.score) best = { s, dx, dy, score: sc }
+    }
+  }
+  // affinage
+  for (let s = best.s - 0.04; s <= best.s + 0.041; s += 0.01) for (let dy = best.dy - sh; dy <= best.dy + sh; dy += 0.5) for (let dx = best.dx - sh; dx <= best.dx + sh; dx += 0.5) {
+    const sc = corr(s, dx, dy)
+    if (sc > best.score) best = { s, dx, dy, score: sc }
+  }
+  // gain négligeable ou logo introuvable dans la sortie IA → pas de recalage
+  if (best.score < 0.25 || best.score - ident < 0.03) return { img: ia, t: { s: 1, dx: 0, dy: 0, score: ident } }
+  const out = cloneImg(ia)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const fx = cx + best.dx + (x - cx) * best.s, fy = cy + best.dy + (y - cy) * best.s
+    const x0 = clamp(Math.floor(fx), 0, w - 1), y0 = clamp(Math.floor(fy), 0, h - 1)
+    const x1 = clamp(x0 + 1, 0, w - 1), y1 = clamp(y0 + 1, 0, h - 1), tx = clamp(fx - x0, 0, 1), ty = clamp(fy - y0, 0, 1)
+    const o = (y * w + x) * 4
+    for (let c = 0; c < 3; c++) {
+      const v = (ia.d[(y0 * w + x0) * 4 + c] * (1 - tx) + ia.d[(y0 * w + x1) * 4 + c] * tx) * (1 - ty)
+              + (ia.d[(y1 * w + x0) * 4 + c] * (1 - tx) + ia.d[(y1 * w + x1) * 4 + c] * tx) * ty
+      out.d[o + c] = v
+    }
+  }
+  return { img: out, t: best }
+}
+
 /** ia = sortie IA déjà ramenée à la taille du recadrage. base = option A (identique à la source hors zone effacée). */
-export function harmoniser(base: Img, source: Img, ia: Img, crop: Box, placed: Placed): Img {
+export function harmoniser(base: Img, source: Img, iaRaw: Img, crop: Box, placed: Placed): { img: Img; recalage: Recalage } {
   const { w, h } = crop
   const bx = placed.box.x - crop.x, by = placed.box.y - crop.y
   const cx = bx + placed.box.w / 2, cy = by + placed.box.h / 2
+  const fabric = ringMedian(base, placed.box, 4)
+  // 0) recalage de la sortie IA sur la position / taille du logo collé
+  const { img: ia, t: recalage } = recaler(iaRaw, placed, crop, fabric)
+
+  // ellipse de recollage (demi-axes 0.95 w × 1.0 h, floutée sigma 5), limitée à la zone éditable du masque API (bbox + 15 %)
   const ax = 0.95 * placed.box.w, ay = 1.0 * placed.box.h
-  // ellipse de recollage (floutée sigma 5)
+  const mx = placed.box.w * 0.15 + 2, my = placed.box.h * 0.15 + 2
   let ell: Float32Array = new Float32Array(w * h)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) ell[y * w + x] = ((x - cx) / ax) ** 2 + ((y - cy) / ay) ** 2 <= 1 ? 1 : 0
-  ell = blur(ell, w, h, 5)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const inEll = ((x - cx) / ax) ** 2 + ((y - cy) / ay) ** 2 <= 1
+    const inZone = x >= bx - mx && x < bx + placed.box.w + mx && y >= by - my && y < by + placed.box.h + my
+    ell[y * w + x] = inEll && inZone ? 1 : 0
+  }
+  ell = blur(ell, w, h, Math.min(5, Math.max(1.5, placed.box.h / 8)))
 
   const [iR, iG, iB] = planes(ia)
   const [oR, oG, oB] = planes(source, crop)
@@ -497,20 +586,16 @@ export function harmoniser(base: Img, source: Img, ia: Img, crop: Box, placed: P
     for (let j = 0; j < p.length; j++) q[j] = (p[j] - mi) * k + mo
     return q
   })
-  // 3) calage couleur du logo : médiane IA sous chaque masque → couleur mesurée
-  placed.masks.forEach((m, ci) => {
-    const idx: number[] = [], wts: number[] = []
-    for (let y = 0; y < placed.box.h; y++) for (let x = 0; x < placed.box.w; x++) {
-      const v = m[y * placed.box.w + x]
-      const X = bx + x, Y = by + y
-      if (X < 0 || Y < 0 || X >= w || Y >= h) continue
-      idx.push(Y * w + X); wts.push(v)
-    }
-    const strong = idx.filter((_, k) => wts[k] > 0.5)
+  // 3) calage couleur du logo : masque doux calculé SUR LA SORTIE IA (pas sur le logo collé,
+  //    sinon on redessine le logo A par-dessus celui de l'IA), médiane → couleur mesurée
+  const mem = membership(out[0], out[1], out[2], placed.colors, fabric)
+  mem.forEach((m, ci) => {
+    const strong: number[] = []
+    for (let j = 0; j < m.length; j++) if (m[j] > 0.5 && ell[j] > 0.5) strong.push(j)
     if (strong.length < 3) return
     for (let c = 0; c < 3; c++) {
       const shift = placed.colors[ci][c] - median(strong.map(j => out[c][j]))
-      idx.forEach((j, k) => { out[c][j] += shift * wts[k] })
+      for (let j = 0; j < m.length; j++) if (m[j] > 0) out[c][j] += shift * m[j]
     }
   })
   // 4) netteté de la photo
@@ -523,7 +608,7 @@ export function harmoniser(base: Img, source: Img, ia: Img, crop: Box, placed: P
     const i = ((crop.y + y) * res.w + crop.x + x) * 4
     for (let c = 0; c < 3; c++) res.d[i + c] = clamp(base.d[i + c] * (1 - a) + sharp[c][j] * a, 0, 255)
   }
-  return res
+  return { img: res, recalage }
 }
 
 /* ============================== 8. QA ============================== */
@@ -549,9 +634,20 @@ export function qa(final: Img, bbox: Box, logo: PreparedLogo, colors: RGB[]): QA
       if (ref || got) union[ci]++
     })
   }
+  // débordement : pixels couleur logo autour de la bbox (anneau de 40 %) = logo trop grand / dédoublé
+  const ring = expandBox(bbox, Math.max(bbox.w, bbox.h) * 0.4, final.w, final.h)
+  let spill = 0
+  for (let y = ring.y; y < ring.y + ring.h; y++) for (let x = ring.x; x < ring.x + ring.w; x++) {
+    if (x >= bbox.x && x < bbox.x + bbox.w && y >= bbox.y && y < bbox.y + bbox.h) continue
+    const i = (y * final.w + x) * 4
+    const l = rgbToLab(final.d[i], final.d[i + 1], final.d[i + 2])
+    const df = dE(l, fabric)
+    if (labs.some(c => dE(l, c) < Math.min(30, df))) spill++
+  }
   const parCouleur = inter.map((v, i) => (union[i] ? v / union[i] : 1))
   const tot = area.reduce((s, v) => s + v, 0) || 1
-  const score = parCouleur.reduce((s, v, i) => s + v * area[i], 0) / tot
+  const spillRatio = (spill * Z * Z) / tot
+  const score = (parCouleur.reduce((s, v, i) => s + v * area[i], 0) / tot) * clamp(1 - spillRatio, 0, 1)
   return { score, statut: score >= 0.8 ? 'ok' : score >= 0.65 ? 'a_verifier' : 'rejet', parCouleur }
 }
 

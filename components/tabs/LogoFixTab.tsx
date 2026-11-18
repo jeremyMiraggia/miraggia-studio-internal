@@ -10,10 +10,10 @@ import Dropzone from '@/components/ui/Dropzone'
 import {
   buildLogoPrompt, canvasBlob, collerLogo, cropResize, effacerAncienLogo, expandBox, fileToImg, harmoniser, IA_H, IA_W,
   imgToCanvas, localiserLogo, masqueIA, preparerLogo, qa, RENDUS, zoneRecadrage,
-  type Box, type Img, type Placed, type PreparedLogo, type QA, type Rendu,
+  type Box, type Img, type Placed, type PreparedLogo, type QA, type Recalage, type Rendu,
 } from '@/lib/logoFix'
 
-type Variant = { img: Img; qa: QA; url: string }
+type Variant = { img: Img; qa: QA; url: string; recalage: Recalage }
 type Result = {
   bbox: Box; hintUsed: boolean; A: Img; qaA: QA; placed: Placed; crop?: Box
   variants: Variant[]; chosen: number | 'A'; started: number; duree: number; cost: number; note?: string
@@ -52,7 +52,20 @@ export default function LogoFixTab() {
   const [vetement, setVetement] = useState('')
   const [texte, setTexte] = useState('')
   const [busy, setBusy] = useState(false)
-  const [step, setStep] = useState('')
+  const [step, setStepRaw] = useState('')
+  const [stepNo, setStepNo] = useState(0)
+  const [startedAt, setStartedAt] = useState(0)
+  const [now, setNow] = useState(0)
+  /** Affiche l'étape PUIS rend la main au navigateur (sinon le calcul bloque l'affichage). */
+  const setStep = async (msg: string, no?: number) => {
+    setStepRaw(msg); if (no) setStepNo(no)
+    await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
+  }
+  useEffect(() => {
+    if (!busy) return
+    const t = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(t)
+  }, [busy])
   const [error, setError] = useState<string | null>(null)
   const [res, setRes] = useState<Result | null>(null)
   const logoRef = useRef<{ file: File; prepared: PreparedLogo; png: Blob; url?: string } | null>(null)
@@ -76,7 +89,7 @@ export default function LogoFixTab() {
       const im = await fileToImg(files[0], { svgWidth: 2000, maxSide: 1200 })
       const prepared = preparerLogo(im)
       logoRef.current = { file: files[0], prepared, png: await canvasBlob(imgToCanvas(im)) }
-      setStep(`Logo : ${prepared.colors.length} couleur(s) détectée(s), ${prepared.w}×${prepared.h} px`)
+      setStepRaw(`Logo : ${prepared.colors.length} couleur(s) détectée(s), ${prepared.w}×${prepared.h} px`)
     } catch (e: any) { setError(`Logo : ${e?.message ?? e}`) }
   }
 
@@ -110,14 +123,14 @@ export default function LogoFixTab() {
   /* ----------- passe IA (étapes 5 à 8) ----------- */
   const passeIA = async (base: { src: Img; bbox: Box; A: Img; placed: Placed }, logo: NonNullable<typeof logoRef.current>) => {
     const crop = zoneRecadrage(base.bbox, base.src.w, base.src.h)
-    setStep('Recadrage agrandi + masque…')
+    await setStep('Recadrage agrandi + masque, envoi des images…', 4)
     const cropImg = cropResize(base.A, crop, IA_W, IA_H)
     const [cropUrl, maskUrl, logoUrl] = await Promise.all([
       canvasBlob(imgToCanvas(cropImg)).then(b => up(b, 'crop.png')),
       canvasBlob(imgToCanvas(masqueIA(base.bbox, crop))).then(b => up(b, 'mask.png')),
       logo.url ? Promise.resolve(logo.url) : up(logo.png, 'logo.png').then(u => (logo.url = u)),
     ])
-    setStep(`Passe IA (OpenAI, qualité ${quality}, ${n} variante${n > 1 ? 's' : ''})…`)
+    await setStep(`Passe IA OpenAI en cours (qualité ${quality}, ${n} variante${n > 1 ? 's' : ''}) — compter 30 s à 2 min…`, 5)
     const r = await fetch('/api/studio/logo-fix', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cropUrl, maskUrl, logoUrl, quality, n, prompt: buildLogoPrompt({ rendu: rendu as keyof typeof RENDUS, vetement, texte }) }),
@@ -126,13 +139,13 @@ export default function LogoFixTab() {
     let j: any
     try { j = JSON.parse(text) } catch { throw new Error(`HTTP ${r.status} : ${text.replace(/<[^>]+>/g, ' ').trim().slice(0, 160)}`) }
     if (!r.ok) throw Object.assign(new Error(j.error || `HTTP ${r.status}`), { kind: j.kind })
-    setStep('Harmonisation + recollage + QA…')
+    await setStep('Harmonisation, recollage et contrôle qualité…', 6)
     const variants: Variant[] = []
     for (const url of j.images as string[]) {
       const iaFull = await fileToImg(await fetch(url).then(x => x.blob()))
       const iaSmall = cropResize(iaFull, { x: 0, y: 0, w: iaFull.w, h: iaFull.h }, crop.w, crop.h)
-      const img = harmoniser(base.A, base.src, iaSmall, crop, base.placed)
-      variants.push({ img, url, qa: qa(img, base.bbox, logo.prepared, base.placed.colors) })
+      const { img, recalage } = harmoniser(base.A, base.src, iaSmall, crop, base.placed)
+      variants.push({ img, url, recalage, qa: qa(img, base.bbox, logo.prepared, base.placed.colors) })
     }
     return { crop, variants, cost: typeof j.cost === 'number' ? j.cost : 0 }
   }
@@ -140,19 +153,19 @@ export default function LogoFixTab() {
   const run = async (opts?: { onlyIA?: boolean }) => {
     const logo = logoRef.current
     if (!src || !logo) return
-    setBusy(true); setError(null)
+    setBusy(true); setError(null); setStartedAt(Date.now()); setNow(Date.now()); setStepNo(0)
     const started = Date.now()
     try {
       let base: Result
       if (opts?.onlyIA && res) {
         base = { ...res, variants: [], chosen: 'A', started, cost: res.cost, note: undefined }
       } else {
-        setStep('Localisation du logo…')
+        await setStep('Localisation du logo…', 1)
         const bbox = exact && hint ? hint : localiserLogo(src, logo.prepared, hint ?? undefined)
         if (!bbox) throw new Error('Logo introuvable : dessine la zone du logo sur l’aperçu (cliquer-glisser), puis relance.')
-        setStep('Effacement de l’ancien logo…')
+        await setStep('Effacement de l’ancien logo…', 2)
         const e = effacerAncienLogo(src, bbox, logo.prepared)
-        setStep('Collage du vrai logo (option A)…')
+        await setStep('Collage du vrai logo (option A)…', 3)
         const A = collerLogo(e.clean, bbox, logo.prepared, e.measured)
         base = { bbox, hintUsed: !!hint, A: A.image, placed: A.placed, qaA: qa(A.image, bbox, logo.prepared, A.placed.colors), variants: [], chosen: 'A', started, duree: 0, cost: 0 }
       }
@@ -171,7 +184,7 @@ export default function LogoFixTab() {
           throw e
         }
         if (all.some(v => v.qa.statut !== 'rejet')) break
-        if (attempt < 2) setStep(`QA en rejet (IoU ${Math.max(...all.map(v => v.qa.score)).toFixed(2)}) : relance ${attempt + 1}/2…`)
+        if (attempt < 2) await setStep(`QA en rejet (IoU ${Math.max(...all.map(v => v.qa.score)).toFixed(2)}) : relance ${attempt + 1}/2…`)
         else note = 'La passe IA reste en rejet après 2 relances : garde la version sans IA (option A).'
       }
       all = [...prev, ...all]
@@ -180,7 +193,7 @@ export default function LogoFixTab() {
       setRes({ ...base, crop, variants: all, chosen, cost, note, duree: (Date.now() - started) / 1000 })
     } catch (e: any) {
       setError(e?.message ?? String(e))
-    } finally { setBusy(false); setStep('') }
+    } finally { setBusy(false); setStepRaw(''); setStepNo(0) }
   }
 
   /* ----------- sorties ----------- */
@@ -221,7 +234,28 @@ export default function LogoFixTab() {
 
   return (
     <div style={{ maxWidth: 1200 }}>
+      <style>{`@keyframes lfspin { to { transform: rotate(360deg) } } @keyframes lfbar { 0% { margin-left: -40% } 100% { margin-left: 100% } }`}</style>
       <h2 style={{ margin: '0 0 4px', color: '#0D4A5C' }}>🏷 Logo</h2>
+      {(busy || error) && (
+        <div style={{ position: 'sticky', top: 0, zIndex: 5, marginBottom: 12, borderRadius: 10, padding: '10px 14px',
+                      background: error && !busy ? '#FEF2F2' : '#E8F2F5', border: `1px solid ${error && !busy ? '#FCA5A5' : '#9CC9D6'}`, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+          {busy ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ width: 18, height: 18, border: '3px solid #9CC9D6', borderTopColor: '#0D4A5C', borderRadius: '50%', display: 'inline-block', animation: 'lfspin 0.8s linear infinite' }} />
+                <strong style={{ color: '#0D4A5C', fontSize: 14 }}>Correction en cours{stepNo ? ` — étape ${stepNo}/${rendu === 'aucun' ? 3 : 6}` : ''}</strong>
+                <span style={{ marginLeft: 'auto', fontSize: 13, color: '#0D4A5C', fontVariantNumeric: 'tabular-nums' }}>{Math.max(0, (now - startedAt) / 1000).toFixed(0)} s</span>
+              </div>
+              <div style={{ fontSize: 13, color: '#374151', marginTop: 4 }}>{step || 'Préparation…'}</div>
+              <div style={{ height: 4, background: '#C7E0E7', borderRadius: 2, marginTop: 8, overflow: 'hidden' }}>
+                {stepNo === 5
+                  ? <div style={{ width: '40%', height: '100%', background: '#0D4A5C', animation: 'lfbar 1.4s ease-in-out infinite' }} />
+                  : <div style={{ width: `${(stepNo / (rendu === 'aucun' ? 3 : 6)) * 100}%`, height: '100%', background: '#0D4A5C', transition: 'width 0.3s' }} />}
+              </div>
+            </>
+          ) : <div style={{ fontSize: 13, color: '#991B1B' }}>⚠ {error}</div>}
+        </div>
+      )}
       <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
         Corrige un logo déformé sur un visuel généré : l&apos;ancien logo est effacé, le <strong>vrai logo est collé</strong> (sa forme vient toujours du fichier fourni),
         puis l&apos;IA (OpenAI, avec masque) ne fait que la <strong>matière et la lumière</strong> (broderie, impression…) sur un recadrage agrandi. Seule une ellipse autour du logo est recollée ; le reste de l&apos;image ne bouge pas.
@@ -254,7 +288,7 @@ export default function LogoFixTab() {
             <div><div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Texte du logo (optionnel)</div>
               <input value={texte} onChange={e => setTexte(e.target.value)} placeholder="AKAMMAK" style={{ ...inp, width: 130 }} disabled={busy} /></div>
             <div style={{ flex: 1 }} />
-            <button onClick={() => run()} style={btn('#0D4A5C')} disabled={busy || !logoRef.current}>{busy ? '⏳ …' : '▶ Corriger le logo'}</button>
+            <button onClick={() => run()} style={btn('#0D4A5C')} disabled={busy || !logoRef.current}>{busy ? `⏳ En cours… ${Math.max(0, (now - startedAt) / 1000).toFixed(0)} s` : '▶ Corriger le logo'}</button>
           </div>
           <div style={{ fontSize: 12, color: '#374151', marginBottom: 6 }}>
             Zone du logo (optionnel) : <strong>cliquer-glisser</strong> sur l&apos;aperçu pour limiter la recherche.
@@ -262,9 +296,13 @@ export default function LogoFixTab() {
               <button onClick={() => setHint(null)} style={{ ...small, marginLeft: 8, padding: '2px 6px' }}>✕ zone</button></>}
             {!logoRef.current && <span style={{ color: '#92400E' }}> · ajoute le logo HD</span>}
           </div>
+          <div style={{ position: 'relative', maxWidth: 700 }}>
+          {busy && <div style={{ position: 'absolute', inset: 0, background: 'rgba(13,74,92,0.35)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>
+            <span style={{ background: '#fff', borderRadius: 8, padding: '8px 14px', fontSize: 13, color: '#0D4A5C', fontWeight: 600 }}>⏳ {step || 'Préparation…'}</span></div>}
           <canvas ref={previewRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
-                  style={{ width: '100%', maxWidth: 700, cursor: 'crosshair', borderRadius: 6, display: 'block' }} />
-          {(step || error) && <div style={{ marginTop: 8, fontSize: 13, color: error ? '#991B1B' : '#0D4A5C' }}>{error ? `⚠ ${error}` : `⏳ ${step}`}</div>}
+                  style={{ width: '100%', maxWidth: 700, cursor: busy ? 'wait' : 'crosshair', borderRadius: 6, display: 'block' }} />
+          </div>
+          {!busy && step && <div style={{ marginTop: 8, fontSize: 12, color: '#0D4A5C' }}>{step}</div>}
           <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 6 }}>Logo vu de biais ou sur un pli marqué : la correction de perspective (4 coins) n&apos;est pas encore disponible — dessine une zone serrée et coche « position exacte ». Plusieurs logos : corrige-en un, puis « Continuer sur ce résultat ».</div>
         </div>
       )}
@@ -287,7 +325,7 @@ export default function LogoFixTab() {
             <span style={{ fontSize: 12, color: '#6B7280' }}>Versions :</span>
             <button onClick={() => setRes({ ...res, chosen: 'A' })} style={{ ...small, outline: res.chosen === 'A' ? '2px solid #0D4A5C' : 'none' }}>A (sans IA) · {res.qaA.score.toFixed(2)}</button>
             {res.variants.map((v, i) => (
-              <button key={v.url} onClick={() => setRes({ ...res, chosen: i })} style={{ ...small, outline: res.chosen === i ? '2px solid #0D4A5C' : 'none', color: BADGE[v.qa.statut][1] }}>IA {i + 1} · {v.qa.score.toFixed(2)}</button>
+              <button key={v.url} onClick={() => setRes({ ...res, chosen: i })} style={{ ...small, outline: res.chosen === i ? '2px solid #0D4A5C' : 'none', color: BADGE[v.qa.statut][1] }} title={v.recalage.s !== 1 || v.recalage.dx || v.recalage.dy ? `Logo IA recalé : ×${(1 / v.recalage.s).toFixed(2)}, décalage ${v.recalage.dx.toFixed(0)} / ${v.recalage.dy.toFixed(0)} px` : 'pas de recalage'}>IA {i + 1} · {v.qa.score.toFixed(2)}{Math.abs(v.recalage.s - 1) > 0.04 ? ` · recalé ×${(1 / v.recalage.s).toFixed(2)}` : ''}</button>
             ))}
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
