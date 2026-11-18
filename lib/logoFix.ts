@@ -176,6 +176,32 @@ export function preparerLogo(im: Img): PreparedLogo {
       fgFull[i] = clamp((d - 20) / 30, 0, 1) // seuil / largeur (en ΔE Lab)
     }
   }
+  // ne garder que le logo : composantes connexes principales (élimine le grain / les points du fond d'une photo)
+  {
+    const bin = new Uint8Array(N)
+    for (let i = 0; i < N; i++) bin[i] = fgFull[i] > 0.5 ? 1 : 0
+    const lab = new Int32Array(N).fill(-1), sizes: number[] = [], stack: number[] = []
+    for (let s0 = 0; s0 < N; s0++) {
+      if (!bin[s0] || lab[s0] >= 0) continue
+      let n = 0; lab[s0] = sizes.length; stack.push(s0)
+      while (stack.length) {
+        const p = stack.pop()!, px = p % im.w, py = (p / im.w) | 0; n++
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const qx = px + dx, qy = py + dy
+          if (qx < 0 || qy < 0 || qx >= im.w || qy >= im.h) continue
+          const q = qy * im.w + qx
+          if (bin[q] && lab[q] < 0) { lab[q] = sizes.length; stack.push(q) }
+        }
+      }
+      sizes.push(n)
+    }
+    const big = Math.max(0, ...sizes)
+    const keepLab = sizes.map(n => n >= big * 0.02)
+    const keep = new Uint8Array(N)
+    for (let i = 0; i < N; i++) keep[i] = lab[i] >= 0 && keepLab[lab[i]] ? 1 : 0
+    const near = dilate(keep, im.w, im.h, 2) // garde le bord doux autour des parties conservées
+    for (let i = 0; i < N; i++) if (!near[i]) fgFull[i] = 0
+  }
   // bbox du logo
   let x0 = im.w, y0 = im.h, x1 = -1, y1 = -1
   for (let y = 0; y < im.h; y++) for (let x = 0; x < im.w; x++) if (fgFull[y * im.w + x] > 0.1) {
@@ -194,12 +220,27 @@ export function preparerLogo(im: Img): PreparedLogo {
   }
   if (!sample.length) throw new Error('Logo trop fin pour en extraire les couleurs.')
   let best = kmeans(sample, 1)
-  for (let k = 2; k <= Math.min(4, sample.length); k++) {
+  for (let k = 2; k <= Math.min(5, sample.length); k++) {
     const r = kmeans(sample, k)
-    if (r.inertia > best.inertia * 0.5) break // gain insuffisant → on garde k-1
+    if (r.inertia > best.inertia * 0.72) break // gain insuffisant → on garde k-1
     best = r
   }
-  const centers = best.centers.filter(c => sample.some(p => dE(p, c) < 40))
+  // petites couleurs franches (ex. la gueule rouge) : pixels loin de tous les centres → groupe à part
+  let cs = best.centers
+  for (let extra = 0; extra < 2 && cs.length < 6; extra++) {
+    const far = sample.filter(p => Math.min(...cs.map(c => dE(p, c))) > 70)
+    if (far.length < sample.length * 0.004) break
+    cs = [...cs, ([0, 1, 2].map(ch => median(far.map(p => p[ch]))) as RGB)]
+  }
+  // couleur de chaque groupe = médiane de sa moitié la plus saturée (la couleur du fil, pas ses ombres)
+  const chroma = (p: RGB) => { const l = rgbToLab(...p); return Math.hypot(l[1], l[2]) }
+  const centers = cs.map(c => {
+    const own = sample.filter(p => cs.every(o => dE(p, c) <= dE(p, o)))
+    if (!own.length) return c
+    const sorted = [...own].sort((x, y) => chroma(y) - chroma(x))
+    const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 2)))
+    return [0, 1, 2].map(ch => median(top.map(p => p[ch]))) as RGB
+  }).filter(c => sample.some(p => dE(p, c) < 40))
   const masks = centers.map(() => new Float32Array(bw * bh))
   for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
     const j = y * bw + x
@@ -409,7 +450,9 @@ export function collerLogo(clean: Img, bbox: Box, logo: PreparedLogo, measured: 
   const Ls = blur(Lb, w, h, Math.max(1.5, h / 6))
   const mean = Ls.reduce((s, v) => s + v, 0) / Ls.length || 1
   const fabricLum = lum(...ringMedian(clean, bbox, 4))
-  const colors: RGB[] = logo.colors.map((c, i) => measured[i] ?? (c.rgb.map(v => v * clamp(0.55 + fabricLum / 255, 0.6, 1)) as RGB))
+  // couleurs : celles du logo HD, sauf si on fournit des couleurs mesurées sur le visuel (option)
+  void fabricLum
+  const colors: RGB[] = logo.colors.map((c, i) => measured[i] ?? c.rgb)
   const image = cloneImg(clean)
   let s = seed * 9301 + 49297
   const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280 }

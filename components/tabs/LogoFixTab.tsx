@@ -51,6 +51,7 @@ export default function LogoFixTab() {
   const [n, setN] = useState(1)
   const [vetement, setVetement] = useState('')
   const [texte, setTexte] = useState('')
+  const [couleurs, setCouleurs] = useState<'hd' | 'mesurees'>('hd')
   const [busy, setBusy] = useState(false)
   const [step, setStepRaw] = useState('')
   const [stepNo, setStepNo] = useState(0)
@@ -166,7 +167,7 @@ export default function LogoFixTab() {
         await setStep('Effacement de l’ancien logo…', 2)
         const e = effacerAncienLogo(src, bbox, logo.prepared)
         await setStep('Collage du vrai logo (option A)…', 3)
-        const A = collerLogo(e.clean, bbox, logo.prepared, e.measured)
+        const A = collerLogo(e.clean, bbox, logo.prepared, couleurs === 'mesurees' ? e.measured : logo.prepared.colors.map(() => null))
         base = { bbox, hintUsed: !!hint, A: A.image, placed: A.placed, qaA: qa(A.image, bbox, logo.prepared, A.placed.colors), variants: [], chosen: 'A', started, duree: 0, cost: 0 }
       }
       if (rendu === 'aucun' || base.bbox.w < 20) {
@@ -285,6 +286,10 @@ export default function LogoFixTab() {
               </select></div>
             <div><div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Vêtement (optionnel)</div>
               <input value={vetement} onChange={e => setVetement(e.target.value)} placeholder="black zip sweatshirt" style={{ ...inp, width: 170 }} disabled={busy} /></div>
+            <div><div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Couleurs du logo</div>
+              <select value={couleurs} onChange={e => setCouleurs(e.target.value as any)} style={inp} disabled={busy} title="HD : couleurs exactes du fichier logo. Mesurées : reprises sur l'ancien logo du visuel (utile seulement s'il avait déjà les bonnes couleurs).">
+                <option value="hd">Du logo HD</option><option value="mesurees">Mesurées sur le visuel</option>
+              </select></div>
             <div><div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Texte du logo (optionnel)</div>
               <input value={texte} onChange={e => setTexte(e.target.value)} placeholder="AKAMMAK" style={{ ...inp, width: 130 }} disabled={busy} /></div>
             <div style={{ flex: 1 }} />
