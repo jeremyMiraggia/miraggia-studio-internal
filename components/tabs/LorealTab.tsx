@@ -286,7 +286,10 @@ export default function LorealTab() {
     for (const i of items) if (!i.yellow && !i.excluded && !i.fileName) miss.set(i.sheet, (miss.get(i.sheet) ?? 0) + 1)
     const total = new Map<string, number>()
     for (const i of items) if (!i.yellow && !i.excluded) total.set(i.sheet, (total.get(i.sheet) ?? 0) + 1)
-    const missing = [...miss].map(([sh, n]) => n === total.get(sh) ? `${sh} : aucune photo trouvée (dossier pas encore ajouté ?)` : `${sh} : ${n} photo(s) introuvable(s)`)
+    const missing = [...total].map(([sh, t]) => {
+      const n = miss.get(sh) ?? 0
+      return n === 0 ? `✓ ${sh} : ${t}/${t} photos trouvées` : n === t ? `${sh} : aucune photo trouvée (dossier pas ajouté — ignoré)` : `${sh} : ${t - n}/${t} photos trouvées, ${n} introuvable(s)`
+    })
     return { on: on.length, done: shown.filter(i => i.status === 'done').length, todo: todo.length, missing }
   }, [items, sheetFilter])
   const sheetList = useMemo(() => [...new Set(items.map(i => i.sheet))], [items])
@@ -316,7 +319,7 @@ export default function LorealTab() {
         <button onClick={pickIn} style={btn('#0D4A5C')} disabled={running}>🗂 {dirIn ? '+ Ajouter un dossier' : 'Dossier(s) des photos à retoucher'}</button>
         {dirIn && <span style={{ fontSize: 12, color: '#374151' }}>{dirIn} <button onClick={clearIn} disabled={running} style={{ ...inp, fontSize: 11, cursor: 'pointer', background: '#fff', padding: '2px 6px' }}>✕</button></span>}
         <button onClick={pickOut} style={btn('#6B7A8A')} disabled={running}>📁 {dirOut || 'Dossier de sortie'}</button>
-        {rowsInfo && <div style={{ width: '100%', fontSize: 12, color: '#374151' }}>✓ {rowsInfo}{stats.missing.length > 0 && dirIn && <span style={{ color: '#92400E' }}> · {stats.missing.join(' · ')}</span>}</div>}
+        {rowsInfo && <div style={{ width: '100%', fontSize: 12, color: '#374151' }}>✓ {rowsInfo}{stats.missing.length > 0 && dirIn && <div style={{ marginTop: 4 }}>{stats.missing.map(m => <div key={m} style={{ color: m.startsWith('✓') ? '#166534' : '#92400E' }}>{m}</div>)}</div>}</div>}
         {error && <div style={{ width: '100%', fontSize: 13, color: '#991B1B' }}>⚠ {error}</div>}
       </div>
 

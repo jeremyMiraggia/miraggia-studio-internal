@@ -25,6 +25,7 @@ import GrainTab from '@/components/tabs/GrainTab'
 import LingerieTab from '@/components/tabs/LingerieTab'
 import LingerieVisageTab from '@/components/tabs/LingerieVisageTab'
 import LorealTab from '@/components/tabs/LorealTab'
+import LogoFixTab from '@/components/tabs/LogoFixTab'
 import PacTab from '@/components/tabs/PacTab'
 import MarketingAssetsTab from '@/components/tabs/MarketingAssetsTab'
 
@@ -35,6 +36,7 @@ const TABS = [
   { id: 'lingerie',        label: '🩱 Lingerie' },
   { id: 'lingerie-visage', label: '👙 Lingerie Visage' },
   { id: 'loreal',          label: "💄 L'ORÉAL" },
+  { id: 'logo',            label: '🏷 Logo' },
   { id: 'pac',             label: '🔧 PAC' },
   { id: 'marketing',       label: '📣 Marketing assets' },
   { id: 'gabarit',         label: '📐 Gabarit' },
@@ -54,7 +56,7 @@ const TABS = [
 ]
 
 /** Onglets qui génèrent des images via Gemini / ChatGPT (Grain, Video, Extracteur n'en génèrent pas ; Lingerie Visage passe par Seedream) → interrupteur. */
-const IMAGE_TABS = new Set(TABS.map(t => t.id).filter(id => !['grain', 'video', 'extract', 'lingerie-visage'].includes(id)))
+const IMAGE_TABS = new Set(TABS.map(t => t.id).filter(id => !['grain', 'video', 'extract', 'lingerie-visage', 'logo'].includes(id)))
 
 export default function StudioPage() {
   const [tab, setTab] = useState('simple')
@@ -104,6 +106,7 @@ export default function StudioPage() {
         {tab === 'lingerie'        && <LingerieTab />}
         {tab === 'lingerie-visage' && <LingerieVisageTab />}
         {tab === 'loreal'          && <LorealTab />}
+        {tab === 'logo'            && <LogoFixTab />}
         {tab === 'pac'             && <PacTab />}
         {tab === 'marketing'       && <MarketingAssetsTab />}
         {tab === 'gabarit'         && <GabaritTab />}
