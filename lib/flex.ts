@@ -9,7 +9,7 @@
  */
 import Papa from 'papaparse'
 import { readZipIndex, extractEntry, getEntryDataOffset, type ZipEntry } from '@/lib/notion/zipReader'
-import { parsePoseCell, poseToPrompt, viewToPrompt } from '@/lib/poses'
+import { parsePoseCell } from '@/lib/poses'
 
 /* ============================== ZIP ============================== */
 
@@ -269,6 +269,73 @@ export function schemaPourIA(d: Diagnostic) {
   }))
 }
 
+/* ============================== poses (catalogue du SaaS Miraggia) ============================== */
+
+export type SaasPose = { label: string; description: string; view: string; audience: string }
+export type Audience = 'auto' | 'adulte' | 'enfant'
+
+const VIEWS: Record<string, { key: 'front' | 'profile' | 'back' | 'back3q'; text: string }> = {
+  front: { key: 'front', text: 'front view, the model faces the camera' },
+  face: { key: 'front', text: 'front view, the model faces the camera' },
+  'de face': { key: 'front', text: 'front view, the model faces the camera' },
+  side: { key: 'profile', text: 'side view, the model is seen in profile' },
+  profil: { key: 'profile', text: 'side view, the model is seen in profile' },
+  profile: { key: 'profile', text: 'side view, the model is seen in profile' },
+  back: { key: 'back', text: 'back view, shot from behind' },
+  dos: { key: 'back', text: 'back view, shot from behind' },
+  '3/4 dos': { key: 'back3q', text: 'rear three-quarter view, back dominant' },
+  'back 3/4': { key: 'back3q', text: 'rear three-quarter view, back dominant' },
+}
+const FRAMINGS: Record<string, string> = {
+  'plein pied': 'full-length shot, head to feet in frame, feet fully visible',
+  'full': 'full-length shot, head to feet in frame, feet fully visible',
+  'full body': 'full-length shot, head to feet in frame, feet fully visible',
+  'mi-corps': 'mid-body shot, from the top of the head to mid-thigh',
+  'mi corps': 'mid-body shot, from the top of the head to mid-thigh',
+  'mi-corps haut': 'upper-body shot, from just above the head down to the waist; legs out of frame',
+  'mi corps haut': 'upper-body shot, from just above the head down to the waist; legs out of frame',
+  'close up haut': 'upper-body close-up, from just above the head down to the chest/waist; legs out of frame',
+  'buste': 'upper-body shot, head to waist; legs out of frame',
+  'mi-corps bas': 'lower-body shot, from the waist down to the feet; face out of frame',
+  'mi corps bas': 'lower-body shot, from the waist down to the feet; face out of frame',
+  'close up bas': 'lower-body close-up, from the waist down to the feet; face out of frame',
+  'visage': 'tight portrait, head and shoulders only, the face fills most of the frame',
+  'portrait': 'tight portrait, head and shoulders only',
+  'detail': 'tight close-up on a garment detail',
+  'détail': 'tight close-up on a garment detail',
+}
+const keyOf = (s: string) => norm(s).replace(/[’'`]/g, ' ').replace(/\s+/g, ' ').trim()
+const poseKey = (label: string) => keyOf(label).replace(/^(enfant|adulte|kid|kids)\s*-\s*/, '')
+
+/** « Front, Le sautillé leger, Mi-corps Haut » → vue + cadrage + description de la pose du SaaS. */
+export function resoudrePose(cell: string, poses: SaasPose[], audience: Audience = 'auto'): { text: string; unknown: string[]; matched: string[] } {
+  const parts = cell.split(/[,/|·;]/).map(s => s.trim()).filter(Boolean)
+  let view: (typeof VIEWS)[string] | undefined
+  const framing: string[] = [], found: SaasPose[] = [], unknown: string[] = []
+  for (const part of parts) {
+    const k = keyOf(part)
+    if (VIEWS[k]) { view = VIEWS[k]; continue }
+    if (FRAMINGS[k]) { framing.push(FRAMINGS[k]); continue }
+    // pose du SaaS : libellé exact, sinon libellé sans « enfant - » ; préférence de public
+    const exact = poses.filter(p => keyOf(p.label) === k)
+    const loose = exact.length ? exact : poses.filter(p => poseKey(p.label) === poseKey(part))
+    if (loose.length) {
+      const pref = audience === 'auto' ? undefined : audience
+      found.push((pref && loose.find(p => p.audience === pref)) || loose.find(p => p.audience === 'adulte') || loose[0])
+      continue
+    }
+    unknown.push(part)
+  }
+  // vue : celle de la cellule, sinon celle de la pose du SaaS
+  if (!view && found[0]?.view) view = Object.values(VIEWS).find(v => v.key === found[0].view)
+  const lines: string[] = []
+  if (view) lines.push(`- View: ${view.text}.`)
+  if (framing.length) lines.push(`- Framing: ${framing.join('; ')}.`)
+  for (const p of found) lines.push(`- Pose (${p.label.replace(/^(enfant|adulte)\s*-\s*/i, '')}): ${p.description || p.label}`)
+  for (const u of unknown) lines.push(`- Also: ${u}`)
+  return { text: lines.join('\n'), unknown, matched: found.map(p => p.label) }
+}
+
 /* ============================== visuels ============================== */
 
 export type CatalogMannequin = { name: string; faceUrl: string; bodyUrl: string; description?: string }
@@ -288,7 +355,7 @@ export type Visuel = {
 
 const sanitize = (s: string) => s.replace(/[\/\\:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim()
 
-export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catalog: CatalogMannequin[] | null, maxImages = 14): Visuel[] {
+export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catalog: CatalogMannequin[] | null, maxImages = 14, saasPoses: SaasPose[] = [], audience: Audience = 'auto'): Visuel[] {
   const t = d.tables.find(x => x.name === r.table)
   if (!t) return []
   const linked = (colName: string) => d.tables.find(x => x.name === t.columns.find(c => c.name === colName)?.link)
@@ -353,10 +420,10 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
     passes.forEach((pose, pi) => {
       const vars: Record<string, string> = {}
       for (const c of t.columns) vars[norm(c.name)] = cellRefs(String(row[c.name] ?? '')).join(', ') || String(row[c.name] ?? '').trim()
-      const poseLabel = pose ? parsePoseCell(pose) : null
-      // pose connue du catalogue Zulo → prompt détaillé ; sinon vue reconnue + texte de la cellule tel quel
-      let posePrompt = pose ? (poseLabel ? poseToPrompt(poseLabel) : pose) : ''
-      if (pose && poseLabel && /lib\/poses|à définir/i.test(posePrompt)) posePrompt = `${viewToPrompt(poseLabel.view)}. Pose as written in the brief: "${pose}".`
+      // pose : vue + cadrage + description du catalogue de poses du SaaS (Admin → Poses)
+      const resolved = pose ? resoudrePose(pose, saasPoses, audience) : null
+      const posePrompt = resolved?.text ?? ''
+      const poseWarn = resolved?.unknown.length ? [`pose inconnue du SaaS : ${resolved.unknown.map(u => `« ${u} »`).join(', ')} (envoyée telle quelle)`] : []
       vars['pose'] = pose ?? ''
       vars['n'] = String(pi + 1)
       const fill = (tpl: string) => tpl.replace(/\{([^{}]+)\}/g, (_, k) => vars[norm(k)] ?? '')
@@ -366,7 +433,7 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
         const v = resolveText(row, tx.source)
         if (v) tail.push(`${tx.label}: ${v}`)
       }
-      if (posePrompt) tail.push(`POSE / VIEW: ${posePrompt}`)
+      if (posePrompt) tail.push(`POSE / VIEW / FRAMING:\n${posePrompt}`)
       // bloc images numérotées, recalculé pour la sélection faite sur la carte
       const promptFor = (sel: VisuelImage[]) => {
         const lines: string[] = []
@@ -389,7 +456,7 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
         id: `${ri}-${pi}`, rowIndex: ri, title, pose, images, defaultOff, promptFor,
         prompt: promptFor(images.filter((_, i) => !defaultOff.includes(i))),
         fileName: `${base}${passes.length > 1 && !/\{(pose|n)\}/i.test(r.fileName) ? `_${pi + 1}` : ''}.jpg`,
-        warnings: [...warnBase],
+        warnings: [...warnBase, ...poseWarn],
       })
     })
   })

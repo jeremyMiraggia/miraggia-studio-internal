@@ -14,7 +14,7 @@ import { compressImage } from '@/lib/compressImage'
 import {
   construireVisuels, diagnostiquer, enregistrerRecette, listerRecettes, ouvrirZipNotion, recetteVide, schemaPourIA,
   sourceLabel, sourcesPossibles, supprimerRecette, validerRecette, variablesDisponibles,
-  type CatalogMannequin, type ColType, type Diagnostic, type NotionZip, type Recette, type Source, type Visuel,
+  type Audience, type CatalogMannequin, type ColType, type SaasPose, type Diagnostic, type NotionZip, type Recette, type Source, type Visuel,
 } from '@/lib/flex'
 
 type Status = 'pending' | 'running' | 'done' | 'error'
@@ -48,6 +48,8 @@ export default function FlexTab() {
   const [progress, setProgress] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [catalog, setCatalog] = useState<CatalogMannequin[] | null>(null)
+  const [saasPoses, setSaasPoses] = useState<SaasPose[] | null>(null)
+  const [audience, setAudience] = useState<Audience>('auto')
   const [consigne, setConsigne] = useState('')
   const [interpreting, setInterpreting] = useState(false)
   const [explication, setExplication] = useState('')
@@ -71,6 +73,7 @@ export default function FlexTab() {
     setSaved(listerRecettes())
     try { const r = localStorage.getItem('flex-ratio'); if (r) setRatio(r); const q = localStorage.getItem('flex-quality'); if (q) setQuality(q) } catch { /* */ }
     fetch('/api/studio/mannequins').then(r => r.json()).then(j => { if (Array.isArray(j.mannequins)) setCatalog(j.mannequins) }).catch(() => {})
+    fetch('/api/studio/poses').then(r => r.json()).then(j => { if (Array.isArray(j.poses)) setSaasPoses(j.poses) }).catch(() => {})
   }, [])
 
   /* ----------- ZIP → diagnostic ----------- */
@@ -107,7 +110,7 @@ export default function FlexTab() {
   const patch = (p: Partial<Recette>) => { setRecette(r => (r ? { ...r, ...p } : r)); setStates({}); statesRef.current = {} }
 
   /* ----------- visuels ----------- */
-  const visuels: Visuel[] = useMemo(() => (diag && zipRef.current && recette ? construireVisuels(diag, zipRef.current, recette, catalog) : []), [diag, recette, catalog])
+  const visuels: Visuel[] = useMemo(() => (diag && zipRef.current && recette ? construireVisuels(diag, zipRef.current, recette, catalog, 14, saasPoses ?? [], audience) : []), [diag, recette, catalog, saasPoses, audience])
   const st = (v: Visuel): ItemState => states[v.id] ?? { enabled: true, status: 'pending', versions: [] }
   const update = (id: string, p: Partial<ItemState>) => setStates(prev => {
     const next = { ...prev, [id]: { ...(prev[id] ?? { enabled: true, status: 'pending', versions: [] }), ...p } }
@@ -245,7 +248,7 @@ export default function FlexTab() {
           <h3 style={h3}>Ce que Zulo lit dans le ZIP</h3>
           <div style={{ fontSize: 12, color: '#374151', marginBottom: 8 }}>
             {diag.tables.length} tableau(x) · {diag.imageCount} image(s){diag.otherFiles ? ` · ${diag.otherFiles} autre(s) fichier(s)` : ''}
-            {catalog ? ` · catalogue Miraggia : ${catalog.length} mannequins` : ''}
+            {catalog ? ` · catalogue Miraggia : ${catalog.length} mannequins` : ''}{saasPoses ? ` · ${saasPoses.length} poses du SaaS` : ' · poses du SaaS indisponibles'}
           </div>
           {diag.tables.map(t => (
             <div key={t.name} style={{ border: '1px solid #E5E7EB', borderRadius: 8, marginBottom: 8 }}>
@@ -322,6 +325,10 @@ export default function FlexTab() {
                 </label>
               ))}
               {!recette.poseColumns.length && <span style={{ fontSize: 11, color: '#6B7280' }}>(aucune : 1 visuel par ligne)</span>}
+              <label style={{ fontSize: 12, marginLeft: 'auto' }} title="Quand une pose existe en version adulte et enfant dans le SaaS">Poses du SaaS :{' '}
+                <select value={audience} onChange={e => setAudience(e.target.value as Audience)} style={{ ...inp, fontSize: 12, padding: '2px 4px' }}>
+                  <option value="auto">auto (adulte si les deux existent)</option><option value="adulte">adulte</option><option value="enfant">enfant</option>
+                </select></label>
             </div>
 
             <div style={{ color: '#6B7280', paddingTop: 6 }}>Images envoyées<br /><span style={{ fontSize: 10 }}>dans cet ordre</span></div>
