@@ -18,7 +18,7 @@ import {
 } from '@/lib/flex'
 
 type Status = 'pending' | 'running' | 'done' | 'error'
-type ItemState = { enabled: boolean; status: Status; imageUrl?: string; versions: string[]; error?: string; saved?: boolean; showPrompt?: boolean }
+type ItemState = { enabled: boolean; off?: number[]; status: Status; imageUrl?: string; versions: string[]; error?: string; saved?: boolean; showPrompt?: boolean }
 
 const RATIOS = ['3:4', '2:3', '4:5', '9:16', '1:1', '4:3', '3:2', '16:9']
 const PRICE: Record<string, number> = { '1K': 0.134, '2K': 0.134, '4K': 0.24 } // Gemini 3 Pro Image, indicatif
@@ -160,13 +160,21 @@ export default function FlexTab() {
     const b = await fetch(url).then(r => r.blob()); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000)
   }
 
+  const offOf = (v: Visuel) => statesRef.current[v.id]?.off ?? states[v.id]?.off ?? v.defaultOff
+  const selected = (v: Visuel) => { const off = offOf(v); return v.images.filter((_, i) => !off.includes(i)) }
+  const toggleImage = (v: Visuel, i: number) => {
+    const off = offOf(v)
+    update(v.id, { off: off.includes(i) ? off.filter(x => x !== i) : [...off, i] })
+  }
   const generateOne = async (v: Visuel) => {
+    const sel = selected(v)
+    if (!sel.length) return update(v.id, { status: 'error', error: 'aucune image cochée' })
     update(v.id, { status: 'running', error: undefined })
     try {
-      const refUrls = await Promise.all(v.images.map(im => (im.url ? Promise.resolve(im.url) : urlOf(im.zipKey!))))
+      const refUrls = await Promise.all(sel.map(im => (im.url ? Promise.resolve(im.url) : urlOf(im.zipKey!))))
       const resp = await fetch('/api/studio/free', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: v.prompt, refUrls, ratio, quality }),
+        body: JSON.stringify({ prompt: v.promptFor(sel), refUrls, ratio, quality }),
       })
       const text = await resp.text()
       let j: any
@@ -203,6 +211,17 @@ export default function FlexTab() {
   const imgSources = diag && recette ? sourcesPossibles(diag, recette.table, 'image') : []
   const txtSources = diag && recette ? sourcesPossibles(diag, recette.table, 'texte') : []
   const vars = diag && recette ? variablesDisponibles(diag, recette.table) : []
+  // consigne : toutes les colonnes de toutes les tables (insérées telles quelles)
+  const colonnes = useMemo(() => {
+    if (!diag) return []
+    const seen = new Set<string>(), out: { name: string; hint: string }[] = []
+    for (const t of diag.tables) for (const c of t.columns) {
+      if (c.type === 'vide' || seen.has(c.name)) continue
+      seen.add(c.name)
+      out.push({ name: c.name, hint: `${t.name} · ${TYPE_ICON[c.type]} ${c.type}${c.link ? ` → ${c.link}` : ''}` })
+    }
+    return out
+  }, [diag])
 
   return (
     <div style={{ maxWidth: 1200 }}>
@@ -271,8 +290,10 @@ export default function FlexTab() {
       {diag && recette && (
         <div style={box}>
           <h3 style={h3}>Consigne</h3>
-          <textarea value={consigne} onChange={e => setConsigne(e.target.value)} rows={3} style={{ ...inp, width: '100%', boxSizing: 'border-box', resize: 'vertical' }}
-                    placeholder="Ex. : Prends les photos de la colonne FILES (FRONT) comme vêtement, le mannequin de la colonne Mannequin (visage + corps), le fond de la colonne Fond, une image par colonne Vue et pose. Ajoute la colonne Description au prompt. Style catalogue e-commerce, lumière douce." />
+          <VarInput value={consigne} onChange={setConsigne} vars={colonnes} multiline rows={3} format={n => n} title="Colonnes du ZIP"
+                    style={{ ...inp, resize: 'vertical' }}
+                    placeholder="Ex. : Habille le mannequin (@FACE PHOTO et @FRONT-model) avec les images de @FILES (FRONT), fond = @Fond, une image par @Vue et Pose 1… — tape @ pour la liste des colonnes" />
+          <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>Tape <code>@</code> pour insérer le nom exact d&apos;une colonne (toutes les tables du ZIP).</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <button onClick={interpret} disabled={interpreting || !consigne.trim()} style={btn('#0D4A5C')}>{interpreting ? '⏳ Interprétation…' : '✨ Traduire en recette'}</button>
             <select value="" onChange={e => { const r = saved[e.target.value]; if (r && diag) { const v = validerRecette(r, diag); setRecette(v.recette); setCorrections(v.corrections); setExplication(`Recette « ${e.target.value} » chargée.`); setStates({}); statesRef.current = {} } }} style={inp}>
@@ -312,13 +333,12 @@ export default function FlexTab() {
                   <select value={srcKey(im.source)} onChange={e => patch({ images: recette.images.map((x, k) => (k === i ? { ...x, source: JSON.parse(e.target.value) } : x)) })} style={{ ...inp, fontSize: 12, maxWidth: 330 }}>
                     {imgSources.map(s => <option key={srcKey(s)} value={srcKey(s)}>{sourceLabel(s)}</option>)}
                   </select>
-                  <label style={{ fontSize: 11 }}>max <input type="number" min={1} max={14} value={im.max} onChange={e => patch({ images: recette.images.map((x, k) => (k === i ? { ...x, max: Math.max(1, Math.min(14, Number(e.target.value) || 1)) } : x)) })} style={{ ...inp, width: 48, fontSize: 12 }} /></label>
                   <button onClick={() => i > 0 && patch({ images: recette.images.map((x, k) => (k === i - 1 ? recette.images[i] : k === i ? recette.images[i - 1] : x)) })} style={small} title="Monter">↑</button>
                   <button onClick={() => patch({ images: recette.images.filter((_, k) => k !== i) })} style={small}>✕</button>
                 </div>
               ))}
               {imgSources.length > 0
-                ? <button onClick={() => patch({ images: [...recette.images, { role: 'reference', source: imgSources[0], max: 4 }] })} style={small}>+ Image</button>
+                ? <button onClick={() => patch({ images: [...recette.images, { role: 'reference', source: imgSources[0], max: 10 }] })} style={small}>+ Image</button>
                 : <span style={{ fontSize: 11, color: '#991B1B' }}>Aucune colonne de fichiers dans cette table (ni via ses liens).</span>}
             </div>
 
@@ -398,7 +418,19 @@ export default function FlexTab() {
                   {v.warnings.length > 0 && <div style={{ fontSize: 10, color: '#92400E', marginBottom: 6 }}>⚠ {v.warnings.join(' · ')}</div>}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8 }}>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, alignContent: 'start' }}>
-                      {v.images.map((im, i) => <ZipThumb key={i} label={`${i + 1}. ${im.role}`} get={im.url ? () => Promise.resolve(im.url!) : () => thumbOf(im.zipKey!)} />)}
+                      <div style={{ gridColumn: '1 / -1', fontSize: 10, color: '#6B7280' }}>{v.images.length - (s.off ?? v.defaultOff).length}/{v.images.length} image(s) envoyée(s) — clic = exclure / remettre</div>
+                      {v.images.map((im, i) => {
+                        const off = (s.off ?? v.defaultOff).includes(i)
+                        return (
+                          <div key={i} onClick={() => s.status !== 'running' && toggleImage(v, i)} title={off ? 'Exclue — cliquer pour l’envoyer' : 'Envoyée — cliquer pour l’exclure'}
+                               style={{ position: 'relative', cursor: 'pointer', opacity: off ? 0.35 : 1, outline: off ? 'none' : '2px solid #0D4A5C', outlineOffset: -2, borderRadius: 4 }}>
+                            <ZipThumb label={`${im.role}`} get={im.url ? () => Promise.resolve(im.url!) : () => thumbOf(im.zipKey!)} />
+                            <span style={{ position: 'absolute', top: 2, left: 2, fontSize: 10, fontWeight: 700, background: off ? '#9CA3AF' : '#0D4A5C', color: '#fff', borderRadius: 3, padding: '0 4px' }}>
+                              {off ? '✕' : v.images.slice(0, i + 1).filter((_, k) => !(s.off ?? v.defaultOff).includes(k)).length}
+                            </span>
+                          </div>
+                        )
+                      })}
                     </div>
                     <div>
                       {s.imageUrl
@@ -417,7 +449,7 @@ export default function FlexTab() {
                       )}
                     </div>
                   </div>
-                  {s.showPrompt && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 10, background: '#F9FAFB', padding: 8, borderRadius: 6, marginTop: 8 }}>{v.prompt}</pre>}
+                  {s.showPrompt && <pre style={{ whiteSpace: 'pre-wrap', fontSize: 10, background: '#F9FAFB', padding: 8, borderRadius: 6, marginTop: 8 }}>{v.promptFor(v.images.filter((_, i) => !(s.off ?? v.defaultOff).includes(i)))}</pre>}
                 </div>
               )
             })}

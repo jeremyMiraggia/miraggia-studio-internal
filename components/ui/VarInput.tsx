@@ -14,16 +14,19 @@ type Props = {
   rows?: number
   placeholder?: string
   style?: React.CSSProperties
+  /** texte inséré pour une variable (défaut : « {nom} ») */
+  format?: (name: string) => string
+  title?: string
 }
 
 const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
-export default function VarInput({ value, onChange, vars, multiline, rows = 4, placeholder, style }: Props) {
+export default function VarInput({ value, onChange, vars, multiline, rows = 4, placeholder, style, format = n => `{${n}}`, title = 'Variables' }: Props) {
   const ref = useRef<HTMLTextAreaElement & HTMLInputElement>(null)
   const [query, setQuery] = useState<{ start: number; text: string } | null>(null)
   const [sel, setSel] = useState(0)
 
-  const matches = query ? vars.filter(v => norm(v.name).includes(norm(query.text))).slice(0, 12) : []
+  const matches = query ? vars.filter(v => norm(v.name).includes(norm(query.text)) || norm(v.hint ?? '').includes(norm(query.text))).slice(0, 15) : []
 
   /** Cherche un « @mot » juste avant le curseur. */
   const detect = (text: string, caret: number) => {
@@ -38,7 +41,7 @@ export default function VarInput({ value, onChange, vars, multiline, rows = 4, p
   const insert = (v: Var) => {
     if (!query || !ref.current) return
     const caret = ref.current.selectionStart ?? value.length
-    const token = `{${v.name}}`
+    const token = format(v.name)
     const next = value.slice(0, query.start) + token + value.slice(caret)
     onChange(next)
     setQuery(null)
@@ -68,11 +71,11 @@ export default function VarInput({ value, onChange, vars, multiline, rows = 4, p
       {multiline ? <textarea {...common} rows={rows} /> : <input {...common} />}
       {query && matches.length > 0 && (
         <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 2, zIndex: 20, background: '#fff', border: '1px solid #D1D5DB', borderRadius: 8, boxShadow: '0 6px 18px rgba(0,0,0,0.12)', minWidth: 260, maxWidth: 460, maxHeight: 260, overflowY: 'auto' }}>
-          <div style={{ fontSize: 10, color: '#9CA3AF', padding: '4px 8px', borderBottom: '1px solid #F3F4F6' }}>Variables — ↑ ↓ puis Entrée</div>
+          <div style={{ fontSize: 10, color: '#9CA3AF', padding: '4px 8px', borderBottom: '1px solid #F3F4F6' }}>{title} — ↑ ↓ puis Entrée</div>
           {matches.map((v, i) => (
             <div key={v.name} onMouseDown={e => { e.preventDefault(); insert(v) }} onMouseEnter={() => setSel(i)}
                  style={{ padding: '5px 8px', cursor: 'pointer', background: i === sel ? '#E8F2F5' : '#fff', display: 'flex', gap: 8, alignItems: 'baseline' }}>
-              <code style={{ fontSize: 12, color: '#0D4A5C', whiteSpace: 'nowrap' }}>{`{${v.name}}`}</code>
+              <code style={{ fontSize: 12, color: '#0D4A5C', whiteSpace: 'nowrap' }}>{format(v.name)}</code>
               {v.hint && <span style={{ fontSize: 10, color: '#6B7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.hint}</span>}
             </div>
           ))}

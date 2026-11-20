@@ -40,7 +40,6 @@ Règles :
 - Le prompt artistique ne décrit pas les images une à une (Zulo ajoute automatiquement la liste numérotée des images) : il décrit le résultat voulu (style, lumière, cadrage, réalisme).
 - Zulo ajoute AUTOMATIQUEMENT la pose du visuel (« POSE / VIEW: … ») : n'écris JAMAIS la pose dans le prompt artistique, ni une colonne de pose ({Vue et Pose 1} serait faux pour les visuels de la pose 2), ni {pose}.
 - Nom de fichier : colonne d'identifiant (SKU, référence…) + {n} (numéro de la pose), ex. '{SKU}_{n}'. Jamais une colonne de pose.
-- "max" : 1 pour un visage, un corps ou un fond ; 4 à 6 pour les photos de vêtements/produits (toutes les vues du produit aident).
 - Si la consigne cite une seule colonne de pose alors qu'il en existe plusieurs du même genre (Vue et Pose 1, 2…), mets-les toutes et signale-le dans l'explication.`
 
 export async function POST(request: Request) {

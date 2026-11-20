@@ -172,6 +172,7 @@ export type Source =
   | { kind: 'lien'; column: string; field: string }                 // column (lien) → table liée → field
   | { kind: 'catalogue'; column: string; photo: 'visage' | 'corps' }  // nom du mannequin dans column → catalogue Miraggia
 
+export const MAX_PAR_SOURCE = 10
 export type ImageSlot = { role: string; source: Source; max: number }
 export type TextSlot = { label: string; source: Source }
 export type Recette = {
@@ -230,7 +231,7 @@ export function validerRecette(r: any, d: Diagnostic): { recette: Recette; corre
   const images: ImageSlot[] = []
   for (const im of Array.isArray(r?.images) ? r.images : []) {
     const s = okSource(im?.source, 'image')
-    if (s) images.push({ role: String(im.role ?? 'référence'), source: s, max: Math.min(14, Math.max(1, Number(im.max) || 4)) })
+    if (s) images.push({ role: String(im.role ?? 'référence'), source: s, max: MAX_PAR_SOURCE })
     else corrections.push(`Image « ${im?.role ?? '?'} » : source ${JSON.stringify(im?.source)} introuvable, retirée.`)
   }
   const texts: TextSlot[] = []
@@ -278,7 +279,9 @@ export type Visuel = {
   title: string
   pose?: string
   images: VisuelImage[]
-  prompt: string
+  prompt: string                                   // prompt avec toutes les images cochées par défaut
+  promptFor: (images: VisuelImage[]) => string     // prompt renuméroté pour une sélection d'images
+  defaultOff: number[]                             // images décochées par défaut (au-delà de la limite du modèle)
   fileName: string
   warnings: string[]
 }
@@ -345,8 +348,8 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
     const ownSlots = r.images.filter(s => s.source.kind === 'colonne')
     const ownCount = images.filter(im => ownSlots.some(s => s.role === im.role)).length
     if (r.skipEmpty && (!images.length || (ownSlots.length && !ownCount))) return
-    const kept = images.slice(0, maxImages)
-    if (images.length > maxImages) warnBase.push(`${images.length} images : seules les ${maxImages} premières sont envoyées (limite du modèle)`)
+    const defaultOff = images.map((_, i) => i).filter(i => i >= maxImages)
+    if (images.length > maxImages) warnBase.push(`${images.length} images : les ${images.length - maxImages} dernières sont décochées (limite de ${maxImages} du modèle) — clique sur les vignettes pour changer`)
     passes.forEach((pose, pi) => {
       const vars: Record<string, string> = {}
       for (const c of t.columns) vars[norm(c.name)] = cellRefs(String(row[c.name] ?? '')).join(', ') || String(row[c.name] ?? '').trim()
@@ -357,26 +360,34 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
       vars['pose'] = pose ?? ''
       vars['n'] = String(pi + 1)
       const fill = (tpl: string) => tpl.replace(/\{([^{}]+)\}/g, (_, k) => vars[norm(k)] ?? '')
-      // bloc images numérotées
-      const lines: string[] = []
-      if (r.prompt.trim()) lines.push(fill(r.prompt.trim()), '')
-      if (kept.length) {
-        lines.push('REFERENCE IMAGES (in order):')
-        let n = 0
-        const byRole = new Map<string, number[]>()
-        for (const im of kept) { n++; byRole.set(im.role, [...(byRole.get(im.role) ?? []), n]) }
-        for (const [role, idx] of byRole) lines.push(idx.length > 1 ? `- IMAGES ${idx[0]} to ${idx[idx.length - 1]}: ${role}` : `- IMAGE ${idx[0]}: ${role}`)
-        lines.push('')
-      }
+      const head = r.prompt.trim() ? fill(r.prompt.trim()) : ''
+      const tail: string[] = []
       for (const tx of r.texts) {
         const v = resolveText(row, tx.source)
-        if (v) lines.push(`${tx.label}: ${v}`)
+        if (v) tail.push(`${tx.label}: ${v}`)
       }
-      if (posePrompt) lines.push(`POSE / VIEW: ${posePrompt}`)
+      if (posePrompt) tail.push(`POSE / VIEW: ${posePrompt}`)
+      // bloc images numérotées, recalculé pour la sélection faite sur la carte
+      const promptFor = (sel: VisuelImage[]) => {
+        const lines: string[] = []
+        if (head) lines.push(head, '')
+        if (sel.length) {
+          lines.push('REFERENCE IMAGES (in order):')
+          const byRole = new Map<string, number[]>()
+          sel.forEach((im, i) => byRole.set(im.role, [...(byRole.get(im.role) ?? []), i + 1]))
+          for (const [role, idx] of byRole) {
+            const contiguous = idx.every((v, k) => k === 0 || v === idx[k - 1] + 1)
+            lines.push(idx.length === 1 ? `- IMAGE ${idx[0]}: ${role}` : contiguous ? `- IMAGES ${idx[0]} to ${idx[idx.length - 1]}: ${role}` : `- IMAGES ${idx.join(', ')}: ${role}`)
+          }
+          lines.push('')
+        }
+        lines.push(...tail)
+        return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+      }
       const base = sanitize(fill(r.fileName || `{${t.titleColumn}}_{n}`).replace(/_+$/, '').replace(/^_+/, '')) || `visuel-${ri + 1}`
       visuels.push({
-        id: `${ri}-${pi}`, rowIndex: ri, title, pose, images: kept,
-        prompt: lines.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
+        id: `${ri}-${pi}`, rowIndex: ri, title, pose, images, defaultOff, promptFor,
+        prompt: promptFor(images.filter((_, i) => !defaultOff.includes(i))),
         fileName: `${base}${passes.length > 1 && !/\{(pose|n)\}/i.test(r.fileName) ? `_${pi + 1}` : ''}.jpg`,
         warnings: [...warnBase],
       })
