@@ -29,6 +29,7 @@ import LogoFixTab from '@/components/tabs/LogoFixTab'
 import FlexTab from '@/components/tabs/FlexTab'
 import PacTab from '@/components/tabs/PacTab'
 import MarketingAssetsTab from '@/components/tabs/MarketingAssetsTab'
+import InstaTab from '@/components/tabs/InstaTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
@@ -41,6 +42,7 @@ const TABS = [
   { id: 'flex',            label: '🧩 FLEX' },
   { id: 'pac',             label: '🔧 PAC' },
   { id: 'marketing',       label: '📣 Marketing assets' },
+  { id: 'insta',           label: '📸 INSTA' },
   { id: 'gabarit',         label: '📐 Gabarit' },
   { id: 'grain',           label: '🎞️ Grain' },
   { id: 'notion',          label: '📥 Notion' },
@@ -58,7 +60,7 @@ const TABS = [
 ]
 
 /** Onglets qui génèrent des images via Gemini / ChatGPT (Grain, Video, Extracteur n'en génèrent pas ; Lingerie Visage passe par Seedream) → interrupteur. */
-const IMAGE_TABS = new Set(TABS.map(t => t.id).filter(id => !['grain', 'video', 'extract', 'lingerie-visage', 'logo'].includes(id)))
+const IMAGE_TABS = new Set(TABS.map(t => t.id).filter(id => !['grain', 'video', 'extract', 'lingerie-visage', 'logo', 'insta'].includes(id)))
 
 export default function StudioPage() {
   const [tab, setTab] = useState('simple')
@@ -66,6 +68,9 @@ export default function StudioPage() {
   const [providers, setProviders] = useState<Record<string, ImageProvider>>({})
   const [qualities, setQualities] = useState<Record<string, OpenAIQuality>>({})
   useEffect(() => {
+    // ouverture directe d'un onglet : /studio?tab=insta (retour de la connexion Instagram)
+    const t = new URLSearchParams(window.location.search).get('tab')
+    if (t && TABS.some(x => x.id === t)) setTab(t)
     setProviders(Object.fromEntries(TABS.map(t => [t.id, loadTabProvider(t.id)])))
     setQualities(Object.fromEntries(TABS.map(t => [t.id, loadTabQuality(t.id)])))
   }, [])
@@ -112,6 +117,7 @@ export default function StudioPage() {
         {tab === 'flex'            && <FlexTab />}
         {tab === 'pac'             && <PacTab />}
         {tab === 'marketing'       && <MarketingAssetsTab />}
+        {tab === 'insta'           && <InstaTab />}
         {tab === 'gabarit'         && <GabaritTab />}
         {tab === 'grain'           && <GrainTab />}
         {tab === 'notion'          && <NotionTab />}

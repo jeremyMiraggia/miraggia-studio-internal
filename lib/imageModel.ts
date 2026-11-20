@@ -104,7 +104,9 @@ async function callOpenAIFromGeminiBody(bodyStr: string): Promise<Response> {
       texts.push(`[attached image ${images.length}]`)
     }
   }
-  const kept = images.slice(0, OPENAI_MAX_IMAGES)
+  // OpenAI refuse certains fichiers que Gemini accepte (JPEG CMYK / 16 bits / MPO, type « image/jpg », HEIC, faux JPEG…) :
+  // on ré-encode chaque image en sRGB 8 bits, JPEG q95 (PNG si transparence), avec un type MIME exact.
+  const kept = await Promise.all(images.slice(0, OPENAI_MAX_IMAGES).map(normalizeForOpenAI))
   let prompt = texts.join('\n\n').trim()
   if (kept.length) prompt = `The reference images are attached in order (attached image 1 = IMAGE 1 when the text numbers them).\n\n${prompt}`
   if (images.length > kept.length) prompt += `\n\n(Only the first ${kept.length} reference images could be attached.)`
@@ -176,6 +178,23 @@ async function callOpenAIFromGeminiBody(bodyStr: string): Promise<Response> {
     candidates: [{ finishReason: 'STOP', content: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: b64 } }] } }],
     provider: 'openai', model: OPENAI_IMAGE_MODEL,
   })
+}
+
+/** Ré-encodage sûr pour l'API OpenAI Images (sRGB 8 bits, ≤ 4096 px, JPEG q95 ou PNG si alpha). */
+async function normalizeForOpenAI(im: { buf: Buffer; mime: string }): Promise<{ buf: Buffer; mime: string }> {
+  try {
+    const sharp = (await import('sharp')).default
+    const img = sharp(im.buf, { failOn: 'none', pages: 1 }).rotate()
+    const meta = await img.metadata()
+    const big = Math.max(meta.width ?? 0, meta.height ?? 0) > 4096
+    let pipe = img.toColorspace('srgb')
+    if (big) pipe = pipe.resize({ width: 4096, height: 4096, fit: 'inside' })
+    if (meta.hasAlpha) return { buf: await pipe.png().toBuffer(), mime: 'image/png' }
+    return { buf: await pipe.jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toBuffer(), mime: 'image/jpeg' }
+  } catch {
+    // illisible même pour sharp : on envoie tel quel (OpenAI renverra son message)
+    return { buf: im.buf, mime: im.mime === 'image/jpg' ? 'image/jpeg' : im.mime }
+  }
 }
 
 /**

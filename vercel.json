@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/insta/cron", "schedule": "0 6 * * *" }
+  ]
+}
