@@ -302,7 +302,7 @@ const FRAMINGS: Record<string, string> = {
   'mi-corps bas': 'lower-body shot, from the waist down to the feet; face out of frame',
   'mi corps bas': 'lower-body shot, from the waist down to the feet; face out of frame',
   'close up bas': 'lower-body close-up, from the waist down to the feet; face out of frame',
-  'visage': 'tight portrait, head and shoulders only, the face fills most of the frame',
+  'visage': 'tight close-up on the face: from the top of the head to the chin/neck, the face fills the frame; eyewear and face accessories (glasses, frames, lenses, earrings) perfectly sharp, fully visible and readable, true to the product images',
   'portrait': 'tight portrait, head and shoulders only',
   'detail': 'tight close-up on a garment detail',
   'détail': 'tight close-up on a garment detail',
@@ -333,7 +333,8 @@ export function resoudrePose(cell: string, poses: SaasPose[], audience: Audience
   if (!view && found[0]?.view) view = Object.values(VIEWS).find(v => v.key === found[0].view)
   const lines: string[] = []
   if (view) lines.push(`- View: ${view.text}.`)
-  if (framing.length) lines.push(`- Framing: ${framing.join('; ')}.`)
+  // pas de cadrage précisé (ni close-up, ni mi-corps, ni visage…) = plein pied
+  lines.push(`- Framing: ${framing.length ? framing.join('; ') : FRAMINGS['plein pied']}.`)
   for (const p of found) lines.push(`- Pose (${p.label.replace(/^(enfant|adulte)\s*-\s*/i, '')}): ${p.description || p.label}`)
   for (const u of unknown) lines.push(`- Also: ${u}`)
   return { text: lines.join('\n'), unknown, matched: found.map(p => p.label) }
