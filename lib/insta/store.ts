@@ -78,9 +78,9 @@ async function writeLatest(prefix: string, data: unknown): Promise<void> {
 export type Account = {
   igId: string          // identifiant du compte pro (celui des webhooks)
   username: string
-  token: string         // jeton longue durée (60 j), renouvelé automatiquement
-  tokenAt: number       // date d'obtention / de renouvellement
-  expiresAt: number
+  token: string         // jeton « system user » Unified Login (durée fixée par la configuration Meta)
+  tokenAt: number       // dernière vérification
+  expiresAt: number     // 0 = n'expire pas
   connectedAt: number
 }
 

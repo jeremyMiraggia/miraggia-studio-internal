@@ -14,10 +14,10 @@ export const runtime = 'nodejs'
 export const maxDuration = 60
 
 const env = () => ({
-  appId: !!process.env.INSTAGRAM_APP_ID,
-  appSecret: !!process.env.INSTAGRAM_APP_SECRET,
+  appId: !!process.env.META_APP_ID,
+  appSecret: !!process.env.META_APP_SECRET,
+  configId: !!process.env.INSTAGRAM_CONFIG_ID,
   verifyToken: !!process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
-  cronSecret: !!process.env.CRON_SECRET,
   blob: !!process.env.BLOB_READ_WRITE_TOKEN,
 })
 

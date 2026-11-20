@@ -153,12 +153,12 @@ export default function InstaTab() {
       <div style={box}>
         <h3 style={h3}>1. Connexion</h3>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-          {[['appId', 'INSTAGRAM_APP_ID'], ['appSecret', 'INSTAGRAM_APP_SECRET'], ['verifyToken', 'INSTAGRAM_WEBHOOK_VERIFY_TOKEN'], ['cronSecret', 'CRON_SECRET'], ['blob', 'BLOB_READ_WRITE_TOKEN']].map(([k, label]) => (
+          {[['appId', 'META_APP_ID'], ['appSecret', 'META_APP_SECRET'], ['configId', 'INSTAGRAM_CONFIG_ID'], ['verifyToken', 'INSTAGRAM_WEBHOOK_VERIFY_TOKEN'], ['blob', 'BLOB_READ_WRITE_TOKEN']].map(([k, label]) => (
             <span key={k} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: e[k] ? '#ECFDF5' : '#FEF2F2', color: e[k] ? '#065F46' : '#991B1B' }}>{e[k] ? '✓' : '✕'} {label}</span>
           ))}
         </div>
         <div style={{ fontSize: 12, color: '#374151', display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '4px 8px', alignItems: 'center', marginBottom: 12 }}>
-          {st && ([['URL de rappel webhook', st.urls.webhook], ['URL de redirection OAuth', st.urls.redirect]] as const).map(([l, u]) => (
+          {st && ([['URL de rappel webhook', st.urls.webhook], ['URL de redirection (Redirect URL)', st.urls.redirect]] as const).map(([l, u]) => (
             <Fragment key={l}><span style={{ color: '#6B7A8A' }}>{l}</span><code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 4, overflowWrap: 'anywhere' }}>{u}</code>
               <button style={small} onClick={() => navigator.clipboard.writeText(u)}>Copier</button></Fragment>
           ))}
@@ -166,7 +166,7 @@ export default function InstaTab() {
         {st?.account ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', fontSize: 13 }}>
             <span>✓ Connecté : <b>@{st.account.username}</b></span>
-            <span style={{ color: daysLeft < 10 ? '#B45309' : '#6B7A8A' }}>jeton valable {daysLeft} j (renouvelé automatiquement)</span>
+            <span style={{ color: st.account.expiresAt && daysLeft < 10 ? '#B45309' : '#6B7A8A' }}>{st.account.expiresAt ? `jeton valable encore ${daysLeft} j (ensuite : Reconnecter)` : 'jeton sans expiration'}</span>
             <span style={{ color: subOk ? '#065F46' : '#991B1B' }}>{subOk ? '✓ abonné aux commentaires' : `✕ pas abonné aux commentaires${st.subError ? ` (${st.subError})` : ''}`}</span>
             {!subOk && <button style={small} onClick={() => action('subscribe')}>Réabonner</button>}
             <span style={{ color: '#6B7A8A' }}>dernier webhook : {st.lastWebhook ? ago(st.lastWebhook.at) : 'jamais reçu'}</span>

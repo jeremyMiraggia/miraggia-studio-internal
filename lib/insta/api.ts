@@ -1,15 +1,16 @@
 /**
- * Appels à l'API Instagram (« Instagram API with Instagram Login », hôte graph.instagram.com).
- * Env : INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET (+ INSTAGRAM_API_VERSION facultatif).
+ * Appels à l'API Instagram — « Instagram API with Unified Login » (hôte graph.facebook.com).
+ * Connexion par la boîte de dialogue Facebook Login for Business (config_id), jeton « system user » de l'entreprise.
+ * Env : META_APP_ID, META_APP_SECRET, INSTAGRAM_CONFIG_ID (+ INSTAGRAM_API_VERSION facultatif).
  */
 import { findRule, personalize } from './match'
 import { addLog, claimComment, getAccount, getRules, releaseComment, saveAccount, type Account, type Rule } from './store'
 
 const V = process.env.INSTAGRAM_API_VERSION || 'v27.0'
-const G = `https://graph.instagram.com/${V}`
-export const SCOPES = ['instagram_business_basic', 'instagram_business_manage_comments', 'instagram_business_manage_messages']
+const G = `https://graph.facebook.com/${V}`
 export const WEBHOOK_FIELDS = 'comments'
 const DAY = 24 * 3600_000
+const enc = encodeURIComponent
 
 async function call<T = any>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, cache: 'no-store' })
@@ -25,29 +26,36 @@ async function call<T = any>(url: string, init?: RequestInit): Promise<T> {
 
 export function authorizeUrl(redirectUri: string, state: string) {
   const p = new URLSearchParams({
-    client_id: process.env.INSTAGRAM_APP_ID ?? '', redirect_uri: redirectUri, response_type: 'code',
-    scope: SCOPES.join(','), state, enable_fb_login: '0', force_reauth: 'true',
+    client_id: process.env.META_APP_ID ?? '', config_id: process.env.INSTAGRAM_CONFIG_ID ?? '',
+    redirect_uri: redirectUri, response_type: 'code', state,
   })
-  return `https://www.instagram.com/oauth/authorize?${p}`
+  return `https://www.facebook.com/${V}/dialog/oauth?${p}`
 }
 
-/** code OAuth → jeton longue durée → compte, puis abonnement du compte aux webhooks de commentaires. */
+/** Date d'expiration du jeton (0 = n'expire pas), lue auprès de Meta. */
+async function tokenExpiry(token: string): Promise<number> {
+  try {
+    const j = await call<any>(`${G}/debug_token?input_token=${enc(token)}&access_token=${enc(`${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`)}`)
+    const t = Number(j.data?.expires_at ?? 0)
+    return t > 0 ? t * 1000 : 0
+  } catch { return 0 }
+}
+
+/** code OAuth → jeton → compte Instagram rattaché, puis abonnement du compte aux webhooks de commentaires. */
 export async function connect(code: string, redirectUri: string): Promise<Account> {
-  const form = new URLSearchParams({
-    client_id: process.env.INSTAGRAM_APP_ID ?? '', client_secret: process.env.INSTAGRAM_APP_SECRET ?? '',
-    grant_type: 'authorization_code', redirect_uri: redirectUri, code: code.replace(/#_$/, ''),
-  })
-  const short = await call<any>('https://api.instagram.com/oauth/access_token', { method: 'POST', body: form })
-  const shortToken: string = short.access_token ?? short.data?.[0]?.access_token
-  if (!shortToken) throw new Error('Instagram n’a pas renvoyé de jeton.')
-  const long = await call<{ access_token: string; expires_in: number }>(
-    `https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${encodeURIComponent(process.env.INSTAGRAM_APP_SECRET ?? '')}&access_token=${encodeURIComponent(shortToken)}`)
-  const me = await call<{ user_id?: string; id: string; username: string; account_type?: string }>(
-    `${G}/me?fields=user_id,username,account_type&access_token=${encodeURIComponent(long.access_token)}`)
+  const t = await call<{ access_token: string; expires_in?: number }>(
+    `${G}/oauth/access_token?client_id=${enc(process.env.META_APP_ID ?? '')}&client_secret=${enc(process.env.META_APP_SECRET ?? '')}&redirect_uri=${enc(redirectUri)}&code=${enc(code)}`)
+  const token = t.access_token
+  if (!token) throw new Error('Meta n’a pas renvoyé de jeton.')
+  const list = await call<{ data: { id: string; username?: string }[] }>(`${G}/me/assigned_instagram_accounts?fields=id,username&access_token=${enc(token)}`)
+  const ig = list.data?.[0]
+  if (!ig) throw new Error('Aucun compte Instagram autorisé : pendant la connexion, coche bien le compte Instagram de Miraggia.')
+  let username = ig.username ?? ''
+  if (!username) { try { username = (await call<any>(`${G}/${ig.id}?fields=username&access_token=${enc(token)}`)).username ?? '' } catch { /* */ } }
   const now = Date.now()
   const acc: Account = {
-    igId: String(me.user_id ?? me.id), username: me.username, token: long.access_token,
-    tokenAt: now, expiresAt: now + (long.expires_in || 60 * 86400) * 1000, connectedAt: now,
+    igId: String(ig.id), username, token, tokenAt: now,
+    expiresAt: t.expires_in ? now + t.expires_in * 1000 : await tokenExpiry(token), connectedAt: now,
   }
   await subscribe(acc)
   await saveAccount(acc)
@@ -55,30 +63,26 @@ export async function connect(code: string, redirectUri: string): Promise<Accoun
 }
 
 export async function subscribe(acc: Account) {
-  return call(`${G}/me/subscribed_apps?subscribed_fields=${WEBHOOK_FIELDS}&access_token=${encodeURIComponent(acc.token)}`, { method: 'POST' })
+  return call(`${G}/${acc.igId}/subscribed_apps?subscribed_fields=${WEBHOOK_FIELDS}&access_token=${enc(acc.token)}`, { method: 'POST' })
 }
 
 export async function subscriptions(acc: Account): Promise<string[]> {
-  const j = await call<any>(`${G}/me/subscribed_apps?access_token=${encodeURIComponent(acc.token)}`)
+  const j = await call<any>(`${G}/${acc.igId}/subscribed_apps?access_token=${enc(acc.token)}`)
   return (j.data ?? []).flatMap((d: any) => d.subscribed_fields ?? [])
 }
 
-/** Jeton renouvelé s'il a plus de 7 jours (Instagram : ≥ 24 h et pas expiré ; valable 60 j après renouvellement). */
-export async function freshAccount(force = false): Promise<Account | null> {
+/** Compte connecté. Le jeton Unified Login n'a pas de renouvellement à faire : sa durée dépend de la configuration Meta. */
+export async function freshAccount(): Promise<Account | null> {
   const acc = await getAccount()
   if (!acc) return null
-  if (!force && Date.now() - acc.tokenAt < 7 * DAY) return acc
-  if (Date.now() - acc.tokenAt < DAY || Date.now() > acc.expiresAt) return acc
-  try {
-    const r = await call<{ access_token: string; expires_in: number }>(
-      `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(acc.token)}`)
-    const now = Date.now()
-    const next = { ...acc, token: r.access_token, tokenAt: now, expiresAt: now + (r.expires_in || 60 * 86400) * 1000 }
-    await saveAccount(next)
+  // vérifie l'expiration une fois par jour (0 = n'expire pas)
+  if (Date.now() - acc.tokenAt > DAY) {
+    const exp = await tokenExpiry(acc.token)
+    const next = { ...acc, tokenAt: Date.now(), expiresAt: exp }
+    await saveAccount(next).catch(() => {})
     return next
-  } catch {
-    return acc
   }
+  return acc
 }
 
 /* ---------- publications / commentaires ---------- */
@@ -86,7 +90,7 @@ export async function freshAccount(force = false): Promise<Account | null> {
 export type Media = { id: string; caption?: string; media_type: string; media_product_type?: string; thumbnail_url?: string; media_url?: string; permalink: string; timestamp: string; comments_count?: number }
 
 export async function recentMedia(acc: Account, limit = 30): Promise<Media[]> {
-  const j = await call<{ data: Media[] }>(`${G}/me/media?fields=id,caption,media_type,media_product_type,thumbnail_url,media_url,permalink,timestamp,comments_count&limit=${limit}&access_token=${encodeURIComponent(acc.token)}`)
+  const j = await call<{ data: Media[] }>(`${G}/${acc.igId}/media?fields=id,caption,media_type,media_product_type,thumbnail_url,media_url,permalink,timestamp,comments_count&limit=${limit}&access_token=${enc(acc.token)}`)
   return j.data ?? []
 }
 
@@ -94,7 +98,7 @@ export type IgComment = { id: string; text: string; timestamp: string; username?
 
 export async function mediaComments(acc: Account, mediaId: string, max = 500): Promise<IgComment[]> {
   const out: IgComment[] = []
-  let url: string | undefined = `${G}/${mediaId}/comments?fields=id,text,timestamp,username,from&limit=50&access_token=${encodeURIComponent(acc.token)}`
+  let url: string | undefined = `${G}/${mediaId}/comments?fields=id,text,timestamp,username,from&limit=50&access_token=${enc(acc.token)}`
   while (url && out.length < max) {
     const j: any = await call(url)
     out.push(...(j.data ?? []))

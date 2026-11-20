@@ -5,7 +5,7 @@
  *   POST : notifications « comments » — signature X-Hub-Signature-256 vérifiée avec le secret de l'app,
  *          réponse 200 immédiate, traitement juste après (DM si un mot clé correspond).
  *
- * Env : INSTAGRAM_WEBHOOK_VERIFY_TOKEN, INSTAGRAM_APP_SECRET (+ META_APP_SECRET si différent).
+ * Env : INSTAGRAM_WEBHOOK_VERIFY_TOKEN, META_APP_SECRET.
  */
 import { after, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'node:crypto'
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
 function signatureOk(raw: string, header: string | null): boolean {
   if (!header?.startsWith('sha256=')) return false
   const got = Buffer.from(header.slice(7), 'hex')
-  const secrets = [process.env.INSTAGRAM_APP_SECRET, process.env.META_APP_SECRET].filter(Boolean) as string[]
+  const secrets = [process.env.META_APP_SECRET, process.env.INSTAGRAM_APP_SECRET].filter(Boolean) as string[]
   return secrets.some(s => {
     const exp = createHmac('sha256', s).update(raw, 'utf8').digest()
     return exp.length === got.length && timingSafeEqual(exp, got)
