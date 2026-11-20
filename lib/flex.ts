@@ -173,7 +173,10 @@ export type Source =
   | { kind: 'catalogue'; column: string; photo: 'visage' | 'corps' }  // nom du mannequin dans column → catalogue Miraggia
 
 export const MAX_PAR_SOURCE = 10
-export type ImageSlot = { role: string; source: Source; max: number }
+export type ImageSlot = { role: string; source: Source; max: number; fond?: boolean }  // fond = recadré au format de sortie avant envoi
+
+/** Une image est un fond si la case est cochée, sinon d'après son rôle ou sa colonne (fond, décor, background…). */
+export const estFond = (slot: ImageSlot) => slot.fond ?? /background|backdrop|\bfonds?\b|d[ée]cors?\b|setting/i.test(`${slot.role} ${sourceLabel(slot.source)}`)
 export type TextSlot = { label: string; source: Source }
 export type Recette = {
   table: string
@@ -231,7 +234,7 @@ export function validerRecette(r: any, d: Diagnostic): { recette: Recette; corre
   const images: ImageSlot[] = []
   for (const im of Array.isArray(r?.images) ? r.images : []) {
     const s = okSource(im?.source, 'image')
-    if (s) images.push({ role: String(im.role ?? 'référence'), source: s, max: MAX_PAR_SOURCE })
+    if (s) images.push({ role: String(im.role ?? 'référence'), source: s, max: MAX_PAR_SOURCE, ...(typeof im.fond === 'boolean' ? { fond: im.fond } : {}) })
     else corrections.push(`Image « ${im?.role ?? '?'} » : source ${JSON.stringify(im?.source)} introuvable, retirée.`)
   }
   const texts: TextSlot[] = []
@@ -339,7 +342,7 @@ export function resoudrePose(cell: string, poses: SaasPose[], audience: Audience
 /* ============================== visuels ============================== */
 
 export type CatalogMannequin = { name: string; faceUrl: string; bodyUrl: string; description?: string }
-export type VisuelImage = { role: string; label: string; zipKey?: string; url?: string }
+export type VisuelImage = { role: string; label: string; zipKey?: string; url?: string; fond?: boolean }
 export type Visuel = {
   id: string
   rowIndex: number
@@ -376,7 +379,7 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
     const fromCell = (cell: string, where: string) => fileRefs(cell).filter(f => IMG_RE.test(f)).map(f => {
       const key = z.byBase.get(f)
       if (!key) warn.push(`${slot.role} : « ${f} » absent du ZIP (${where})`)
-      return key ? { role: slot.role, label: f, zipKey: key } : null
+      return key ? { role: slot.role, label: f, zipKey: key, fond: estFond(slot) } : null
     }).filter(Boolean) as VisuelImage[]
     if (s.kind === 'colonne') return fromCell(String(row[s.column] ?? ''), s.column).slice(0, slot.max)
     const names = cellRefs(String(row[s.column] ?? ''))
@@ -468,6 +471,40 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
     if (n > 1) v.fileName = v.fileName.replace(/\.jpg$/, `_${n}.jpg`)
   }
   return visuels
+}
+
+/* ============================== fond au format de sortie ============================== */
+
+const LONG_SIDE: Record<string, number> = { '1K': 1024, '2K': 2048, '4K': 4096 }
+
+/** Dimensions de sortie pour un format (largeur:hauteur) et une qualité (côté long 1024 / 2048 / 4096). */
+export function tailleSortie(ratio: string, quality: string): { w: number; h: number } {
+  const [a, b] = ratio.split(':').map(Number)
+  const r = a > 0 && b > 0 ? a / b : 3 / 4
+  const L = LONG_SIDE[quality] ?? 2048
+  return r >= 1 ? { w: L, h: Math.round(L / r) } : { w: Math.round(L * r), h: L }
+}
+
+/**
+ * Recadre le fond au ratio de sortie (au centre, sans déformation) et le met à la résolution de sortie.
+ * Le modèle reçoit ainsi un fond déjà cadré comme le visuel final : il le reprend tel quel au lieu de l'étirer ou de le réinventer.
+ */
+export async function ajusterFond(blob: Blob, ratio: string, quality: string): Promise<{ blob: Blob; from: string; to: string; crop: boolean }> {
+  const bmp = await createImageBitmap(blob)
+  const { w, h } = tailleSortie(ratio, quality)
+  const target = w / h, src = bmp.width / bmp.height
+  let sw = bmp.width, sh = bmp.height
+  if (src > target) sw = Math.round(bmp.height * target); else sh = Math.round(bmp.width / target)
+  const sx = Math.round((bmp.width - sw) / 2), sy = Math.round((bmp.height - sh) / 2)
+  const c = document.createElement('canvas')
+  c.width = w; c.height = h
+  const ctx = c.getContext('2d')!
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, w, h)
+  const from = `${bmp.width}×${bmp.height}`
+  bmp.close()
+  const out = await new Promise<Blob>((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('encodage du fond impossible'))), 'image/jpeg', 0.95))
+  return { blob: out, from, to: `${w}×${h}`, crop: Math.abs(src - target) > 0.01 }
 }
 
 /* ============================== recettes enregistrées (navigateur) ============================== */

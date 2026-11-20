@@ -12,7 +12,7 @@ import Dropzone from '@/components/ui/Dropzone'
 import VarInput from '@/components/ui/VarInput'
 import { compressImage } from '@/lib/compressImage'
 import {
-  construireVisuels, diagnostiquer, enregistrerRecette, listerRecettes, ouvrirZipNotion, recetteVide, schemaPourIA,
+  ajusterFond, construireVisuels, diagnostiquer, estFond, tailleSortie, enregistrerRecette, listerRecettes, ouvrirZipNotion, recetteVide, schemaPourIA,
   sourceLabel, sourcesPossibles, supprimerRecette, validerRecette, variablesDisponibles,
   type Audience, type CatalogMannequin, type ColType, type SaasPose, type Diagnostic, type NotionZip, type Recette, type Source, type Visuel,
 } from '@/lib/flex'
@@ -60,6 +60,8 @@ export default function FlexTab() {
   const [ratio, setRatio] = useState('3:4')
   const [quality, setQuality] = useState('2K')
   const [concurrency, setConcurrency] = useState(2)
+  const [fitFond, setFitFond] = useState(true)
+  const [prep, setPrep] = useState('')
   const [states, setStates] = useState<Record<string, ItemState>>({})
   const statesRef = useRef<Record<string, ItemState>>({})
   const [running, setRunning] = useState(false)
@@ -124,26 +126,40 @@ export default function FlexTab() {
     if (!p) { p = zipRef.current!.extract(key); cache.current.set(key, p) }
     return p
   }
+  // fond ajusté au format de sortie (recadrage centré + résolution), mis en cache par format
+  const fitKey = (key: string, fond?: boolean) => (fond && fitFond ? `${key}|${ratio}|${quality}` : key)
+  const fitted = useRef(new Map<string, Promise<{ blob: Blob; from: string; to: string; crop: boolean }>>())
+  const sourceBlob = (key: string, fond?: boolean) => {
+    if (!(fond && fitFond)) return blobOf(key)
+    const k = fitKey(key, fond)
+    let p = fitted.current.get(k)
+    if (!p) { p = blobOf(key).then(b => ajusterFond(b, ratio, quality)); fitted.current.set(k, p); p.catch(() => fitted.current.delete(k)) }
+    return p.then(x => x.blob)
+  }
   const thumbs = useRef(new Map<string, Promise<string>>())
-  const thumbOf = (key: string) => {
-    let p = thumbs.current.get(key)
-    if (!p) { p = blobOf(key).then(b => URL.createObjectURL(b)); thumbs.current.set(key, p) }
+  const thumbOf = (key: string, fond?: boolean) => {
+    const k = fitKey(key, fond)
+    let p = thumbs.current.get(k)
+    if (!p) { p = sourceBlob(key, fond).then(b => URL.createObjectURL(b)); thumbs.current.set(k, p) }
     return p
   }
   const uploads = useRef(new Map<string, Promise<string>>())
-  const urlOf = (key: string) => {
-    let p = uploads.current.get(key)
+  const urlOf = (key: string, fond?: boolean) => {
+    const k = fitKey(key, fond)
+    let p = uploads.current.get(k)
     if (!p) {
       p = (async () => {
         const name = key.slice(key.lastIndexOf('/') + 1)
-        let f = new File([await blobOf(key)], name, { type: /png$/i.test(name) ? 'image/png' : /webp$/i.test(name) ? 'image/webp' : 'image/jpeg' })
+        const adjusted = !!(fond && fitFond)
+        let f = new File([await sourceBlob(key, fond)], adjusted ? name.replace(/\.[^.]+$/, '') + `_${ratio.replace(':', 'x')}_${quality}.jpg` : name,
+                         { type: adjusted ? 'image/jpeg' : /png$/i.test(name) ? 'image/png' : /webp$/i.test(name) ? 'image/webp' : 'image/jpeg' })
         // très grosses images : réduites à 3072 px (au-delà, le modèle les réduit de toute façon)
-        if (f.size > 8_000_000) { try { f = await compressImage(f, { maxSide: 3072, quality: 0.92, maxBytes: 8_000_000 }) } catch { /* */ } }
-        const b = await upload(`flex-inputs/${Date.now()}-${name}`, f, { access: 'public', handleUploadUrl: '/api/blob-upload', contentType: f.type || 'image/jpeg' })
+        if (!adjusted && f.size > 8_000_000) { try { f = await compressImage(f, { maxSide: 3072, quality: 0.92, maxBytes: 8_000_000 }) } catch { /* */ } }
+        const b = await upload(`flex-inputs/${Date.now()}-${f.name}`, f, { access: 'public', handleUploadUrl: '/api/blob-upload', contentType: f.type || 'image/jpeg' })
         return b.url
       })()
-      uploads.current.set(key, p)
-      p.catch(() => uploads.current.delete(key))
+      uploads.current.set(k, p)
+      p.catch(() => uploads.current.delete(k))
     }
     return p
   }
@@ -174,7 +190,7 @@ export default function FlexTab() {
     if (!sel.length) return update(v.id, { status: 'error', error: 'aucune image cochée' })
     update(v.id, { status: 'running', error: undefined })
     try {
-      const refUrls = await Promise.all(sel.map(im => (im.url ? Promise.resolve(im.url) : urlOf(im.zipKey!))))
+      const refUrls = await Promise.all(sel.map(im => (im.url ? Promise.resolve(im.url) : urlOf(im.zipKey!, im.fond))))
       const resp = await fetch('/api/studio/free', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: v.promptFor(sel), refUrls, ratio, quality }),
@@ -193,6 +209,16 @@ export default function FlexTab() {
     const queue = visuels.filter(v => st(v).enabled && st(v).status !== 'done')
     if (!queue.length) return
     setRunning(true); stopRef.current = false
+    // 1) préparation des fonds : recadrés au format de sortie et envoyés une seule fois
+    if (fitFond) {
+      const fonds = [...new Set(queue.flatMap(v => selected(v).filter(im => im.fond && im.zipKey).map(im => im.zipKey!)))]
+      for (let i = 0; i < fonds.length && !stopRef.current; i++) {
+        setPrep(`Préparation des fonds ${i + 1}/${fonds.length} : recadrage ${ratio} et mise en ${quality}…`)
+        try { await urlOf(fonds[i], true) } catch (e: any) { setError(`Fond ${fonds[i].slice(fonds[i].lastIndexOf('/') + 1)} : ${e?.message ?? e}`) }
+      }
+      setPrep('')
+    }
+    // 2) génération
     const worker = async () => { while (queue.length && !stopRef.current) await generateOne(queue.shift()!) }
     await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker))
     setRunning(false)
@@ -340,6 +366,7 @@ export default function FlexTab() {
                   <select value={srcKey(im.source)} onChange={e => patch({ images: recette.images.map((x, k) => (k === i ? { ...x, source: JSON.parse(e.target.value) } : x)) })} style={{ ...inp, fontSize: 12, maxWidth: 330 }}>
                     {imgSources.map(s => <option key={srcKey(s)} value={srcKey(s)}>{sourceLabel(s)}</option>)}
                   </select>
+                  <label style={{ fontSize: 11 }} title="Fond : recadré au format de sortie avant l'envoi"><input type="checkbox" checked={estFond(im)} onChange={e => patch({ images: recette.images.map((x, k) => (k === i ? { ...x, fond: e.target.checked } : x)) })} /> 🏞 fond</label>
                   <button onClick={() => i > 0 && patch({ images: recette.images.map((x, k) => (k === i - 1 ? recette.images[i] : k === i ? recette.images[i - 1] : x)) })} style={small} title="Monter">↑</button>
                   <button onClick={() => patch({ images: recette.images.filter((_, k) => k !== i) })} style={small}>✕</button>
                 </div>
@@ -395,6 +422,9 @@ export default function FlexTab() {
               <select value={quality} onChange={e => { setQuality(e.target.value); try { localStorage.setItem('flex-quality', e.target.value) } catch { /* */ } }} style={inp} disabled={running}>{['1K', '2K', '4K'].map(q => <option key={q}>{q}</option>)}</select></div>
             <div><div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Parallèle</div>
               <select value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} style={inp} disabled={running}>{[1, 2, 3, 4].map(n => <option key={n}>{n}</option>)}</select></div>
+            <label style={{ fontSize: 12, maxWidth: 200 }} title="Avant la génération, chaque image marquée « fond » est recadrée au centre au format choisi et mise à la résolution de sortie : le modèle la reprend telle quelle.">
+              <input type="checkbox" checked={fitFond} onChange={e => setFitFond(e.target.checked)} disabled={running} /> Ajuster les fonds au format ({(() => { const t = tailleSortie(ratio, quality); return `${t.w}×${t.h}` })()})
+            </label>
             <button onClick={pickDir} style={btn('#6B7A8A')} disabled={running}>📁 {dirName || 'Dossier de sortie'}</button>
             <button onClick={() => setAll(true)} style={{ ...inp, cursor: 'pointer', background: '#fff' }} disabled={running}>Tout cocher</button>
             <button onClick={() => setAll(false)} style={{ ...inp, cursor: 'pointer', background: '#fff' }} disabled={running}>Tout décocher</button>
@@ -407,6 +437,7 @@ export default function FlexTab() {
               ? <button onClick={() => { stopRef.current = true }} style={btn('#991B1B')}>■ Arrêter</button>
               : <button onClick={runAll} style={btn('#0D4A5C')} disabled={!stats.todo || !recette.images.length}>▶ Générer {stats.todo}</button>}
           </div>
+          {prep && <div style={{ ...box, fontSize: 13, color: '#0D4A5C', background: '#E8F2F5' }}>⏳ {prep}</div>}
           {!recette.images.length && <div style={{ ...box, fontSize: 13, color: '#92400E' }}>Ajoute au moins une image à la recette (ou écris une consigne) pour voir les visuels.</div>}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
@@ -431,7 +462,7 @@ export default function FlexTab() {
                         return (
                           <div key={i} onClick={() => s.status !== 'running' && toggleImage(v, i)} title={off ? 'Exclue — cliquer pour l’envoyer' : 'Envoyée — cliquer pour l’exclure'}
                                style={{ position: 'relative', cursor: 'pointer', opacity: off ? 0.35 : 1, outline: off ? 'none' : '2px solid #0D4A5C', outlineOffset: -2, borderRadius: 4 }}>
-                            <ZipThumb label={`${im.role}`} get={im.url ? () => Promise.resolve(im.url!) : () => thumbOf(im.zipKey!)} />
+                            <ZipThumb label={im.fond && fitFond ? `🏞 ${ratio} ${quality}` : `${im.role}`} get={im.url ? () => Promise.resolve(im.url!) : () => thumbOf(im.zipKey!, im.fond)} />
                             <span style={{ position: 'absolute', top: 2, left: 2, fontSize: 10, fontWeight: 700, background: off ? '#9CA3AF' : '#0D4A5C', color: '#fff', borderRadius: 3, padding: '0 4px' }}>
                               {off ? '✕' : v.images.slice(0, i + 1).filter((_, k) => !(s.off ?? v.defaultOff).includes(k)).length}
                             </span>
