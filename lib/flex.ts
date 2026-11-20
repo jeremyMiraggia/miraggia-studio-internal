@@ -9,7 +9,7 @@
  */
 import Papa from 'papaparse'
 import { readZipIndex, extractEntry, getEntryDataOffset, type ZipEntry } from '@/lib/notion/zipReader'
-import { parsePoseCell, poseToPrompt } from '@/lib/poses'
+import { parsePoseCell, poseToPrompt, viewToPrompt } from '@/lib/poses'
 
 /* ============================== ZIP ============================== */
 
@@ -180,7 +180,7 @@ export type Recette = {
   images: ImageSlot[]
   texts: TextSlot[]
   prompt: string                 // prompt artistique, variables {Colonne} et {pose}
-  fileName: string               // ex. « {SKU}_{pose} »
+  fileName: string               // ex. « {SKU}_{n} »
   skipEmpty: boolean             // ignorer les lignes sans aucune image
 }
 
@@ -192,7 +192,7 @@ export const recetteVide = (d: Diagnostic): Recette => {
     // texte brut à ajouter au prompt : colonnes « description » et textes longs
     texts: (t?.columns ?? []).filter(c => c.type === 'texte long' || (/descri/i.test(c.name) && c.type !== 'vide' && c.type !== 'fichiers'))
       .map(c => ({ label: c.name, source: { kind: 'colonne' as const, column: c.name } })),
-    prompt: '', fileName: `{${t?.titleColumn ?? 'ID'}}_{pose}`, skipEmpty: true,
+    prompt: '', fileName: `{${t?.titleColumn ?? 'ID'}}_{n}`, skipEmpty: true,
   }
 }
 
@@ -243,11 +243,21 @@ export function validerRecette(r: any, d: Diagnostic): { recette: Recette; corre
   return {
     recette: {
       table: t?.name ?? '', poseColumns, images, texts,
-      prompt: String(r?.prompt ?? ''), fileName: String(r?.fileName ?? `{${t?.titleColumn ?? 'ID'}}_{pose}`),
+      prompt: String(r?.prompt ?? ''), fileName: String(r?.fileName ?? `{${t?.titleColumn ?? 'ID'}}_{n}`),
       skipEmpty: r?.skipEmpty !== false,
     },
     corrections,
   }
+}
+
+/** Variables utilisables dans le prompt et le nom de fichier (table principale + {pose} + {n}). */
+export function variablesDisponibles(d: Diagnostic, tableName: string): { name: string; hint: string }[] {
+  const t = d.tables.find(x => x.name === tableName)
+  return [
+    { name: 'pose', hint: 'texte de la pose du visuel' },
+    { name: 'n', hint: 'numéro de la pose (1, 2…)' },
+    ...(t?.columns.filter(c => c.type !== 'fichiers' && c.type !== 'vide').map(c => ({ name: c.name, hint: `${c.type}${c.samples[0] ? ` · ex. ${c.samples[0].slice(0, 40)}` : ''}` })) ?? []),
+  ]
 }
 
 /** Résumé compact du diagnostic, envoyé à l'IA qui traduit la consigne en recette. */
@@ -326,18 +336,26 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
   t.rows.forEach((row, ri) => {
     const title = cellRefs(String(row[t.titleColumn] ?? ''))[0] || `ligne ${ri + 1}`
     const poses = r.poseColumns.map(c => String(row[c] ?? '').trim()).filter(Boolean)
+    // lignes vides : des colonnes de pose sont choisies mais aucune n'est remplie → rien à faire
+    if (r.skipEmpty && r.poseColumns.length && !poses.length) return
     const passes = poses.length ? poses : [undefined]
     const warnBase: string[] = []
     const images = r.images.flatMap(slot => resolveImages(row, slot, warnBase))
-    if (r.skipEmpty && !images.length) return
+    // il faut au moins une image venant de la ligne elle-même (le mannequin et le fond seuls ne suffisent pas)
+    const ownSlots = r.images.filter(s => s.source.kind === 'colonne')
+    const ownCount = images.filter(im => ownSlots.some(s => s.role === im.role)).length
+    if (r.skipEmpty && (!images.length || (ownSlots.length && !ownCount))) return
     const kept = images.slice(0, maxImages)
     if (images.length > maxImages) warnBase.push(`${images.length} images : seules les ${maxImages} premières sont envoyées (limite du modèle)`)
     passes.forEach((pose, pi) => {
       const vars: Record<string, string> = {}
       for (const c of t.columns) vars[norm(c.name)] = cellRefs(String(row[c.name] ?? '')).join(', ') || String(row[c.name] ?? '').trim()
       const poseLabel = pose ? parsePoseCell(pose) : null
-      const posePrompt = pose ? (poseLabel ? poseToPrompt(poseLabel) : pose) : ''
+      // pose connue du catalogue Zulo → prompt détaillé ; sinon vue reconnue + texte de la cellule tel quel
+      let posePrompt = pose ? (poseLabel ? poseToPrompt(poseLabel) : pose) : ''
+      if (pose && poseLabel && /lib\/poses|à définir/i.test(posePrompt)) posePrompt = `${viewToPrompt(poseLabel.view)}. Pose as written in the brief: "${pose}".`
       vars['pose'] = pose ?? ''
+      vars['n'] = String(pi + 1)
       const fill = (tpl: string) => tpl.replace(/\{([^{}]+)\}/g, (_, k) => vars[norm(k)] ?? '')
       // bloc images numérotées
       const lines: string[] = []
@@ -355,11 +373,11 @@ export function construireVisuels(d: Diagnostic, z: NotionZip, r: Recette, catal
         if (v) lines.push(`${tx.label}: ${v}`)
       }
       if (posePrompt) lines.push(`POSE / VIEW: ${posePrompt}`)
-      const base = sanitize(fill(r.fileName || `{${t.titleColumn}}_{pose}`).replace(/_+$/, '').replace(/^_+/, '')) || `visuel-${ri + 1}`
+      const base = sanitize(fill(r.fileName || `{${t.titleColumn}}_{n}`).replace(/_+$/, '').replace(/^_+/, '')) || `visuel-${ri + 1}`
       visuels.push({
         id: `${ri}-${pi}`, rowIndex: ri, title, pose, images: kept,
         prompt: lines.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
-        fileName: `${base}${passes.length > 1 && !/\{pose\}/i.test(r.fileName) ? `_${pi + 1}` : ''}.jpg`,
+        fileName: `${base}${passes.length > 1 && !/\{(pose|n)\}/i.test(r.fileName) ? `_${pi + 1}` : ''}.jpg`,
         warnings: [...warnBase],
       })
     })

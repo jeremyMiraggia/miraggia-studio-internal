@@ -9,10 +9,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { upload } from '@vercel/blob/client'
 import Dropzone from '@/components/ui/Dropzone'
+import VarInput from '@/components/ui/VarInput'
 import { compressImage } from '@/lib/compressImage'
 import {
   construireVisuels, diagnostiquer, enregistrerRecette, listerRecettes, ouvrirZipNotion, recetteVide, schemaPourIA,
-  sourceLabel, sourcesPossibles, supprimerRecette, validerRecette,
+  sourceLabel, sourcesPossibles, supprimerRecette, validerRecette, variablesDisponibles,
   type CatalogMannequin, type ColType, type Diagnostic, type NotionZip, type Recette, type Source, type Visuel,
 } from '@/lib/flex'
 
@@ -201,6 +202,7 @@ export default function FlexTab() {
   const mainTable = diag?.tables.find(t => t.name === recette?.table)
   const imgSources = diag && recette ? sourcesPossibles(diag, recette.table, 'image') : []
   const txtSources = diag && recette ? sourcesPossibles(diag, recette.table, 'texte') : []
+  const vars = diag && recette ? variablesDisponibles(diag, recette.table) : []
 
   return (
     <div style={{ maxWidth: 1200 }}>
@@ -336,10 +338,12 @@ export default function FlexTab() {
 
             <div style={{ color: '#6B7280', paddingTop: 6 }}>Prompt artistique</div>
             <div>
-              <textarea value={recette.prompt} onChange={e => patch({ prompt: e.target.value })} rows={4} style={{ ...inp, width: '100%', boxSizing: 'border-box', fontSize: 12, resize: 'vertical' }}
-                        placeholder="Professional e-commerce fashion photograph… (variables : {Nom de colonne}, {pose})" />
+              <VarInput value={recette.prompt} onChange={v => patch({ prompt: v })} vars={vars} multiline rows={4}
+                        style={{ ...inp, fontSize: 12, resize: 'vertical' }}
+                        placeholder="Professional e-commerce fashion photograph… — tape @ pour insérer une variable" />
+              <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>Tape <code>@</code> pour la liste des variables. La pose du visuel est ajoutée automatiquement : inutile d&apos;écrire {'{Vue et Pose 1}'}.</div>
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
-                {['pose', ...(mainTable?.columns.filter(c => c.type !== 'fichiers' && c.type !== 'vide').map(c => c.name) ?? [])].map(v => (
+                {vars.map(x => x.name).map(v => (
                   <button key={v} onClick={() => patch({ prompt: `${recette.prompt}${recette.prompt && !recette.prompt.endsWith(' ') ? ' ' : ''}{${v}}` })} style={{ ...small, fontSize: 10, padding: '1px 6px' }}>{`{${v}}`}</button>
                 ))}
               </div>
@@ -347,7 +351,7 @@ export default function FlexTab() {
 
             <div style={{ color: '#6B7280', paddingTop: 6 }}>Nom des fichiers</div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input value={recette.fileName} onChange={e => patch({ fileName: e.target.value })} style={{ ...inp, width: 260, fontSize: 12 }} />
+              <div style={{ width: 260 }}><VarInput value={recette.fileName} onChange={v => patch({ fileName: v })} vars={vars} style={{ ...inp, fontSize: 12 }} placeholder="{SKU}_{n} — tape @" /></div>
               <label style={{ fontSize: 12 }}><input type="checkbox" checked={recette.skipEmpty} onChange={e => patch({ skipEmpty: e.target.checked })} /> ignorer les lignes sans image</label>
             </div>
           </div>
