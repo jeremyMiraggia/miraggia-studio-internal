@@ -17,8 +17,9 @@ export const maxDuration = 60
 
 export async function GET(request: Request) {
   const p = new URL(request.url).searchParams
-  const expected = process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN
-  if (expected && p.get('hub.mode') === 'subscribe' && p.get('hub.verify_token') === expected) {
+  const clean = (s?: string | null) => (s ?? '').trim().replace(/^["']|["']$/g, '').trim()
+  const expected = clean(process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN)
+  if (expected && p.get('hub.mode') === 'subscribe' && clean(p.get('hub.verify_token')) === expected) {
     return new Response(p.get('hub.challenge') ?? '', { status: 200, headers: { 'Content-Type': 'text/plain' } })
   }
   return new Response('Forbidden', { status: 403 })
