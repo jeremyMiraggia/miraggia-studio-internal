@@ -308,6 +308,29 @@ export default function MarketingAssetsTab() {
         {error && <div style={{ marginTop: 10, background: '#FEF2F2', color: '#991B1B', padding: 8, borderRadius: 6, fontSize: 12 }}>❌ {error}</div>}
       </div>
 
+      {parsed && folders.length > 0 && (
+        <div style={card}>
+          <div style={label}>3 — Familles à générer</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button disabled={running} onClick={() => commit(itemsRef.current.map(i => ({ ...i, enabled: true })))} style={small()}>Tout cocher</button>
+            <button disabled={running} onClick={() => commit(itemsRef.current.map(i => ({ ...i, enabled: false })))} style={small()}>Tout décocher</button>
+            <span style={{ width: 1, alignSelf: 'stretch', background: '#E5E7EB', margin: '0 4px' }} />
+            {folders.map(folder => {
+              const list = items.filter(i => i.row.folder === folder)
+              const n = list.filter(i => i.enabled).length
+              // un clic : décoche toute la famille si au moins un visuel est coché, sinon la coche
+              return (
+                <button key={folder} disabled={running} aria-pressed={n > 0} title={n ? 'Décocher toute la famille' : 'Cocher toute la famille'}
+                        onClick={() => commit(itemsRef.current.map(i => (i.row.folder === folder ? { ...i, enabled: n === 0 } : i)))}
+                        style={{ ...small(n > 0), opacity: n ? 1 : 0.6 }}>
+                  {n === 0 ? '☐' : n === list.length ? '☑' : '◪'} {folder} · {n}/{list.length}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {parsed && folders.map(folder => {
         const inFolder = items.filter(i => i.row.folder === folder)
         const checked = inFolder.filter(i => i.enabled).length
