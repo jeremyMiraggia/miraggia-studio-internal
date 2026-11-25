@@ -1,7 +1,7 @@
 'use client'
 /**
  * Onglet 🎁 Brief + instructions — ZIP (images) + fichier d'instructions JSON (prompts, rôle de chaque image, formats).
- * Deux formats : le 1er est généré et validé, puis le 2e est décliné À PARTIR du visuel validé (envoyé en IMAGE 1).
+ * Deux formats : le 1er est généré et validé, puis le 2e est décliné À PARTIR du visuel validé (envoyé seul).
  * Retouche : consigne libre appliquée à la version affichée. Génération via /api/studio/free (mode brut).
  */
 import { useEffect, useRef, useState } from 'react'
@@ -132,9 +132,10 @@ export default function BriefTab() {
   }
 
   const buildPrompt = (it: PackItem, format: string, mode: Mode, note: string) => {
+    // Déclinaison : uniquement l'image validée + cette phrase (ni brief, ni références)
+    if (mode === 'adapt') return `Fais moi cette image en format ${format}`
     const st = ref.current[it.id]
     const lines: string[] = []
-    if (mode === 'adapt') lines.push(`- IMAGE 1: the APPROVED MASTER visual (format ${st.validated!.format}).`)
     if (mode === 'edit') lines.push('- IMAGE 1: the CURRENT visual to correct.')
     const offset = lines.length
     it.images.forEach((im, i) => lines.push(`- IMAGE ${i + 1 + offset}: ${im.role}`))
@@ -143,7 +144,6 @@ export default function BriefTab() {
     const body = (st.prompt + framing).replace(/\{\{(\d+)\}\}/g, (_, d) => `IMAGE ${Number(d) + offset}`)
     const rules = ins?.rules ? `\n\n${ins.rules}` : ''
     const head = lines.length ? `REFERENCE IMAGES, in this order:\n${lines.join('\n')}\n\n---\n\n` : ''
-    if (mode === 'adapt') return `${head}Re-frame the APPROVED MASTER (IMAGE 1) into a ${format} image. It must look like the SAME photograph from the same shoot: same products, same arrangement and props, same light, same colors, same background. Only the framing changes: extend the background naturally to fill the new format. Do not stretch, crop or duplicate the products, and do not add or remove anything. Keep product details faithful to the product references. The master overrides any conflicting composition detail below.\n\nORIGINAL BRIEF:\n${body}${rules}`
     if (mode === 'edit') return `${head}Correct IMAGE 1. Apply ONLY this correction and keep everything else strictly identical (framing, light, colors, products, background):\n${note}\n\nFor context, the original brief of this visual (the correction takes priority over it):\n${body}${rules}`
     return `${head}${body}${rules}`
   }
@@ -160,7 +160,7 @@ export default function BriefTab() {
     const prompt = buildPrompt(it, format, mode, st.note.trim())
     patchShot(it.id, format, { status: 'running', error: undefined })
     try {
-      const refUrls = [...before, ...(await Promise.all(it.images.map(im => urlFor(im.file))))]
+      const refUrls = mode === 'adapt' ? before : [...before, ...(await Promise.all(it.images.map(im => urlFor(im.file))))]
       const res = await fetch('/api/studio/free', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, ratio: format, quality, refUrls }),
