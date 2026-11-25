@@ -30,6 +30,7 @@ import FlexTab from '@/components/tabs/FlexTab'
 import PacTab from '@/components/tabs/PacTab'
 import MarketingAssetsTab from '@/components/tabs/MarketingAssetsTab'
 import InstaTab from '@/components/tabs/InstaTab'
+import BriefTab from '@/components/tabs/BriefTab'
 
 const TABS = [
   { id: 'simple',          label: '🖼️ Simple' },
@@ -42,6 +43,7 @@ const TABS = [
   { id: 'flex',            label: '🧩 FLEX' },
   { id: 'pac',             label: '🔧 PAC' },
   { id: 'marketing',       label: '📣 Marketing assets' },
+  { id: 'brief',           label: '🎁 Brief + instructions' },
   { id: 'insta',           label: '📸 INSTA' },
   { id: 'gabarit',         label: '📐 Gabarit' },
   { id: 'grain',           label: '🎞️ Grain' },
@@ -117,6 +119,7 @@ export default function StudioPage() {
         {tab === 'flex'            && <FlexTab />}
         {tab === 'pac'             && <PacTab />}
         {tab === 'marketing'       && <MarketingAssetsTab />}
+        {tab === 'brief'           && <BriefTab />}
         {tab === 'insta'           && <InstaTab />}
         {tab === 'gabarit'         && <GabaritTab />}
         {tab === 'grain'           && <GrainTab />}
